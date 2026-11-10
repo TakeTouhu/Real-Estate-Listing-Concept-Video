@@ -75,17 +75,54 @@ async function actions(userId: string): Promise<string[]> {
   return rows.map((r) => r.action).filter((a) => a !== "user.registered");
 }
 
-/** Until a statement locking the user `FOR <lock>` waits behind the backend `holder`. */
-async function untilBlocked(holder: number, lock: string): Promise<void> {
+/**
+ * Until a statement on `table` containing `clause` waits behind the backend
+ * `holder`, answering the waiting backend's pid.
+ */
+async function untilBlocked(holder: number, table: string, clause: string): Promise<number> {
   for (let attempt = 0; attempt < 1000; attempt += 1) {
-    const blocked = await prisma.$queryRaw<{ pid: number }[]>`
+    const [blocked] = await prisma.$queryRaw<{ pid: number }[]>`
       SELECT pid FROM pg_stat_activity
       WHERE datname = current_database() AND ${holder}::int = ANY(pg_blocking_pids(pid))
-        AND query LIKE '%"users"%' AND query LIKE ${`%FOR ${lock}%`}`;
-    if (blocked.length > 0) return;
+        AND query LIKE ${`%"${table}"%`} AND query LIKE ${`%${clause}%`}`;
+    if (blocked) return blocked.pid;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`nothing waited FOR ${lock} behind backend ${holder}`);
+  throw new Error(`nothing on ${table} with ${clause} waited behind backend ${holder}`);
+}
+
+/** Until `count` statements locking a user's row `FOR NO KEY UPDATE` are waiting. */
+async function untilResetsWait(count: number): Promise<void> {
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    const [row] = await prisma.$queryRaw<{ waiting: number }[]>`
+      SELECT count(*)::int AS waiting FROM pg_stat_activity
+      WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0
+        AND query LIKE '%"users"%' AND query LIKE '%FOR NO KEY UPDATE%'`;
+    if ((row?.waiting ?? 0) >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`fewer than ${count} resets waited`);
+}
+
+/**
+ * Starts the resets while a transaction holds the user's row `FOR SHARE`, as a
+ * sign-in does, and releases it only once every reset waits for the row, so
+ * that they all contend for it.
+ */
+async function resetsAtOnce(id: string, tokens: string[]): Promise<string[]> {
+  const holder = holding(async (tx) => {
+    await tx.$queryRaw`SELECT 1 FROM "users" WHERE "id" = ${id} FOR SHARE`;
+  });
+  expect(await holder.pid).toBeGreaterThan(0);
+  const resets = tokens.map((token, i) => reset.resetPassword(token, `password-number-${i}`));
+  for (const pending of resets) void pending.catch(() => undefined);
+  try {
+    await untilResetsWait(tokens.length);
+  } finally {
+    holder.release();
+  }
+  await holder.done;
+  return Promise.all(resets);
 }
 
 /**
@@ -140,6 +177,17 @@ describe("a reset", () => {
     await prisma.userMfaFactor.create({
       data: { userId: id, secret: "k1:sealed", lastUsedStep: 1, enabledAt: verifiedAt },
     });
+    const verifying = { id: `lnk_itest_reset_verify_${Date.now()}`, tokenHash: sha256TokenService.hash("verify") };
+    await prisma.accountLink.create({
+      data: {
+        ...verifying,
+        userId: id,
+        purpose: "EMAIL_VERIFICATION",
+        email: `reset@${DOMAIN}`,
+        createdAt: clock.now(),
+        expiresAt: new Date(clock.now().getTime() + 86_400_000),
+      },
+    });
     const older = await linkFor("reset");
     const token = await linkFor("reset");
 
@@ -154,6 +202,7 @@ describe("a reset", () => {
     const used = { tokenHash: sha256TokenService.hash(token), usedAt: clock.now() };
     expect(links).toEqual([expect.objectContaining(used)]);
     expect(await reset.resetPassword(older, NEW)).toBe("INVALID");
+    expect(await prisma.accountLink.findUniqueOrThrow({ where: { id: verifying.id } })).toMatchObject({ usedAt: null });
     expect(await prisma.userMfaFactor.count({ where: { userId: id } })).toBe(1);
     expect((await prisma.user.findUniqueOrThrow({ where: { id } })).emailVerifiedAt).toEqual(verifiedAt);
     expect(await actions(id)).toEqual([
@@ -161,6 +210,8 @@ describe("a reset", () => {
       "user.password_reset_link_created",
       "user.password_reset",
     ]);
+    const entry = await prisma.auditLog.findFirstOrThrow({ where: { resourceId: id, action: "user.password_reset" } });
+    expect(entry).toMatchObject({ organizationId: null, actorUserId: id, resourceType: "user" });
   });
 
   it("rolls everything back when its audit entry fails", async () => {
@@ -211,6 +262,8 @@ describe("a reset", () => {
 
   it("writes nothing when the link expired, or the account changed, by the time it is used", async () => {
     const id = await user("late");
+    await auth.login(`late@${DOMAIN}`, OLD);
+    await linkFor("late");
     const token = await linkFor("late");
     const link = await prisma.accountLink.findUniqueOrThrow({ where: { tokenHash: sha256TokenService.hash(token) } });
     const passwordHash = await fakePasswordHasher.hash(NEW);
@@ -224,28 +277,40 @@ describe("a reset", () => {
         passwordHash,
         audit: { ...audit, metadata: {} },
       });
+    const unchanged = async (): Promise<void> => {
+      expect(await prisma.session.count({ where: { userId: id } })).toBe(1);
+      const unused = { userId: id, purpose: "PASSWORD_RESET" as const, usedAt: null };
+      expect(await prisma.accountLink.count({ where: unused })).toBe(2);
+      expect(await prisma.credential.findUniqueOrThrow({ where: { userId: id } })).toMatchObject({
+        passwordHash: await fakePasswordHasher.hash(OLD),
+      });
+      expect(await actions(id)).toEqual(["user.password_reset_link_created", "user.password_reset_link_created"]);
+    };
     expect(await use(link.expiresAt)).toBe("STALE");
+    await unchanged();
     await prisma.user.update({ where: { id }, data: { status: "DISABLED" } });
     expect(await use(clock.now())).toBe("STALE");
+    await unchanged();
     await prisma.user.update({ where: { id }, data: { status: "ACTIVE", email: `moved@${DOMAIN}` } });
     expect(await use(clock.now())).toBe("STALE");
-    expect((await prisma.accountLink.findUniqueOrThrow({ where: { id: link.id } })).usedAt).toBeNull();
-    expect(await prisma.credential.findUniqueOrThrow({ where: { userId: id } })).toMatchObject({
-      passwordHash: await fakePasswordHasher.hash(OLD),
-    });
+    await unchanged();
     await prisma.user.update({ where: { id }, data: { email: link.email } });
     expect(await use(clock.now())).toBe("APPLIED");
+    expect(await prisma.session.count({ where: { userId: id } })).toBe(0);
   });
 
-  it("resets once when one link is opened several times at once", async () => {
+  it("resets once when one link is opened three times at once", async () => {
     const id = await user("race");
     const token = await linkFor("race");
-    const outcomes = await Promise.all(
-      ["first-password-1", "second-password-2", "third-password-3", "fourth-password-4"].map((p) =>
-        reset.resetPassword(token, p),
-      ),
-    );
-    expect(outcomes.filter((o) => o === "RESET")).toHaveLength(1);
+    expect((await resetsAtOnce(id, [token, token, token])).sort()).toEqual(["INVALID", "INVALID", "RESET"]);
+    expect((await actions(id)).filter((a) => a === "user.password_reset")).toHaveLength(1);
+  });
+
+  it("resets once when two links of one account are opened at once", async () => {
+    const id = await user("races");
+    const first = await linkFor("races");
+    const second = await linkFor("races");
+    expect((await resetsAtOnce(id, [first, second])).sort()).toEqual(["INVALID", "RESET"]);
     expect((await actions(id)).filter((a) => a === "user.password_reset")).toHaveLength(1);
   });
 });
@@ -253,26 +318,30 @@ describe("a reset", () => {
 describe("a sign-in and a reset on one account", () => {
   it("a sign-in waits for a reset holding the account, then makes no session with the old password", async () => {
     const id = await user("signin");
-    // A reset's writes, holding the user's row until released.
-    const rival = holding(async (tx) => {
-      await tx.$queryRaw`SELECT 1 FROM "users" WHERE "id" = ${id} FOR NO KEY UPDATE`;
-      const passwordHash = await fakePasswordHasher.hash(NEW);
-      await tx.credential.update({ where: { userId: id }, data: { passwordHash } });
-      await tx.session.deleteMany({ where: { userId: id } });
+    await auth.login(`signin@${DOMAIN}`, OLD);
+    const token = await linkFor("signin");
+    // Holds the account's session, so the reset stops at ending it while it holds the account.
+    const holder = holding(async (tx) => {
+      await tx.$queryRaw`SELECT 1 FROM "sessions" WHERE "userId" = ${id} FOR UPDATE`;
     });
-    const rivalPid = await rival.pid;
-    expect(rivalPid).toBeGreaterThan(0);
-    const signIn = { id: `ses_itest_reset_${Date.now()}`, userId: id, tokenHash: sha256TokenService.hash("signin") };
-    const expiresAt = new Date(clock.now().getTime() + 60_000);
-    // The password the sign-in checked before the reset took the account.
-    const creating = deps.repos.sessions.create({ ...signIn, expiresAt }, await fakePasswordHasher.hash(OLD));
-    void creating.catch(() => undefined);
+    const holderPid = await holder.pid;
+    expect(holderPid).toBeGreaterThan(0);
+    const resetting = reset.resetPassword(token, NEW);
+    void resetting.catch(() => undefined);
+    let creating: ReturnType<typeof deps.repos.sessions.create> | undefined;
     try {
-      await untilBlocked(rivalPid, "SHARE");
+      const resetPid = await untilBlocked(holderPid, "sessions", "DELETE");
+      const signIn = { id: `ses_itest_reset_${Date.now()}`, userId: id, tokenHash: sha256TokenService.hash("signin") };
+      const expiresAt = new Date(clock.now().getTime() + 60_000);
+      // The password the sign-in checked before the reset took the account.
+      creating = deps.repos.sessions.create({ ...signIn, expiresAt }, await fakePasswordHasher.hash(OLD));
+      void creating.catch(() => undefined);
+      await untilBlocked(resetPid, "users", "FOR SHARE");
     } finally {
-      rival.release();
+      holder.release();
     }
-    await rival.done;
+    await holder.done;
+    expect(await resetting).toBe("RESET");
     expect(await creating).toBeNull();
     expect(await prisma.session.count({ where: { userId: id } })).toBe(0);
   });
@@ -292,7 +361,7 @@ describe("a sign-in and a reset on one account", () => {
     const resetting = reset.resetPassword(token, NEW);
     void resetting.catch(() => undefined);
     try {
-      await untilBlocked(rivalPid, "NO KEY UPDATE");
+      await untilBlocked(rivalPid, "users", "FOR NO KEY UPDATE");
     } finally {
       rival.release();
     }

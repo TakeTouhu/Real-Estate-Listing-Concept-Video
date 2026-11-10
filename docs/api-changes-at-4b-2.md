@@ -22,7 +22,7 @@ No change.
 | `AccountLinkRepository.useForPasswordReset(input)` | `"APPLIED"` or `"STALE"`: marks the link used, replaces the password, deletes every session and the other unused reset links, and audits, in one transaction; `STALE` writes nothing |
 | `AuditAction.PasswordReset` | `user.password_reset`, with `organizationId` null, the user as actor and resource, and `metadata: { linkId, email }` |
 
-### Changed: `@app/database`
+### Added: `@app/database`
 
 `accountLinks.useForPasswordReset` runs under READ COMMITTED, locks the user's
 row `FOR NO KEY UPDATE` first, and writes as above.

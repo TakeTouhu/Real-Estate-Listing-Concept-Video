@@ -75,11 +75,17 @@ session made with the old password:
 - **A sign-in holds the row first.** The reset waits for it to commit. Each
   later statement takes a new snapshot under READ COMMITTED, so step 5 deletes
   the session that sign-in made. Under REPEATABLE READ the snapshot would be
-  taken before the wait and the session would survive, so the level is set
-  explicitly.
+  taken before the wait and the session would survive, and a reset waiting
+  for an email verification that updated the row would fail with a
+  serialization error. So the level is set explicitly.
 
-Two resets of one account, or a reset and an email verification, wait for
-each other on the same lock.
+Two resets of one account, or a reset and an email verification, take the
+same lock, so one waits for the other. Of two links of one account opened at
+once, the first reset deletes the other link, and the second answers
+`INVALID`.
+
+Step 6 is this ADR's choice, which ADR-0131 left open: once a password has
+been chosen, an older reset email left in the mailbox no longer works.
 
 ## Decision 4 — What a reset leaves as it is
 

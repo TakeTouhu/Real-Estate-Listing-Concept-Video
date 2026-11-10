@@ -131,8 +131,9 @@ export class PasswordResetService {
         metadata: { linkId: link.id, email: link.email },
       },
     });
-    // STALE: the link was used, by this reset opened twice at once, or the
-    // account changed meanwhile.
+    // STALE: since the check, the link was used (this reset opened twice at
+    // once) or deleted by another reset, its hour ended, or the account
+    // changed.
     return outcome === "APPLIED" ? "RESET" : "INVALID";
   }
 

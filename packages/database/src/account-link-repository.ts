@@ -99,7 +99,9 @@ export function createPrismaAccountLinkRepository(prisma: PrismaClient): Account
         },
         // Each statement after the lock takes a new snapshot, so the sessions
         // deleted include one a sign-in committed while this reset waited.
-        // REPEATABLE READ would keep the snapshot taken before the wait.
+        // REPEATABLE READ would keep the snapshot taken before the wait, and
+        // would fail outright (40001) after an email verification that
+        // updated the user's row meanwhile.
         { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
       );
     },

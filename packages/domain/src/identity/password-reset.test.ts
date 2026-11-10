@@ -5,7 +5,7 @@ import type { OutgoingEmail } from "../email/outgoing-email";
 import type { EmailSender } from "../email/ports";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
 import { AuthService } from "./auth-service";
-import { EmailVerificationService } from "./email-verification-service";
+import { ACCOUNT_LINK_TOKEN_MAX_LENGTH, EmailVerificationService } from "./email-verification-service";
 import { PasswordResetService, passwordResetMessage } from "./password-reset-service";
 
 /**
@@ -226,6 +226,41 @@ describe("resetting the password", () => {
     expect(await reset.checkResetLink(token)).toBe("INVALID");
     expect(await reset.resetPassword(token, NEW)).toBe("INVALID");
     expect(actions(deps).filter((a) => a === "user.password_reset")).toEqual([]);
+  });
+
+  it("looks up no token that is empty, not text or over 128 characters, and still resets with one of 128", async () => {
+    expect(ACCOUNT_LINK_TOKEN_MAX_LENGTH).toBe(128);
+    for (const length of [129, 128]) {
+      const { deps, reset, userId } = await setup();
+      const token = "t".repeat(length);
+      const now = deps.clock.now();
+      const link = { id: `lnk_${length}`, userId, purpose: "PASSWORD_RESET" as const, email: "owner@example.test" };
+      const audit = { organizationId: null, actorUserId: null, action: "test", resourceType: "user", metadata: {} };
+      await deps.repos.accountLinks.create(
+        { ...link, tokenHash: deps.tokens.hash(token), createdAt: now, expiresAt: new Date(now.getTime() + HOUR_MS) },
+        { ...audit, resourceId: userId },
+      );
+      const find = vi.spyOn(deps.repos.accountLinks, "findByTokenHash");
+      const expected = length === 128 ? ["USABLE", "RESET"] : ["INVALID", "INVALID"];
+      expect([await reset.checkResetLink(token), await reset.resetPassword(token, NEW)]).toEqual(expected);
+      expect(find).toHaveBeenCalledTimes(length === 128 ? 2 : 0);
+      if (length === 128) continue;
+      for (const odd of ["", 42 as unknown as string]) {
+        expect(await reset.checkResetLink(odd)).toBe("INVALID");
+        expect(await reset.resetPassword(odd, NEW)).toBe("INVALID");
+      }
+      expect(find).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses a password that is not text, for a usable link", async () => {
+    const { sender, reset } = await setup();
+    await reset.requestReset("owner@example.test");
+    const token = lastToken(sender);
+    await expect(reset.resetPassword(token, 1234567890 as unknown as string)).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+    });
+    expect(await reset.checkResetLink(token)).toBe("USABLE");
   });
 
   it("resets once when one link is opened twice at once", async () => {
