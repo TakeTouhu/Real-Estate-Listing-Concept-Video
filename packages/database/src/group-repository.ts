@@ -16,6 +16,7 @@ import {
 } from "@app/domain";
 import { auditLogData } from "./audit-log-data";
 import { releaseProperties } from "./property-release";
+import { isUniqueConflict } from "./unique-conflict";
 
 function toGroup(r: DbGroup): Group {
   return {
@@ -113,12 +114,6 @@ export async function groupPermissionsForMember(
 interface KnownError {
   readonly code?: unknown;
   readonly meta?: { readonly modelName?: unknown; readonly target?: unknown };
-}
-
-/** A unique-key conflict on `model`'s `field`, recognized from the error itself. */
-function isUniqueConflict(error: unknown, model: string, field: string): boolean {
-  const { code, meta } = error as KnownError;
-  return code === "P2002" && meta?.modelName === model && Array.isArray(meta.target) && meta.target.includes(field);
 }
 
 /**

@@ -38,6 +38,7 @@ import { auditLogData } from "./audit-log-data";
 import { createPrismaGroupRepository } from "./group-repository";
 import { createPrismaMfaRepository } from "./mfa-repository";
 import { releaseProperties } from "./property-release";
+import { isUniqueConflict } from "./unique-conflict";
 
 function toOrganization(r: DbOrganization): Organization {
   return {
@@ -170,10 +171,8 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
         });
       } catch (error) {
         // Another sign-up committed this email first, and this one rolled
-        // back whole. Classified from the error itself.
-        const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown; target?: unknown } };
-        const onEmail = Array.isArray(meta?.target) && meta.target.includes("email");
-        if (code !== "P2002" || meta?.modelName !== "User" || !onEmail) throw error;
+        // back whole.
+        if (!isUniqueConflict(error, "User", "email")) throw error;
         return { outcome: "EMAIL_TAKEN" };
       }
     },

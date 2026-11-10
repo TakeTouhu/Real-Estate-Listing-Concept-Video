@@ -117,11 +117,17 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("where accounts are written", () => {
-  it("creates users and passwords only in the registration transaction", () => {
-    const writers = ["apps", "packages"]
+  it("creates users and passwords only in the registration transaction, once each", () => {
+    const writes = ["apps", "packages"]
       .flatMap((dir) => sourceFiles(join(REPO_ROOT, dir)))
-      .filter((file) => /\.(user|credential)\.(create|createMany|upsert)\(/.test(readFileSync(file, "utf8")))
-      .map((file) => file.slice(REPO_ROOT.length + 1));
-    expect(writers).toEqual(["packages/database/src/repositories.ts"]);
+      .flatMap((file) =>
+        [...readFileSync(file, "utf8").matchAll(/\.(user|credential)\.(create\w*|upsert)\(/g)].map(
+          (match) => `${file.slice(REPO_ROOT.length + 1)} ${match[0]}`,
+        ),
+      );
+    expect(writes).toEqual([
+      "packages/database/src/repositories.ts .user.create(",
+      "packages/database/src/repositories.ts .credential.create(",
+    ]);
   });
 });

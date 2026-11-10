@@ -123,9 +123,35 @@ describe("an email committed first", () => {
 
   it("makes one of several sign-ups for one email at once, and tells the others it is taken", async () => {
     const email = `race@${DOMAIN}`;
-    const outcomes = await Promise.allSettled(
-      Array.from({ length: 6 }, (_, i) => auth.register({ email, name: `R${i}`, password: "password-123456" })),
+    // Every sign-up checks the email, and finds it free, before any of them
+    // writes it: the transaction alone decides which one is made.
+    const users = deps.repos.users;
+    const found: unknown[] = [];
+    let allChecked!: () => void;
+    const checked = new Promise<void>((resolve) => (allChecked = resolve));
+    const racing = new AuthService(
+      {
+        ...deps,
+        repos: {
+          ...deps.repos,
+          users: {
+            register: (input) => users.register(input),
+            findById: (id) => users.findById(id),
+            findByEmail: async (address) => {
+              const user = await users.findByEmail(address);
+              if (found.push(user) === 6) allChecked();
+              await checked;
+              return user;
+            },
+          },
+        },
+      },
+      { sessionTtlSeconds: 3600 },
     );
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 6 }, (_, i) => racing.register({ email, name: `R${i}`, password: "password-123456" })),
+    );
+    expect(found).toEqual([null, null, null, null, null, null]);
     const made = outcomes.filter((o) => o.status === "fulfilled");
     expect(made).toHaveLength(1);
     for (const outcome of outcomes.filter((o) => o.status === "rejected")) {

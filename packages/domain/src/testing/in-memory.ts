@@ -104,9 +104,10 @@ class InMemoryUserRepository implements UserRepository {
   ) {}
   /**
    * Checks the keys and writes the user and its password with no `await` in
-   * between, as the database's transaction does: a taken email writes nothing
-   * and answers `EMAIL_TAKEN`, a taken identifier is refused, and an audit
-   * entry that cannot be appended takes both back out.
+   * between, so two registrations for one email cannot both be made: a taken
+   * email writes nothing and answers `EMAIL_TAKEN`, a taken identifier is
+   * refused, and an audit entry that cannot be appended takes both back out.
+   * Unlike the database, the user is visible while its audit entry is appended.
    */
   async register(input: RegisterUserInput): Promise<RegisterUserOutcome> {
     if (this.byId.has(input.user.id)) throw new Error("Unique constraint failed on the fields: (`id`)");
