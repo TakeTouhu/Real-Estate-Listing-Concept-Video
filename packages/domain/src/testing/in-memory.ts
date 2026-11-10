@@ -35,6 +35,7 @@ import type {
   SetMfaRequiredInput,
   TokenService,
   UseEmailVerificationLinkInput,
+  UsePasswordResetLinkInput,
   UserRepository,
 } from "../identity/ports";
 import type {
@@ -155,6 +156,8 @@ class InMemoryAccountLinkRepository implements AccountLinkRepository {
   constructor(
     private readonly clock: Clock,
     private readonly users: InMemoryUserRepository,
+    private readonly credentials: InMemoryCredentialRepository,
+    private readonly sessions: InMemorySessionRepository,
     private readonly auditLogs: AuditLogRepository,
   ) {}
   async create(link: Omit<AccountLink, "usedAt">, audit: AccountLinkAudit): Promise<AccountLink> {
@@ -200,11 +203,42 @@ class InMemoryAccountLinkRepository implements AccountLinkRepository {
     }
     return "APPLIED";
   }
+  /** Checks and writes with no `await` in between; a failed audit entry takes every write back out. */
+  async useForPasswordReset(input: UsePasswordResetLinkInput): Promise<"APPLIED" | "STALE"> {
+    const link = this.byId.get(input.linkId);
+    const user = this.users.peek(input.userId);
+    const credential = this.credentials.peek(input.userId);
+    if (!user || user.status !== "ACTIVE" || user.email !== input.email || !credential) return "STALE";
+    if (!link || link.purpose !== "PASSWORD_RESET" || link.userId !== input.userId) return "STALE";
+    if (link.email !== input.email || link.usedAt !== null) return "STALE";
+    if (link.expiresAt.getTime() <= input.usedAt.getTime()) return "STALE";
+    if (input.usedAt.getTime() < link.createdAt.getTime()) throw new Error("violates account_links_window_check");
+    const others = [...this.byId.values()].filter(
+      (l) => l.userId === input.userId && l.purpose === "PASSWORD_RESET" && l.usedAt === null && l.id !== link.id,
+    );
+    this.byId.set(link.id, { ...link, usedAt: input.usedAt });
+    this.credentials.insert({ ...credential, passwordHash: input.passwordHash, updatedAt: this.clock.now() });
+    const ended = this.sessions.removeAllOf(input.userId);
+    for (const other of others) this.byId.delete(other.id);
+    try {
+      await this.auditLogs.append(input.audit);
+    } catch (error) {
+      this.byId.set(link.id, link);
+      this.credentials.insert(credential);
+      for (const session of ended) this.sessions.put(session);
+      for (const other of others) this.byId.set(other.id, other);
+      throw error;
+    }
+    return "APPLIED";
+  }
 }
 
 class InMemoryCredentialRepository implements CredentialRepository {
   private readonly byUser = new Map<string, Credential>();
-  /** Written only with its user (`InMemoryUserRepository.register`). */
+  /**
+   * Written only with its user (`InMemoryUserRepository.register`), or by a
+   * password reset (`InMemoryAccountLinkRepository.useForPasswordReset`).
+   */
   insert(credential: Credential): void {
     this.byUser.set(credential.userId, credential);
   }
@@ -674,6 +708,12 @@ export class InMemorySessionRepository implements SessionRepository, InMemorySes
     this.byTokenHash.set(session.tokenHash, session);
     return Promise.resolve(session);
   }
+  /** Ends every session of the user, answering what it ended. */
+  removeAllOf(userId: string): Session[] {
+    const ended = [...this.byTokenHash.values()].filter((s) => s.userId === userId);
+    for (const session of ended) this.byTokenHash.delete(session.tokenHash);
+    return ended;
+  }
   findByTokenHash(tokenHash: string): Promise<Session | null> {
     return Promise.resolve(this.byTokenHash.get(tokenHash) ?? null);
   }
@@ -783,7 +823,7 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     invitations: new InMemoryInvitationRepository(clock, auditLogs, memberships),
     sessions,
     mfa: new InMemoryMfaRepository(sessions, auditLogs),
-    accountLinks: new InMemoryAccountLinkRepository(clock, users, auditLogs),
+    accountLinks: new InMemoryAccountLinkRepository(clock, users, credentials, sessions, auditLogs),
     auditLogs,
     propertyLinks,
   };

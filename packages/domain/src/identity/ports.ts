@@ -389,6 +389,17 @@ export interface UseEmailVerificationLinkInput {
   readonly audit: AccountLinkAudit;
 }
 
+export interface UsePasswordResetLinkInput {
+  readonly linkId: string;
+  readonly userId: string;
+  /** The address the link was sent to; the user's must still be it. */
+  readonly email: string;
+  readonly usedAt: Date;
+  /** The new password's hash, made before the transaction opens. */
+  readonly passwordHash: string;
+  readonly audit: AccountLinkAudit;
+}
+
 /** One-time links mailed to users (ADR-0128). */
 export interface AccountLinkRepository {
   /** Keep a new, unused link, committing `audit` with it. */
@@ -402,6 +413,15 @@ export interface AccountLinkRepository {
    * `STALE`.
    */
   useForEmailVerification(input: UseEmailVerificationLinkInput): Promise<"APPLIED" | "STALE">;
+  /**
+   * In one transaction, mark a password reset link used, replace its user's
+   * password, end every session of the user and delete the user's other
+   * unused reset links, with `audit` (ADR-0132). Applies only while the link
+   * is unused and unexpired at `usedAt`, and the user is active, still has the
+   * link's address and has a password; otherwise writes nothing and answers
+   * `STALE`. MFA is left as it is.
+   */
+  useForPasswordReset(input: UsePasswordResetLinkInput): Promise<"APPLIED" | "STALE">;
 }
 
 /** Aggregate of all repositories + service ports passed to domain services. */

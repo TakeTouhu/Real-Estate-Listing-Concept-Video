@@ -22,7 +22,8 @@ export interface LoginResult {
   readonly token: string;
 }
 
-const MIN_PASSWORD_LENGTH = 10;
+/** The shortest password an account may have, at sign-up and at a reset. */
+export const MIN_PASSWORD_LENGTH = 10;
 
 function emailTaken(): AppError {
   return new AppError("VALIDATION_FAILED", "Email is already registered");

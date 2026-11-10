@@ -5,18 +5,22 @@ import type { OutgoingEmail } from "../email/outgoing-email";
 import type { EmailSender } from "../email/ports";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
 import { AuthService } from "./auth-service";
+import { EmailVerificationService } from "./email-verification-service";
 import { PasswordResetService, passwordResetMessage } from "./password-reset-service";
 
 /**
- * Password reset links (AT-4b-1, ADR-0131): a link mailed to the account's
- * address, kept for 1 hour as its token's hash with an audit entry naming no
- * actor before the email leaves. Asking answers the same whether or not the
- * address has an account. A sign-in that checked a password replaced meanwhile
- * makes no session, so a reset (AT-4b-2) can end every session.
+ * Password reset (AT-4b, ADR-0131 and ADR-0132): a link mailed to the
+ * account's address, kept for 1 hour as its token's hash with an audit entry
+ * naming no actor before the email leaves. Asking answers the same whether or
+ * not the address has an account. Within the hour the link replaces the
+ * password once, ends every session of the account and deletes its other
+ * unused reset links, in one transaction. A sign-in that checked the old
+ * password makes no session once a reset commits.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const OLD = "password-123456";
+const NEW = "another-password-789";
 const BASE = "https://app.example.test/reset-password?token=";
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -44,6 +48,13 @@ function lastToken(sender: RecordingSender): string {
   const line = sender.sent.at(-1)?.text.split("\n").find((l) => l.startsWith(BASE));
   if (!line) throw new Error("no link in the email");
   return line.slice(BASE.length);
+}
+
+/** The token in the most recent verification email (`verify:` links). */
+function lastVerificationToken(sender: RecordingSender): string {
+  const line = sender.sent.at(-1)?.text.split("\n").find((l) => l.startsWith("verify:"));
+  if (!line) throw new Error("no verification link in the email");
+  return line.slice("verify:".length);
 }
 
 function actions(deps: TestDeps): string[] {
@@ -121,25 +132,145 @@ describe("asking for a link", () => {
   });
 });
 
-describe("a sign-in", () => {
-  it("makes no session when the password it checked is replaced before the session is made", async () => {
-    const { deps, auth, userId } = await setup();
+describe("resetting the password", () => {
+  it("replaces the password, uses the link and ends every session of the account, in one entry", async () => {
+    const { deps, auth, sender, reset, userId } = await setup();
+    const other = await auth.register({ email: "other@example.test", name: "Other", password: OLD });
+    const mine = [await auth.login("owner@example.test", OLD), await auth.login("owner@example.test", OLD)];
+    const theirs = await auth.login("other@example.test", OLD);
+    await reset.requestReset("owner@example.test");
+    const token = lastToken(sender);
+    expect(await reset.checkResetLink(token)).toBe("USABLE");
+
+    expect(await reset.resetPassword(token, NEW)).toBe("RESET");
+
+    for (const { token: session } of mine) expect(await auth.resolveSession(session)).toBeNull();
+    expect(await auth.resolveSession(theirs.token)).toMatchObject({ user: { id: other.id } });
+    await expect(auth.login("owner@example.test", OLD)).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+    await expect(auth.login("owner@example.test", NEW)).resolves.toMatchObject({ user: { id: userId } });
+    expect(await reset.checkResetLink(token)).toBe("INVALID");
+    expect(await reset.resetPassword(token, "yet-another-password")).toBe("INVALID");
+    const link = await deps.repos.accountLinks.findByTokenHash(deps.tokens.hash(token));
+    expect(deps.repos.auditLogs.all().filter((e) => e.action === "user.password_reset")).toEqual([
+      expect.objectContaining({
+        organizationId: null,
+        actorUserId: userId,
+        resourceType: "user",
+        resourceId: userId,
+        metadata: { linkId: link!.id, email: "owner@example.test" },
+      }),
+    ]);
+  });
+
+  it("deletes the account's other unused reset links, and leaves its verification links and address", async () => {
+    const { deps, sender, reset, userId } = await setup();
+    const verifyUrl = (t: string): string => `verify:${t}`;
+    const verification = new EmailVerificationService({ ...deps, email: sender, verificationUrl: verifyUrl });
+    await verification.sendVerificationLink(userId);
+    const verifying = lastVerificationToken(sender);
+    await reset.requestReset("owner@example.test");
+    const first = lastToken(sender);
+    await reset.requestReset("owner@example.test");
+    const second = lastToken(sender);
+    expect(await reset.resetPassword(second, NEW)).toBe("RESET");
+    expect(await deps.repos.accountLinks.findByTokenHash(deps.tokens.hash(first))).toBeNull();
+    expect(await reset.resetPassword(first, "yet-another-password")).toBe("INVALID");
+    expect(await verification.verifyEmail(verifying)).toBe("VERIFIED");
+  });
+
+  it("works until the hour ends, and not at its end", async () => {
+    const { deps, sender, reset } = await setup();
+    await reset.requestReset("owner@example.test");
+    const token = lastToken(sender);
+    const start = deps.clock.now().getTime();
+    deps.clock.set(new Date(start + HOUR_MS));
+    expect(await reset.checkResetLink(token)).toBe("INVALID");
+    expect(await reset.resetPassword(token, NEW)).toBe("INVALID");
+    deps.clock.set(new Date(start + HOUR_MS - 1));
+    expect(await reset.resetPassword(token, NEW)).toBe("RESET");
+  });
+
+  it("refuses a password under 10 characters and leaves the link usable, but checks the link first", async () => {
+    const { sender, reset } = await setup();
+    await reset.requestReset("owner@example.test");
+    const token = lastToken(sender);
+    await expect(reset.resetPassword(token, "123456789")).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: "Password is too short",
+    });
+    expect(await reset.checkResetLink(token)).toBe("USABLE");
+    expect(await reset.resetPassword("unknown-token", "short")).toBe("INVALID");
+    expect(await reset.resetPassword(token, "1234567890")).toBe("RESET");
+  });
+
+  it("resets nothing for an unknown, overlong or verification token, or an account changed since", async () => {
+    const { deps, sender, reset, userId } = await setup();
+    const verifyUrl = (t: string): string => `verify:${t}`;
+    const verification = new EmailVerificationService({ ...deps, email: sender, verificationUrl: verifyUrl });
+    await verification.sendVerificationLink(userId);
+    const verifying = lastVerificationToken(sender);
+    for (const token of ["", verifying, "unknown-token", "x".repeat(129)]) {
+      expect(await reset.checkResetLink(token)).toBe("INVALID");
+      expect(await reset.resetPassword(token, NEW)).toBe("INVALID");
+    }
+    await reset.requestReset("owner@example.test");
+    const token = lastToken(sender);
+    const user = deps.repos.users.peek(userId)!;
+    for (const changed of [{ ...user, status: "DISABLED" as const }, { ...user, email: "moved@example.test" }]) {
+      deps.repos.users.put(changed);
+      expect(await reset.checkResetLink(token)).toBe("INVALID");
+      expect(await reset.resetPassword(token, NEW)).toBe("INVALID");
+    }
+    deps.repos.users.put(user);
+    deps.repos.credentials.remove(userId);
+    expect(await reset.checkResetLink(token)).toBe("INVALID");
+    expect(await reset.resetPassword(token, NEW)).toBe("INVALID");
+    expect(actions(deps).filter((a) => a === "user.password_reset")).toEqual([]);
+  });
+
+  it("resets once when one link is opened twice at once", async () => {
+    const { deps, sender, reset } = await setup();
+    await reset.requestReset("owner@example.test");
+    const token = lastToken(sender);
+    const outcomes = await Promise.all([NEW, "third-password-1"].map((p) => reset.resetPassword(token, p)));
+    expect(outcomes.sort()).toEqual(["INVALID", "RESET"]);
+    expect(actions(deps).filter((a) => a === "user.password_reset")).toHaveLength(1);
+  });
+
+  it("changes nothing when its audit entry fails", async () => {
+    const { deps, auth, sender, reset } = await setup();
+    const session = await auth.login("owner@example.test", OLD);
+    await reset.requestReset("owner@example.test");
+    const other = lastToken(sender);
+    await reset.requestReset("owner@example.test");
+    const token = lastToken(sender);
+    vi.spyOn(deps.repos.auditLogs, "append").mockRejectedValueOnce(new Error("audit store down"));
+    await expect(reset.resetPassword(token, NEW)).rejects.toThrow("audit store down");
+    expect(await auth.resolveSession(session.token)).not.toBeNull();
+    await expect(auth.login("owner@example.test", OLD)).resolves.toBeDefined();
+    expect(await reset.checkResetLink(token)).toBe("USABLE");
+    expect(await reset.checkResetLink(other)).toBe("USABLE");
+  });
+});
+
+describe("a sign-in during a reset", () => {
+  it("makes no session when the reset commits after its password was checked", async () => {
+    const { deps, auth, sender, reset, userId } = await setup();
+    await reset.requestReset("owner@example.test");
+    const token = lastToken(sender);
     const verify = deps.passwords.verify.bind(deps.passwords);
     vi.spyOn(deps.passwords, "verify").mockImplementationOnce(async (password, hash) => {
       const ok = await verify(password, hash);
-      // What a reset does to the password, between the check and the session.
-      const credential = deps.repos.credentials.peek(userId)!;
-      deps.repos.credentials.insert({ ...credential, passwordHash: await deps.passwords.hash("replaced-password") });
+      expect(await reset.resetPassword(token, NEW)).toBe("RESET");
       return ok;
     });
     await expect(auth.login("owner@example.test", OLD)).rejects.toMatchObject({
       code: "UNAUTHENTICATED",
       message: "Invalid email or password",
     });
+    expect(actions(deps).filter((a) => a === "user.password_reset")).toHaveLength(1);
     expect(deps.repos.auditLogs.all().filter((e) => e.action === "user.logged_in")).toEqual([]);
-    await expect(auth.login("owner@example.test", "replaced-password")).resolves.toMatchObject({
-      user: { id: userId },
-    });
+    await expect(auth.login("owner@example.test", NEW)).resolves.toMatchObject({ user: { id: userId } });
   });
 });
 
@@ -154,7 +285,7 @@ describe("who uses it", () => {
 
   it("is used by no application yet: the pages and routes arrive in AT-4c", () => {
     const users = sourceFiles(join(REPO_ROOT, "apps")).filter((file) =>
-      /PasswordResetService|requestReset\(/.test(readFileSync(file, "utf8")),
+      /PasswordResetService|requestReset\(|resetPassword\(|checkResetLink\(/.test(readFileSync(file, "utf8")),
     );
     expect(users).toEqual([]);
   });

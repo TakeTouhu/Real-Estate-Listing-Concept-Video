@@ -2353,3 +2353,13 @@ now makes its session in a short transaction that locks the user's row
 
 **Rolling back.** To AT-4a's build: safe. No reset link is made before AT-4c,
 and sessions are unchanged.
+
+## AT-4b-2 — resetting a password with a link
+
+**No migration** (ADR-0132). Migration 33 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data, and nothing
+reachable: no page or route resets a password until AT-4c.
+
+**Rolling back.** To AT-4b-1's build: safe. No link can have been used, since
+nothing reaches the reset.
