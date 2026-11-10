@@ -40,7 +40,7 @@ is split further where it would exceed about 500 changed lines.
 | AT-1 | Email port and development outbox, dormant | none |
 | AT-2 | Organization creation in one transaction | none |
 | AT-3 | Email verification (*split: AT-3a links and service, migration 33; AT-3b sign-up, verify page and guard*) | 1 |
-| AT-4 | Password reset (*split: AT-4a sign-up in one transaction, ADR-0130; AT-4b-1 asking for a link and the sign-in check, ADR-0131; AT-4b-2 the reset, ADR-0132; AT-4c the reset pages*) | none |
+| AT-4 | Password reset (*split: AT-4a sign-up in one transaction, ADR-0130; AT-4b-1 asking for a link and the sign-in check, ADR-0131; AT-4b-2 the reset, ADR-0132; AT-4c the reset pages, ADR-0133*) | none |
 | AT-5 | Members page, read only, with seats used | none |
 | AT-6 | Invite and cancel, the seat limit, one pending invitation per email | 1 |
 | AT-7 | Accept an invitation with the invited email | none |

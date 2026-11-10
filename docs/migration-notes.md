@@ -2363,3 +2363,16 @@ reachable: no page or route resets a password until AT-4c.
 
 **Rolling back.** To AT-4b-1's build: safe. No link can have been used, since
 nothing reaches the reset.
+
+## AT-4c — the password reset pages
+
+**No migration** (ADR-0133). Migration 33 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. Password reset
+becomes reachable from the sign-in page. Asking for a link needs
+`EMAIL_OUTBOX_DIR` and `APP_BASE_URL`, as email verification does; without
+them, and in production, which has no email service yet, the page answers the
+same and nothing is mailed.
+
+**Rolling back.** To AT-4b-2's build: safe. A link already mailed stops
+working until the pages return, and a password already reset stays reset.

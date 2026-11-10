@@ -240,7 +240,7 @@ describe("who uses it", () => {
     });
   }
 
-  it("is opened, and its folder's setting read, only by the web app's email verification (ADR-0129)", () => {
+  it("is opened, and its folder's setting read, only by the web app's mailer (ADR-0129, ADR-0133)", () => {
     const files = sourceFiles(join(REPO_ROOT, "apps"));
     // The scan reaches both applications, including where sign-up is wired.
     const scanned = files.map(({ name }) => name);
@@ -248,6 +248,6 @@ describe("who uses it", () => {
     expect(scanned).toContain("apps/worker/src/bootstrap.ts");
     const names = ["DevelopmentEmailOutbox", "EMAIL_OUTBOX_DIR", "EmailSender", "outgoingEmail("];
     const users = files.filter(({ text }) => names.some((name) => text.includes(name)));
-    expect(users.map(({ name }) => name)).toEqual(["apps/web/src/lib/email-verification.ts"]);
+    expect(users.map(({ name }) => name)).toEqual(["apps/web/src/lib/mailer.ts"]);
   });
 });

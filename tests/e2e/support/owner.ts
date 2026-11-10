@@ -19,6 +19,11 @@ import { totp } from "./totp";
 
 const run = promisify(execFile);
 
+export interface Person {
+  readonly email: string;
+  readonly password: string;
+}
+
 export interface Owner {
   readonly email: string;
   readonly organizationId: string;
@@ -35,18 +40,23 @@ export function contractStart(now: Date = new Date()): string {
   return `${now.getUTCFullYear()}-${month}-01T00:00:00+00:00`;
 }
 
+/** A password no earlier run used. It is never printed. */
+export function newPassword(): string {
+  return `pw-${randomBytes(12).toString("hex")}`;
+}
+
 /**
- * Signs a new person up, has them verify their email address, create
- * `organizationName` and set up MFA with an authenticator app, and leaves them
- * signed in on the organizations page.
+ * Signs a new person up and has them verify their email address, leaving them
+ * signed in on the organizations page, a member of none.
  */
-export async function signUpOwner(page: Page, organizationName: string): Promise<Owner> {
-  const email = newEmail("owner");
+export async function signUpPerson(page: Page, role = "person"): Promise<Person> {
+  const email = newEmail(role);
+  const password = newPassword();
   await page.goto("/login");
   const register = page.locator("form", { has: page.getByRole("heading", { name: "Create account" }) });
-  await register.getByLabel("Name").fill("Test Owner");
+  await register.getByLabel("Name").fill("Test Person");
   await register.getByLabel("Email").fill(email);
-  await register.getByLabel("Password (min 10 characters)").fill(`pw-${randomBytes(12).toString("hex")}`);
+  await register.getByLabel("Password (min 10 characters)").fill(password);
   await register.getByRole("button", { name: "Create account" }).click();
   // A new account sees only the verify page until it opens the link mailed to it (ADR-0129).
   await expect(page.getByRole("heading", { name: "Verify your email address" })).toBeVisible();
@@ -59,7 +69,16 @@ export async function signUpOwner(page: Page, organizationName: string): Promise
   await page.getByRole("link", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Organizations" })).toBeVisible();
   await expect(page.getByText(`(${email})`)).toBeVisible();
+  return { email, password };
+}
 
+/**
+ * Signs a new person up, has them verify their email address, create
+ * `organizationName` and set up MFA with an authenticator app, and leaves them
+ * signed in on the organizations page.
+ */
+export async function signUpOwner(page: Page, organizationName: string): Promise<Owner> {
+  const { email } = await signUpPerson(page, "owner");
   await page.getByLabel("Organization name").fill(organizationName);
   await page.getByRole("button", { name: "Create", exact: true }).click();
   // An OWNER must use MFA, so the organization is reached only through setting it up.
