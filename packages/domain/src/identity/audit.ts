@@ -14,6 +14,12 @@ export const AuditAction = {
   EmailVerificationLinkCreated: "user.email_verification_link_created",
   /** The account's address was verified by opening such a link. */
   EmailVerified: "user.email_verified",
+  /**
+   * A password reset link was made for the account (ADR-0131). Anyone may ask
+   * for one, so the entry names no actor; like the verification link's, it is
+   * recorded before the email is handed over.
+   */
+  PasswordResetLinkCreated: "user.password_reset_link_created",
   SessionRevoked: "session.revoked",
   InvitationCreated: "invitation.created",
   InvitationAccepted: "invitation.accepted",

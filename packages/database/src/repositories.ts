@@ -415,17 +415,18 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
   };
 
   const sessions: SessionRepository = {
-    async create(input) {
-      return toSession(
-        await prisma.session.create({
-          data: {
-            id: input.id,
-            userId: input.userId,
-            tokenHash: input.tokenHash,
-            expiresAt: input.expiresAt,
-          },
-        }),
-      );
+    async create(input, passwordHash) {
+      return prisma.$transaction(async (tx) => {
+        // A password reset is to hold the user's row, FOR NO KEY UPDATE, until
+        // it commits (ADR-0131). FOR SHARE waits for it, so the read below sees
+        // its password; and a reset waits for this sign-in, then ends the
+        // session it made.
+        await tx.$queryRaw`SELECT 1 FROM "users" WHERE "id" = ${input.userId} FOR SHARE`;
+        const credential = await tx.credential.findUnique({ where: { userId: input.userId } });
+        if (credential?.passwordHash !== passwordHash) return null;
+        const { id, userId, tokenHash, expiresAt } = input;
+        return toSession(await tx.session.create({ data: { id, userId, tokenHash, expiresAt } }));
+      });
     },
     async findByTokenHash(tokenHash) {
       const r = await prisma.session.findUnique({ where: { tokenHash } });

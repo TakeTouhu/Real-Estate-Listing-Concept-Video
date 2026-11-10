@@ -72,17 +72,23 @@ export class AuthService {
       user.status === "ACTIVE" &&
       credential !== null &&
       (await this.deps.passwords.verify(password, credential.passwordHash));
-    if (!ok || !user) {
+    if (!ok || !user || !credential) {
       throw new AppError("UNAUTHENTICATED", "Invalid email or password");
     }
     const token = this.deps.tokens.generate();
     const now = this.deps.clock.now();
-    const session = await this.deps.repos.sessions.create({
-      id: this.deps.ids.generate("ses"),
-      userId: user.id,
-      tokenHash: this.deps.tokens.hash(token),
-      expiresAt: new Date(now.getTime() + this.options.sessionTtlSeconds * 1000),
-    });
+    // Made only while the password checked above is still the account's, so a
+    // password reset committing meanwhile leaves no session behind (ADR-0131).
+    const session = await this.deps.repos.sessions.create(
+      {
+        id: this.deps.ids.generate("ses"),
+        userId: user.id,
+        tokenHash: this.deps.tokens.hash(token),
+        expiresAt: new Date(now.getTime() + this.options.sessionTtlSeconds * 1000),
+      },
+      credential.passwordHash,
+    );
+    if (!session) throw new AppError("UNAUTHENTICATED", "Invalid email or password");
     await recordAudit(this.deps, {
       organizationId: null,
       actorUserId: user.id,

@@ -211,6 +211,10 @@ class InMemoryCredentialRepository implements CredentialRepository {
   remove(userId: string): void {
     this.byUser.delete(userId);
   }
+  /** Test-only: the stored password, read with no `await`. */
+  peek(userId: string): Credential | undefined {
+    return this.byUser.get(userId);
+  }
   findByUserId(userId: string): Promise<Credential | null> {
     return Promise.resolve(this.byUser.get(userId) ?? null);
   }
@@ -656,8 +660,16 @@ class InMemoryInvitationRepository implements InvitationRepository {
 
 export class InMemorySessionRepository implements SessionRepository, InMemorySessionStore {
   private readonly byTokenHash = new Map<string, Session>();
-  constructor(private readonly clock: Clock) {}
-  create(input: Omit<Session, "createdAt" | "mfaVerifiedAt" | "mfaFailedAttempts">): Promise<Session> {
+  constructor(
+    private readonly clock: Clock,
+    private readonly credentials: InMemoryCredentialRepository,
+  ) {}
+  /** Checks the password and writes with no `await` in between, as the database's transaction does. */
+  create(
+    input: Omit<Session, "createdAt" | "mfaVerifiedAt" | "mfaFailedAttempts">,
+    passwordHash: string,
+  ): Promise<Session | null> {
+    if (this.credentials.peek(input.userId)?.passwordHash !== passwordHash) return Promise.resolve(null);
     const session: Session = { ...input, mfaVerifiedAt: null, mfaFailedAttempts: 0, createdAt: this.clock.now() };
     this.byTokenHash.set(session.tokenHash, session);
     return Promise.resolve(session);
@@ -727,6 +739,7 @@ export interface PropertyAssignmentReleaser {
 
 export interface TestRepositories extends IdentityRepositories {
   readonly users: InMemoryUserRepository;
+  readonly credentials: InMemoryCredentialRepository;
   readonly sessions: InMemorySessionRepository;
   readonly mfa: InMemoryMfaRepository;
   readonly auditLogs: InMemoryAuditLogRepository;
@@ -751,8 +764,8 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     groups.removeAllForMember(organizationId, userId);
     return propertyLinks.unassign(organizationId, userId);
   });
-  const sessions = new InMemorySessionRepository(clock);
   const credentials = new InMemoryCredentialRepository();
+  const sessions = new InMemorySessionRepository(clock, credentials);
   const users = new InMemoryUserRepository(clock, credentials, auditLogs);
   return {
     users,

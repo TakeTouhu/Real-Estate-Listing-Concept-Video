@@ -826,6 +826,13 @@ or not at all, and of several sign-ups for one email at once, one is made and
 the others are told the email is taken. Password reset follows in AT-4b and
 AT-4c.
 
+**AT-4b-1 — password reset links, and a sign-in with a replaced password**
+(ADR-0131, no migration): a reset link, valid for 1 hour, can be asked for and
+is kept and mailed for an active account; any other address writes and sends
+nothing, and the answer is the same. A sign-in makes its session only while
+the password it checked is still the account's, so a reset will leave no
+session behind. Nothing asks for a link until AT-4c; AT-4b-2 uses it.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
