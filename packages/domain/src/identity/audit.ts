@@ -20,6 +20,8 @@ export const AuditAction = {
    * recorded before the email is handed over.
    */
   PasswordResetLinkCreated: "user.password_reset_link_created",
+  /** The password was replaced by opening such a link, ending every session (ADR-0132). */
+  PasswordReset: "user.password_reset",
   SessionRevoked: "session.revoked",
   InvitationCreated: "invitation.created",
   InvitationAccepted: "invitation.accepted",

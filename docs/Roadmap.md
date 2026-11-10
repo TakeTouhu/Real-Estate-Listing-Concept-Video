@@ -833,6 +833,14 @@ nothing, and the answer is the same. A sign-in makes its session only while
 the password it checked is still the account's, so a reset will leave no
 session behind. Nothing asks for a link until AT-4c; AT-4b-2 uses it.
 
+**AT-4b-2 — resetting a password with a link** (ADR-0132, no migration):
+within its hour a link replaces the password once, ends every session of the
+account and deletes its other unused reset links, with `user.password_reset`,
+in one transaction. A password under 10 characters is refused and leaves the
+link usable. MFA and the address's verification stay as they are. A sign-in
+and a reset on one account wait for each other in either order, and no session
+made with the old password survives. Nothing reaches it until AT-4c.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

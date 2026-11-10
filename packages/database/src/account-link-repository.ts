@@ -1,4 +1,4 @@
-import type { AccountLink as DbAccountLink, PrismaClient } from "@prisma/client";
+import { Prisma, type AccountLink as DbAccountLink, type PrismaClient } from "@prisma/client";
 import type { AccountLink, AccountLinkRepository } from "@app/domain";
 import { auditLogData } from "./audit-log-data";
 
@@ -16,9 +16,9 @@ function toAccountLink(r: DbAccountLink): AccountLink {
 }
 
 /**
- * One-time links mailed to users, in PostgreSQL (ADR-0128). Using a link locks
- * the user's row before it touches the link, so uses for one user run one at a
- * time; making a link touches no existing link.
+ * One-time links mailed to users, in PostgreSQL (ADR-0128, ADR-0132). Using a
+ * link locks the user's row before it touches the link, so uses for one user
+ * run one at a time; making a link touches no existing link.
  */
 export function createPrismaAccountLinkRepository(prisma: PrismaClient): AccountLinkRepository {
   return {
@@ -66,6 +66,44 @@ export function createPrismaAccountLinkRepository(prisma: PrismaClient): Account
         await tx.auditLog.create({ data: auditLogData(input.audit) });
         return "APPLIED";
       });
+    },
+    async useForPasswordReset(input) {
+      return prisma.$transaction(
+        async (tx) => {
+          // Resets of one user run one at a time. A sign-in's FOR SHARE waits
+          // for this lock, then sees the new password; one already holding it is
+          // waited for, and the session it made is ended below (ADR-0132).
+          const [user] = await tx.$queryRaw<{ status: string; email: string }[]>`
+            SELECT "status", "email" FROM "users" WHERE "id" = ${input.userId} FOR NO KEY UPDATE`;
+          if (!user || user.status !== "ACTIVE" || user.email !== input.email) return "STALE";
+          // Read before the link is used: a STALE answer commits nothing.
+          if (!(await tx.credential.findUnique({ where: { userId: input.userId } }))) return "STALE";
+          const { count } = await tx.accountLink.updateMany({
+            where: {
+              id: input.linkId,
+              userId: input.userId,
+              purpose: "PASSWORD_RESET",
+              email: input.email,
+              usedAt: null,
+              expiresAt: { gt: input.usedAt },
+            },
+            data: { usedAt: input.usedAt },
+          });
+          if (count === 0) return "STALE";
+          await tx.credential.update({ where: { userId: input.userId }, data: { passwordHash: input.passwordHash } });
+          await tx.session.deleteMany({ where: { userId: input.userId } });
+          // The used link has `usedAt`; every other unused reset link goes.
+          await tx.accountLink.deleteMany({ where: { userId: input.userId, purpose: "PASSWORD_RESET", usedAt: null } });
+          await tx.auditLog.create({ data: auditLogData(input.audit) });
+          return "APPLIED";
+        },
+        // Each statement after the lock takes a new snapshot, so the sessions
+        // deleted include one a sign-in committed while this reset waited.
+        // REPEATABLE READ would keep the snapshot taken before the wait, and
+        // would fail outright (40001) after an email verification that
+        // updated the user's row meanwhile.
+        { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+      );
     },
   };
 }

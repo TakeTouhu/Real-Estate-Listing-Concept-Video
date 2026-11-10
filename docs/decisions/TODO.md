@@ -2175,7 +2175,11 @@ them is **built**. Each item below records the settled decision and what remains
       reset (AT-4) is the way back, and it must end every session, as the
       approved plan says. AT-4 must also decide what happens when the other
       person has set up MFA on the account, which a reset alone does not
-      remove.
+      remove. *AT-4b-2 (ADR-0132) built the reset: it ends every session and
+      keeps MFA, as the approved plan says, so the owner is asked for a code
+      they do not have. That case needs the operator-assisted MFA recovery
+      under "Decide what MFA leaves open" (1); until then this stays open.
+      The reset pages arrive in AT-4c.*
 - [ ] **Clear a verified address when it changes.** A verification is bound to
       the address it was sent to (ADR-0128). No product path changes a user's
       email today; whichever is added must set `emailVerifiedAt` back to null
