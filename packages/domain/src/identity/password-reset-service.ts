@@ -52,7 +52,8 @@ export function passwordResetMessage(to: string, url: string): OutgoingEmail {
  * Password reset (ADR-0131 and ADR-0132, implementing ADR-0052 Decision 18):
  * a link mailed to the account's address, which replaces the password once
  * and ends every session of the account. MFA is left as it is (ADR-0132).
- * No page or route reaches this service until AT-4c.
+ * The web app's `/reset-password` page and its routes reach it (AT-4c,
+ * ADR-0133).
  */
 export class PasswordResetService {
   constructor(private readonly deps: PasswordResetDeps) {}

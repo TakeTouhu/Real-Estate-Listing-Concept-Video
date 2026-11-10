@@ -259,7 +259,10 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       a signed-in account whose address is not verified*) (*since AT-4b-1,
       ADR-0131, asking for a password reset link also sends mail, to any
       address with an account, and takes longer for one: limiting it also
-      blunts telling addresses with accounts from the rest by timing*);
+      blunts telling addresses with accounts from the rest by timing*)
+      (*since AT-4c, ADR-0133, that ask is a route anyone can post to:
+      `POST /api/auth/reset-password/request`; its limit must be in place
+      before production gets an email service*);
       progressive cooldown on login failure; a rate-limited request must not
       consume a Unit or cause a Provider POST; plan generation concurrency is a
       **separate** control from abuse limiting. The working value *5 failures /
@@ -2179,7 +2182,7 @@ them is **built**. Each item below records the settled decision and what remains
       keeps MFA, as the approved plan says, so the owner is asked for a code
       they do not have. That case needs the operator-assisted MFA recovery
       under "Decide what MFA leaves open" (1); until then this stays open.
-      The reset pages arrive in AT-4c.*
+      AT-4c (ADR-0133) added the reset pages.*
 - [ ] **Clear a verified address when it changes.** A verification is bound to
       the address it was sent to (ADR-0128). No product path changes a user's
       email today; whichever is added must set `emailVerifiedAt` back to null

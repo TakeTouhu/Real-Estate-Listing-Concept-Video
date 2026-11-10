@@ -41,6 +41,9 @@ export default async function LoginPage({
         <p className="field">
           <button type="submit">Sign in</button>
         </p>
+        <p className="muted">
+          <a href="/reset-password">Forgot your password?</a>
+        </p>
       </form>
 
       <form method="post" action="/api/auth/register" className="card">

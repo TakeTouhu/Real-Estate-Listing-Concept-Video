@@ -841,6 +841,14 @@ link usable. MFA and the address's verification stay as they are. A sign-in
 and a reset on one account wait for each other in either order, and no session
 made with the old password survives. Nothing reaches it until AT-4c.
 
+**AT-4c — the password reset pages** (ADR-0133, no migration): the sign-in
+page links to `/reset-password`, which asks for the account's email address
+and answers the same whatever the address and whatever failed. The emailed
+link shows the new-password form only while it would reset a password, and
+every link that resets nothing gets the same answer. After a reset the account
+is signed out everywhere, and the next sign-in still asks for the MFA code and
+for an unverified address to be verified. A browser test runs the whole reset.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

@@ -1,9 +1,8 @@
 import { EmailVerificationService } from "@app/domain";
 import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
-import { createDevelopmentEmailOutbox } from "@app/storage";
-import { getServerEnv } from "./env";
 import { getIdentityServices } from "./identity";
+import { getMailer, tokenLink } from "./mailer";
 
 /** The page a verification link opens, and where an unverified sign-in waits (ADR-0129). */
 export const VERIFY_EMAIL_PATH = "/verify-email";
@@ -42,39 +41,21 @@ export function verifyEmailPage(requestUrl: string, notice?: VerifyEmailNotice):
  * and never on a request's (ADR-0128 Decision 3).
  */
 export function verificationUrl(baseUrl: string, token: string): string {
-  const url = new URL(VERIFY_EMAIL_PATH, baseUrl);
-  url.searchParams.set("token", token);
-  return url.toString();
-}
-
-function emailNotConfigured(): AppError {
-  return new AppError("CONFIGURATION_ERROR", "Email cannot be sent right now");
+  return tokenLink(baseUrl, VERIFY_EMAIL_PATH, token);
 }
 
 /**
- * Email verification in the web app (ADR-0129). Its email is written to the
- * development outbox, `EMAIL_OUTBOX_DIR` (ADR-0126); production has no email
- * service yet. With no outbox or no `APP_BASE_URL`, sending a link fails with
+ * Email verification in the web app (ADR-0129), mailing through `getMailer`:
+ * with no outbox or no `APP_BASE_URL`, sending a link fails with
  * `CONFIGURATION_ERROR` before anything is written. Opening a link needs
- * neither, and the outbox is opened only to send.
+ * neither.
  */
 export function getEmailVerificationService(): EmailVerificationService {
-  const env = getServerEnv();
-  const folder = env.EMAIL_OUTBOX_DIR;
-  const baseUrl = env.APP_BASE_URL;
-  const mailing = folder !== undefined && baseUrl !== undefined ? { folder, baseUrl } : null;
+  const mailer = getMailer();
   return new EmailVerificationService({
     ...getIdentityServices().deps,
-    email: {
-      send: async (message) => {
-        if (!mailing) throw emailNotConfigured();
-        await createDevelopmentEmailOutbox({ folder: mailing.folder, nodeEnv: env.NODE_ENV }).send(message);
-      },
-    },
-    verificationUrl: (token) => {
-      if (!mailing) throw emailNotConfigured();
-      return verificationUrl(mailing.baseUrl, token);
-    },
+    email: mailer,
+    verificationUrl: (token) => mailer.link(VERIFY_EMAIL_PATH, token),
   });
 }
 
