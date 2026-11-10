@@ -1,14 +1,14 @@
-import type {
-  AuditLog as DbAuditLog,
-  Credential as DbCredential,
-  Invitation as DbInvitation,
-  Membership as DbMembership,
-  Organization as DbOrganization,
-  PermissionGrant as DbPermissionGrant,
-  PrismaClient,
-  Session as DbSession,
-  User as DbUser,
+import {
   Prisma,
+  type AuditLog as DbAuditLog,
+  type Credential as DbCredential,
+  type Invitation as DbInvitation,
+  type Membership as DbMembership,
+  type Organization as DbOrganization,
+  type PermissionGrant as DbPermissionGrant,
+  type PrismaClient,
+  type Session as DbSession,
+  type User as DbUser,
 } from "@prisma/client";
 import type {
   AuditLogRepository,
@@ -415,16 +415,23 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
   };
 
   const sessions: SessionRepository = {
-    async create(input) {
-      return toSession(
-        await prisma.session.create({
-          data: {
-            id: input.id,
-            userId: input.userId,
-            tokenHash: input.tokenHash,
-            expiresAt: input.expiresAt,
-          },
-        }),
+    async create(input, passwordHash) {
+      return prisma.$transaction(
+        async (tx) => {
+          // A password reset is to hold the user's row, FOR NO KEY UPDATE,
+          // until it commits (ADR-0131). FOR SHARE waits for it, and a reset
+          // waits for this sign-in, then ends the session it made.
+          await tx.$queryRaw`SELECT 1 FROM "users" WHERE "id" = ${input.userId} FOR SHARE`;
+          // The password is read by its own statement, after the lock: under
+          // READ COMMITTED that statement takes a new snapshot, which holds the
+          // reset's password. A join locking the user would keep the old one,
+          // and so would a snapshot taken at the lock (REPEATABLE READ).
+          const credential = await tx.credential.findUnique({ where: { userId: input.userId } });
+          if (credential?.passwordHash !== passwordHash) return null;
+          const { id, userId, tokenHash, expiresAt } = input;
+          return toSession(await tx.session.create({ data: { id, userId, tokenHash, expiresAt } }));
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
       );
     },
     async findByTokenHash(tokenHash) {

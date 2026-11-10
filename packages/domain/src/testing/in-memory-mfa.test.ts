@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { Session } from "../identity/types";
 import type { MfaAudit } from "../mfa/ports";
-import { createTestDeps } from "./in-memory";
+import { createTestDeps, type TestDeps } from "./in-memory";
 
 /**
  * The in-memory MFA double answers as the PostgreSQL repository does
@@ -10,9 +11,24 @@ import { createTestDeps } from "./in-memory";
 
 const STEP = 1000;
 
+/** A stored sign-in, put in place as the double's MFA tests need it, with no user or password behind it. */
+function signIn(deps: TestDeps, id: string, userId: string, tokenHash: string): Session {
+  const session: Session = {
+    id,
+    userId,
+    tokenHash,
+    expiresAt: new Date(1e13),
+    mfaVerifiedAt: null,
+    mfaFailedAttempts: 0,
+    createdAt: deps.clock.now(),
+  };
+  deps.repos.sessions.put(session);
+  return session;
+}
+
 async function enabled() {
   const deps = createTestDeps();
-  const session = await deps.repos.sessions.create({ id: "ses_1", userId: "usr_1", tokenHash: "h1", expiresAt: new Date(1e13) });
+  const session = signIn(deps, "ses_1", "usr_1", "h1");
   const audit: MfaAudit = { organizationId: null, actorUserId: "usr_1", action: "test", resourceType: "user", resourceId: "usr_1", metadata: {} };
   await deps.repos.mfa.savePendingSecret(session.id, "sealed");
   const outcome = await deps.repos.mfa.enable({
@@ -54,8 +70,8 @@ describe("InMemoryMfaRepository", () => {
 
   it("replaces codes or turns MFA off only from a stored session that passed MFA", async () => {
     const { deps, session, audit, input } = await enabled();
-    const unpassed = await deps.repos.sessions.create({ id: "ses_2", userId: "usr_1", tokenHash: "h2", expiresAt: new Date(1e13) });
-    const others = await deps.repos.sessions.create({ id: "ses_3", userId: "usr_2", tokenHash: "h3", expiresAt: new Date(1e13) });
+    const unpassed = signIn(deps, "ses_2", "usr_1", "h2");
+    const others = signIn(deps, "ses_3", "usr_2", "h3");
     deps.repos.sessions.put({ ...others, mfaVerifiedAt: deps.clock.now() });
     const change = { userId: "usr_1", codeHashes: ["b".repeat(64)], audit };
     for (const sessionId of [unpassed.id, others.id]) {
@@ -78,7 +94,7 @@ describe("InMemoryMfaRepository", () => {
 
   it("refuses to enable from an unpassed session once a factor exists, or for another pending secret", async () => {
     const { deps, audit } = await enabled();
-    const other = await deps.repos.sessions.create({ id: "ses_2", userId: "usr_1", tokenHash: "h2", expiresAt: new Date(1e13) });
+    const other = signIn(deps, "ses_2", "usr_1", "h2");
     await deps.repos.mfa.savePendingSecret(other.id, "sealed-2");
     const base = { userId: "usr_1", sessionId: other.id, step: STEP + 5, recoveryCodeHashes: [], verifiedAt: deps.clock.now(), audit: () => audit };
     expect(await deps.repos.mfa.enable({ ...base, sealedSecret: "sealed-2" })).toBe("STALE");

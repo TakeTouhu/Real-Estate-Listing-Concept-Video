@@ -2341,3 +2341,15 @@ its three rows in one transaction; accounts made before are not checked.
 
 **Rolling back.** To AT-3b's build: safe. Sign-up again writes its rows in
 separate steps.
+
+## AT-4b-1 — password reset links, and a sign-in with a replaced password
+
+**No migration** (ADR-0131). Migration 33 stays the last; `account_links`
+already accepts `PASSWORD_RESET`.
+
+**What changes at deploy.** Nothing in the schema or the data. Each sign-in
+now makes its session in a short transaction that locks the user's row
+`FOR SHARE`.
+
+**Rolling back.** To AT-4a's build: safe. No reset link is made before AT-4c,
+and sessions are unchanged.

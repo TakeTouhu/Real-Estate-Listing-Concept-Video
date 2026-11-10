@@ -42,8 +42,8 @@ export function createPrismaAccountLinkRepository(prisma: PrismaClient): Account
       return prisma.$transaction(async (tx) => {
         // A second opening of this link, or another link of the user's, waits
         // here and then sees the address verified. NO KEY UPDATE, the lock the
-        // update below takes anyway, so a sign-in or a new link, which only
-        // reference the row, is not held up.
+        // update below takes anyway, so a new link, which only references the
+        // row, is not held up. A sign-in's FOR SHARE waits (ADR-0131).
         const [user] = await tx.$queryRaw<{ status: string; email: string; emailVerifiedAt: Date | null }[]>`
           SELECT "status", "email", "emailVerifiedAt" FROM "users" WHERE "id" = ${input.userId}
           FOR NO KEY UPDATE`;

@@ -358,8 +358,16 @@ export interface GroupRepository {
 }
 
 export interface SessionRepository {
-  /** A new sign-in has not passed MFA. */
-  create(input: Omit<Session, "createdAt" | "mfaVerifiedAt" | "mfaFailedAttempts">): Promise<Session>;
+  /**
+   * A new sign-in, which has not passed MFA. It is made only while the user's
+   * password is still `passwordHash`, the one the sign-in checked: when the
+   * password was replaced meanwhile, nothing is made and the answer is `null`
+   * (ADR-0131).
+   */
+  create(
+    input: Omit<Session, "createdAt" | "mfaVerifiedAt" | "mfaFailedAttempts">,
+    passwordHash: string,
+  ): Promise<Session | null>;
   findByTokenHash(tokenHash: string): Promise<Session | null>;
   deleteByTokenHash(tokenHash: string): Promise<void>;
 }

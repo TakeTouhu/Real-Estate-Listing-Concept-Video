@@ -256,7 +256,10 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       since AT-3a, ADR-0128, asking for a verification email again: each ask
       sends mail, so unlimited asks could fill a mailbox*) (*since AT-3b,
       ADR-0129, that ask is a route: `POST /api/auth/verify-email/resend`, for
-      a signed-in account whose address is not verified*);
+      a signed-in account whose address is not verified*) (*since AT-4b-1,
+      ADR-0131, asking for a password reset link also sends mail, to any
+      address with an account, and takes longer for one: limiting it also
+      blunts telling addresses with accounts from the rest by timing*);
       progressive cooldown on login failure; a rate-limited request must not
       consume a Unit or cause a Provider POST; plan generation concurrency is a
       **separate** control from abuse limiting. The working value *5 failures /
