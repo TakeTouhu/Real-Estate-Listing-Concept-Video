@@ -24,6 +24,10 @@ export interface LoginResult {
 
 const MIN_PASSWORD_LENGTH = 10;
 
+function emailTaken(): AppError {
+  return new AppError("VALIDATION_FAILED", "Email is already registered");
+}
+
 export class AuthService {
   constructor(
     private readonly deps: IdentityServiceDeps,
@@ -39,28 +43,24 @@ export class AuthService {
     if (input.password.length < MIN_PASSWORD_LENGTH) {
       throw new AppError("VALIDATION_FAILED", "Password is too short");
     }
-    if (await this.deps.repos.users.findByEmail(email)) {
-      throw new AppError("VALIDATION_FAILED", "Email is already registered");
-    }
-    const user = await this.deps.repos.users.create({
-      id: this.deps.ids.generate("usr"),
-      email,
-      name: input.name.trim(),
-      status: "ACTIVE",
-    });
-    await this.deps.repos.credentials.create({
-      userId: user.id,
+    // Checked first only to spare hashing a password for a taken email; the
+    // registration below is what decides (ADR-0130).
+    if (await this.deps.repos.users.findByEmail(email)) throw emailTaken();
+    const id = this.deps.ids.generate("usr");
+    const registration = await this.deps.repos.users.register({
+      user: { id, email, name: input.name.trim(), status: "ACTIVE" },
       passwordHash: await this.deps.passwords.hash(input.password),
+      audit: {
+        organizationId: null,
+        actorUserId: id,
+        action: AuditAction.UserRegistered,
+        resourceType: "user",
+        resourceId: id,
+        metadata: { email },
+      },
     });
-    await recordAudit(this.deps, {
-      organizationId: null,
-      actorUserId: user.id,
-      action: AuditAction.UserRegistered,
-      resourceType: "user",
-      resourceId: user.id,
-      metadata: { email },
-    });
-    return user;
+    if (registration.outcome === "EMAIL_TAKEN") throw emailTaken();
+    return registration.user;
   }
 
   async login(email: string, password: string): Promise<LoginResult> {

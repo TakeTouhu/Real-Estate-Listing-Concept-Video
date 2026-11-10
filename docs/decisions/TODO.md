@@ -2177,7 +2177,7 @@ them is **built**. Each item below records the settled decision and what remains
       the address it was sent to (ADR-0128). No product path changes a user's
       email today; whichever is added must set `emailVerifiedAt` back to null
       in the same transaction, or the new address reads as verified.
-- [ ] **Register an account in one transaction.** Sign-up
+- [x] **Register an account in one transaction.** Sign-up
       (`AuthService.register`, reachable today) writes the user, the
       credential and `user.registered` in separate steps. A failure between
       them leaves an account with no password, which no one can sign in to
@@ -2186,6 +2186,10 @@ them is **built**. Each item below records the settled decision and what remains
       changes sign-up, is the natural place. *AT-3b left it out to stay
       reviewable: it changes what follows a registration, not its writes.
       AT-4, which writes credentials for password reset, is the next place.*
+      *Done in AT-4a (ADR-0130, no migration): `UserRepository.register`
+      writes the user, its password and `user.registered` in one
+      transaction, and an email taken meanwhile is answered "Email is
+      already registered".*
 - [ ] **Delete used and expired account links.** `account_links` rows stay
       after they are used or expire (ADR-0128). They verify nothing, but the
       table grows with every link sent. Deleting them needs a scheduled job,
