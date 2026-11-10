@@ -80,6 +80,12 @@ A reset (AT-4b-2) is to lock the same row `FOR NO KEY UPDATE`, which
 
 Either way no session made with the old password survives a reset.
 
+The transaction is pinned to READ COMMITTED, and the password is read by a
+statement of its own after the lock, so that statement's snapshot holds a
+reset that committed while the sign-in waited. Under REPEATABLE READ, or with
+the password joined into the locking statement, it would still read the old
+password.
+
 This changes one sentence of ADR-0128 Decision 5: a sign-in no longer only
 references the user's row, so it now waits, briefly, for an email
 verification committing on the same account. A new link still does not.
@@ -94,8 +100,10 @@ verification committing on the same account. A new link still does not.
   timing can tell them apart. Asking is to be rate limited with the rest of
   `/api/auth/*`, which the rate-limiting item in `docs/decisions/TODO.md`
   already lists ("password reset").
-- An email the mail service refuses raises an error that an address with no
-  account never raises. AT-4c's route must answer the same in that case too.
+- Any failure after the account is found (keeping the link or its entry, or
+  the mail service refusing the email) raises an error that an address with
+  no account never raises. AT-4c's route must answer the same whatever the
+  error.
 - Every sign-in now takes a short transaction and a row lock on its user.
 - **No migration**, no route, page or permission. One audit action is added,
   `user.password_reset_link_created`.

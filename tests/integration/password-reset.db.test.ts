@@ -99,8 +99,8 @@ describe("a sign-in while the password is being replaced", () => {
     const id = await user("signin");
     let release = (): void => undefined;
     const released = new Promise<void>((resolve) => (release = resolve));
-    let signalHeld = (): void => undefined;
-    const held = new Promise<void>((resolve) => (signalHeld = resolve));
+    let signalHeld = (_pid: number): void => undefined;
+    const held = new Promise<number>((resolve) => (signalHeld = resolve));
     // What a reset will write, holding the user's row until released.
     const rival = prisma.$transaction(
       async (tx) => {
@@ -108,22 +108,27 @@ describe("a sign-in while the password is being replaced", () => {
         const passwordHash = await fakePasswordHasher.hash(NEW);
         await tx.credential.update({ where: { userId: id }, data: { passwordHash } });
         await tx.session.deleteMany({ where: { userId: id } });
-        signalHeld();
+        const [backend] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+        signalHeld(backend!.pid);
         await released;
       },
       { timeout: 30_000 },
     );
-    await Promise.race([held, rival]);
+    const rivalPid = await Promise.race([held, rival.then(() => -1)]);
+    expect(rivalPid).toBeGreaterThan(0);
     const signIn = { id: `ses_itest_reset_${Date.now()}`, userId: id, tokenHash: sha256TokenService.hash("signin") };
     const expiresAt = new Date(clock.now().getTime() + 60_000);
     // The password the sign-in checked before the reset took the account.
     const creating = deps.repos.sessions.create({ ...signIn, expiresAt }, await fakePasswordHasher.hash(OLD));
+    void creating.catch(() => undefined);
     try {
+      // The sign-in's lock on the user, waiting behind this rival.
       await until(async () => {
-        const [row] = await prisma.$queryRaw<{ waiting: number }[]>`
-          SELECT count(*)::int AS waiting FROM pg_stat_activity
-          WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0`;
-        return (row?.waiting ?? 0) >= 1;
+        const blocked = await prisma.$queryRaw<{ pid: number }[]>`
+          SELECT pid FROM pg_stat_activity
+          WHERE datname = current_database() AND ${rivalPid}::int = ANY(pg_blocking_pids(pid))
+            AND query LIKE '%"users"%' AND query LIKE '%FOR SHARE%'`;
+        return blocked.length > 0;
       });
     } finally {
       release();

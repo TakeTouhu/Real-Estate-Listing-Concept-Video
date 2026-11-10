@@ -5,11 +5,7 @@ import type { OutgoingEmail } from "../email/outgoing-email";
 import type { EmailSender } from "../email/ports";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
 import { AuthService } from "./auth-service";
-import {
-  PASSWORD_RESET_LINK_TTL_SECONDS,
-  PasswordResetService,
-  passwordResetMessage,
-} from "./password-reset-service";
+import { PasswordResetService, passwordResetMessage } from "./password-reset-service";
 
 /**
  * Password reset links (AT-4b-1, ADR-0131): a link mailed to the account's
@@ -22,7 +18,7 @@ import {
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const OLD = "password-123456";
 const BASE = "https://app.example.test/reset-password?token=";
-const HOUR_MS = PASSWORD_RESET_LINK_TTL_SECONDS * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 class RecordingSender implements EmailSender {
   readonly sent: OutgoingEmail[] = [];
@@ -115,10 +111,13 @@ describe("asking for a link", () => {
 
   it("keeps no link and sends nothing when its audit entry fails", async () => {
     const { deps, sender, reset } = await setup();
+    const generated = vi.spyOn(deps.tokens, "generate");
     vi.spyOn(deps.repos.auditLogs, "append").mockRejectedValueOnce(new Error("audit store down"));
     await expect(reset.requestReset("owner@example.test")).rejects.toThrow("audit store down");
     expect(sender.sent).toEqual([]);
-    expect(await deps.repos.accountLinks.findByTokenHash(deps.tokens.hash("token_1"))).toBeNull();
+    expect(generated).toHaveBeenCalledTimes(1);
+    const token = generated.mock.results[0]!.value as string;
+    expect(await deps.repos.accountLinks.findByTokenHash(deps.tokens.hash(token))).toBeNull();
   });
 });
 
@@ -138,7 +137,9 @@ describe("a sign-in", () => {
       message: "Invalid email or password",
     });
     expect(deps.repos.auditLogs.all().filter((e) => e.action === "user.logged_in")).toEqual([]);
-    await expect(auth.login("owner@example.test", "replaced-password")).resolves.toMatchObject({ user: { id: userId } });
+    await expect(auth.login("owner@example.test", "replaced-password")).resolves.toMatchObject({
+      user: { id: userId },
+    });
   });
 });
 

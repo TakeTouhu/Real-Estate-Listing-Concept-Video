@@ -14,7 +14,7 @@ No change.
 
 | Export | Shape |
 | --- | --- |
-| `PasswordResetService` | `requestReset(address)` → `undefined` whatever happens: keeps a `PASSWORD_RESET` link with its audit entry and then mails it, for an `ACTIVE` account with that address; for any other address writes and sends nothing. Raises only when the link, its entry or the email fails |
+| `PasswordResetService` | `requestReset(address)` → `undefined` whatever happens: keeps a `PASSWORD_RESET` link with its audit entry and then mails it, for an `ACTIVE` account with that address; for any other address writes and sends nothing. Raises when finding the account, keeping the link and its entry, or sending fails; all but the first happen only for an address with an account |
 | `PasswordResetDeps` | the identity dependencies, plus `email: EmailSender` and `resetUrl(token)`, which the application builds from its configured base URL |
 | `PASSWORD_RESET_LINK_TTL_SECONDS` | `3600` (1 hour) |
 | `passwordResetMessage(to, url)` | the reset email, an `OutgoingEmail` of kind `PASSWORD_RESET` |
