@@ -28,27 +28,33 @@ The sign-in page links to it ("Forgot your password?"). Like the verify page
   choosing one signs the account out everywhere. Any other link shows "Link
   not valid" and the form to ask for a new one, whatever the reason. Opening
   the link writes nothing, so a mail scanner that fetches it uses nothing, and
-  no extra button is needed: the form needs the new password.
+  no extra button is needed: the form needs the new password. If the link
+  cannot be checked (the database fails, say), the page shows the form to ask
+  with the `failed` notice, and the error is logged by its code alone.
 - **`?notice=…`:** one of `sent`, `invalid`, `too-short`, `failed` and
   `reset`, never text the address carries. `reset` says the password was
   changed and the account signed out everywhere, and links to sign in.
 
-The page sets `Referrer-Policy: strict-origin`, as the verify page does,
-because its address may hold a token.
+The page sets the referrer policy `strict-origin` with a referrer meta tag, as
+the verify page does, because its address may hold a token. The browser test
+checks the tag.
 
 ## Decision 2 — Asking for a link answers the same, always
 
 `POST /api/auth/reset-password/request` (form `email`) calls `requestReset`
 and answers 303 to `/reset-password?notice=sent` whatever happened: an address
 with an account or without, a disabled account, an address mail cannot reach,
-no outbox or no `APP_BASE_URL`, or any other error (ADR-0131 Consequences). The
-notice says a link was sent if an account uses the address. A failure is
-logged by its error code alone, never the address, the link or the message.
+no outbox or no `APP_BASE_URL`, the outbox refusing the email after the link
+was kept, a body that is not a form (read as an empty one), or any other error
+(ADR-0131 Consequences). The notice says a link was sent if an account uses
+the address. A failure is logged by its error code alone, never the address,
+the link or the message.
 
 The route needs no sign-in and checks no origin, like sign-in itself: it uses
 no cookie, and anyone may ask for a link to any address from the page anyway.
 Asking is not rate limited yet; the rate-limiting item in
-`docs/decisions/TODO.md` already lists password reset.
+`docs/decisions/TODO.md` lists this route, and the limit must be in place
+before production gets an email service.
 
 ## Decision 3 — Choosing the password
 
@@ -62,6 +68,8 @@ the token is the proof. It calls `resetPassword` and answers 303 to
 | `INVALID`, for any reason and any password | `invalid` |
 | `VALIDATION_FAILED` (under 10 characters); the link stays usable | `too-short` |
 | Any other error, logged by its code alone; nothing is written | `failed` |
+
+A body that is not a form is read as an empty one, so it answers `invalid`.
 
 The redirect never carries the token. After `too-short` or `failed` the page
 says to open the link from the email again, which still works. The form

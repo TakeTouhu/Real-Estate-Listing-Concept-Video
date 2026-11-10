@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { MIN_PASSWORD_LENGTH } from "@app/domain";
 import {
   RESET_PASSWORD_NOTICES,
-  getPasswordResetService,
+  openResetLink,
   resetPasswordNotice,
   type ResetPasswordNotice,
 } from "@/lib/password-reset";
@@ -43,8 +43,10 @@ export default async function ResetPasswordPage({ searchParams }: { searchParams
 }
 
 async function openLink(token: string | string[]): Promise<ReactElement> {
-  const usable = typeof token === "string" && (await getPasswordResetService().checkResetLink(token)) === "USABLE";
-  if (!usable) return <AskForLink notice="invalid" />;
+  const state = await openResetLink(token);
+  if (state !== "usable" || typeof token !== "string") {
+    return <AskForLink notice={state === "failed" ? "failed" : "invalid"} />;
+  }
   return (
     <section>
       <h1>Choose a new password</h1>

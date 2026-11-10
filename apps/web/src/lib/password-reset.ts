@@ -1,4 +1,4 @@
-import { PasswordResetService } from "@app/domain";
+import { MIN_PASSWORD_LENGTH, PasswordResetService } from "@app/domain";
 import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
@@ -17,8 +17,10 @@ export const RESET_PASSWORD_PATH = "/reset-password";
 export const RESET_PASSWORD_NOTICES = {
   sent: "If an account uses that email address, we sent it a link to choose a new password. It works once, for 1 hour.",
   invalid: "This link does not work. It may have expired or been used already. You can ask for a new one.",
-  "too-short": "The new password must be at least 10 characters. The link still works: open it again from the email.",
-  failed: "Your password could not be changed. Open the link again from the email to try again.",
+  "too-short":
+    `The new password must be at least ${MIN_PASSWORD_LENGTH} characters. ` +
+    "The link still works: open it again from the email.",
+  failed: "Something went wrong, and your password was not changed. Open the link again from the email to try again.",
   reset: "Your password was changed, and your account was signed out everywhere. Sign in with your new password.",
 } as const;
 
@@ -81,6 +83,23 @@ export async function askForResetLink(
     await getPasswordResetService().requestReset(address);
   } catch (error) {
     log.error("A password reset link could not be sent", { code: errorCode(error) });
+  }
+}
+
+/**
+ * Whether an opened link would reset a password, writing nothing (ADR-0133).
+ * `failed` when that could not be told, logged by its error code alone.
+ */
+export async function openResetLink(
+  token: string | readonly string[],
+  log: Pick<Logger, "error"> = getPasswordResetLogger(),
+): Promise<"usable" | "invalid" | "failed"> {
+  if (typeof token !== "string") return "invalid";
+  try {
+    return (await getPasswordResetService().checkResetLink(token)) === "USABLE" ? "usable" : "invalid";
+  } catch (error) {
+    log.error("A password reset link could not be checked", { code: errorCode(error) });
+    return "failed";
   }
 }
 

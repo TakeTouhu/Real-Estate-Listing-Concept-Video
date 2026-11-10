@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { formString } from "@/lib/http";
+import { formOf, formString } from "@/lib/http";
 import { resetPasswordPage, resetPasswordWith } from "@/lib/password-reset";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  * carries the token.
  */
 export async function POST(request: Request): Promise<NextResponse> {
-  const form = await request.formData();
+  const form = await formOf(request);
   const notice = await resetPasswordWith(formString(form, "token"), formString(form, "password"));
   return NextResponse.redirect(resetPasswordPage(request.url, notice), { status: 303 });
 }

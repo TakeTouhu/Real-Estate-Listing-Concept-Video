@@ -18,8 +18,15 @@ const identity = vi.hoisted(() => ({ value: null as unknown }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
 
-const { RESET_PASSWORD_NOTICES, askForResetLink, resetPasswordNotice, resetPasswordPage, resetPasswordWith, resetUrl } =
-  await import("./password-reset");
+const {
+  RESET_PASSWORD_NOTICES,
+  askForResetLink,
+  openResetLink,
+  resetPasswordNotice,
+  resetPasswordPage,
+  resetPasswordWith,
+  resetUrl,
+} = await import("./password-reset");
 
 const BASE = "http://localhost:3210";
 let deps: TestDeps;
@@ -91,6 +98,22 @@ describe("choosing a new password", () => {
     const link = mail!.text.split("\n").find((line) => line.startsWith(`${BASE}/`));
     return new URL(link!).searchParams.get("token")!;
   }
+
+  it("opens a link writing nothing, and says failed, logging only the code, when it cannot be checked", async () => {
+    const usable = await token();
+    const log = logged();
+    const audit = deps.repos.auditLogs.all().length;
+    expect(await openResetLink(usable, log)).toBe("usable");
+    expect(await openResetLink("unknown", log)).toBe("invalid");
+    expect(await openResetLink([usable, usable], log)).toBe("invalid");
+    expect(log.error).not.toHaveBeenCalled();
+    vi.spyOn(deps.repos.accountLinks, "findByTokenHash").mockRejectedValueOnce(new Error(usable));
+    expect(await openResetLink(usable, log)).toBe("failed");
+    expect(log.error).toHaveBeenCalledWith("A password reset link could not be checked", { code: "UNEXPECTED" });
+    expect(JSON.stringify(log.error.mock.calls)).not.toContain(usable);
+    expect(deps.repos.auditLogs.all()).toHaveLength(audit);
+    expect(await openResetLink(usable, log)).toBe("usable");
+  });
 
   it("needs no outbox or base address", async () => {
     const usable = await token();

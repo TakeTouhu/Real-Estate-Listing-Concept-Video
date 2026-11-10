@@ -318,13 +318,10 @@ describe("who uses it", () => {
     });
   }
 
-  it("is used only by the web app's reset page and its wiring (AT-4c, ADR-0133), never by the worker", () => {
+  it("is used only by the web app's reset wiring (AT-4c, ADR-0133), never by the worker", () => {
     const users = sourceFiles(join(REPO_ROOT, "apps")).filter((file) =>
       /PasswordResetService|requestReset\(|resetPassword\(|checkResetLink\(/.test(readFileSync(file, "utf8")),
     );
-    expect(users.map((file) => file.slice(REPO_ROOT.length + 1)).sort()).toEqual([
-      "apps/web/src/app/reset-password/page.tsx",
-      "apps/web/src/lib/password-reset.ts",
-    ]);
+    expect(users.map((file) => file.slice(REPO_ROOT.length + 1))).toEqual(["apps/web/src/lib/password-reset.ts"]);
   });
 });

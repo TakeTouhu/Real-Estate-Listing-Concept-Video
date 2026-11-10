@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -102,10 +102,15 @@ async function askedToken(email = "user@example.com"): Promise<string> {
 
 describe("asking for a link", () => {
   it("mails the account's address, and answers every other address the same, mailing nothing", async () => {
-    for (const email of ["USER@example.com", "nobody@example.com", "", "not an address", "user@localhost"]) {
+    const disabled = await auth.register({ email: "gone@example.com", name: "Gone", password: PASSWORD });
+    deps.repos.users.put({ ...deps.repos.users.peek(disabled.id)!, status: "DISABLED" });
+    const addresses = ["USER@example.com", "nobody@example.com", "gone@example.com", "", "not an address"];
+    for (const email of [...addresses, "a@localhost"]) {
       expect(location(await ask(form({ email })))).toEqual(resetPage("sent"));
     }
     expect(location(await ask(form({})))).toEqual(resetPage("sent"));
+    const json = new Request("http://localhost/api/auth", { method: "POST", body: '{"email":"user@example.com"}' });
+    expect(location(await ask(json))).toEqual(resetPage("sent"));
     const mail = await readDevelopmentEmailOutbox(outbox);
     expect(mail.map((message) => message.to)).toEqual(["user@example.com"]);
     expect(await mailedTokens()).toHaveLength(1);
@@ -114,6 +119,17 @@ describe("asking for a link", () => {
   it("answers the same when the email cannot be sent, or anything else fails", async () => {
     env.value = { ...env.value, APP_BASE_URL: undefined };
     expect(location(await ask(form({ email: "user@example.com" })))).toEqual(resetPage("sent"));
+    // A link kept, then the outbox refusing the email: an error no unknown address raises.
+    const notAFolder = join(outbox, "file");
+    writeFileSync(notAFolder, "");
+    env.value = { ...env.value, APP_BASE_URL: BASE, EMAIL_OUTBOX_DIR: notAFolder };
+    const links = deps.repos.auditLogs.all().filter((entry) => entry.action === "user.password_reset_link_created");
+    expect(location(await ask(form({ email: "user@example.com" })))).toEqual(resetPage("sent"));
+    expect(
+      deps.repos.auditLogs.all().filter((entry) => entry.action === "user.password_reset_link_created"),
+    ).toHaveLength(links.length + 1);
+    env.value = { ...env.value, EMAIL_OUTBOX_DIR: outbox };
+    rmSync(notAFolder);
     env.value = { ...env.value, APP_BASE_URL: BASE };
     vi.spyOn(deps.repos.users, "findByEmail").mockRejectedValueOnce(new Error("database is down"));
     expect(location(await ask(form({ email: "user@example.com" })))).toEqual(resetPage("sent"));
@@ -149,6 +165,8 @@ describe("choosing a new password", () => {
     for (const fields of refused) {
       expect(location(await reset(form(fields)))).toEqual(resetPage("invalid"));
     }
+    const json = new Request("http://localhost/api/auth", { method: "POST", body: JSON.stringify({ token }) });
+    expect(location(await reset(json))).toEqual(resetPage("invalid"));
     expect(await signIn(PASSWORD)).toMatchObject({ path: "/" });
     expect(location(await reset(form({ token, password: NEW_PASSWORD })))).toEqual(resetPage("reset"));
   });

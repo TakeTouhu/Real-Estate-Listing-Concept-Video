@@ -33,6 +33,8 @@ test("a person resets a forgotten password from an emailed link, and every sign-
   await expect(elsewhere.getByRole("status")).toContainText("If an account uses that email address");
 
   await elsewhere.goto(await passwordResetLink(person.email));
+  // The address holds the token: the page tells nothing it leads to more than its origin.
+  await expect(elsewhere.locator('meta[name="referrer"]')).toHaveAttribute("content", "strict-origin");
   const password = newPassword();
   await elsewhere.getByLabel("New password (min 10 characters)").fill(password);
   await elsewhere.getByRole("button", { name: "Change password" }).click();

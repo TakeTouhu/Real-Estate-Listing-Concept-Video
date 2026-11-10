@@ -261,7 +261,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       address with an account, and takes longer for one: limiting it also
       blunts telling addresses with accounts from the rest by timing*)
       (*since AT-4c, ADR-0133, that ask is a route anyone can post to:
-      `POST /api/auth/reset-password/request`*);
+      `POST /api/auth/reset-password/request`; its limit must be in place
+      before production gets an email service*);
       progressive cooldown on login failure; a rate-limited request must not
       consume a Unit or cause a Provider POST; plan generation concurrency is a
       **separate** control from abuse limiting. The working value *5 failures /

@@ -153,9 +153,25 @@ describe("opening a link", () => {
       );
       askingForm();
       expect(screen.queryByLabelText(/New password/)).toBeNull();
-      expect(document.body.innerHTML).not.toContain(token);
+      // The token is not echoed back into the page.
+      for (const echoed of [token, ...(typeof unusable === "string" && unusable !== "" ? [unusable] : [])]) {
+        expect(document.body.innerHTML).not.toContain(echoed);
+      }
       cleanup();
     }
+  });
+
+  it("says something went wrong, with no password form, when the link cannot be checked", async () => {
+    const token = await mailedToken();
+    vi.spyOn(deps.repos.accountLinks, "findByTokenHash").mockRejectedValueOnce(new Error("database is down"));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    render(await ResetPasswordPage(search({ token })));
+    expect(screen.getByRole("heading", { name: "Reset your password" })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe(RESET_PASSWORD_NOTICES.failed);
+    askingForm();
+    expect(screen.queryByLabelText(/New password/)).toBeNull();
+    expect(document.body.innerHTML).not.toContain(token);
+    vi.restoreAllMocks();
   });
 
   it("tells no page it leads to more than its origin", () => {

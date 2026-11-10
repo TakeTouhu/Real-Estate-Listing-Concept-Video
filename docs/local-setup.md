@@ -111,7 +111,8 @@ address**. The link works once, for 24 hours; the verify page sends a new one.
 
 A forgotten password is reset the same way: **Forgot your password?** on the
 sign-in page mails a link to the same folder (ADR-0133). It works once, for 1
-hour, and choosing a new password signs the account out everywhere.
+hour, and choosing a new password signs the account out everywhere. Without
+both settings the reset page still says a link was sent, and nothing arrives.
 
 Without both settings no email is sent: the verify page says the email could
 not be sent, and the account cannot be verified. Accounts made before AT-3b

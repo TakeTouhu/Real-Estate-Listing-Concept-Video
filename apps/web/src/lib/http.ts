@@ -17,6 +17,15 @@ export function redirectWithError(requestUrl: string, path: string, message: str
   return NextResponse.redirect(url, { status: 303 });
 }
 
+/** The request's form, or an empty one when its body is not a form, so a route answers as for missing fields. */
+export async function formOf(request: Request): Promise<FormData> {
+  try {
+    return await request.formData();
+  } catch {
+    return new FormData();
+  }
+}
+
 export function formString(form: FormData, key: string): string {
   const value = form.get(key);
   return typeof value === "string" ? value : "";
