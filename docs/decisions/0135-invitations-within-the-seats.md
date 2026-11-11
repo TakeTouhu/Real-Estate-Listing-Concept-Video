@@ -31,9 +31,8 @@ page that accepts an invitation.
 The seats are the plan's included users (ADR-0134). An organization with no
 plan is refused (`NO_PLAN`) before anything is written. A plan whose first
 period has not started yet gives its included users: inviting costs nothing
-and the plan fixes the seats. That is the gate ADR-0134 left open; it was put
-to the product owner on 2026-11-11 with this answer recommended, and
-`TODO.md` records the reply.
+and the plan fixes the seats. That is the gate ADR-0134 left open; the product
+owner chose it on 2026-11-11 (`TODO.md`, closed gates).
 
 The invitation is written in one transaction that first locks the
 organization's row (`FOR NO KEY UPDATE`), so invitations to one organization

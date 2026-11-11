@@ -2538,20 +2538,10 @@ below.
       plan price changes. *Where an Enterprise organization's contracted price
       comes from, the other half of this gate, was decided on 2026-10-28
       (ADR-0093 Decision 2, CLOSED below).*
-- [ ] **Decide whether an organization may invite before its plan starts** —
-      from AT-5 (ADR-0134); blocks AT-6's seat limit. The approved
-      accounts-and-team plan says an organization with no plan cannot invite
-      and that the seats are the plan's included users. A subscription whose
-      first period starts later is neither case. The members page shows such
-      a plan's included users, which decides nothing about inviting. Must be
-      settled before AT-6 refuses or allows an invitation. *Put to the
-      product owner on 2026-11-11, recommending to allow it. AT-6a builds
-      that answer (ADR-0135 Decision 1) and is not merged until it is
-      given.*
 
 ### Decision gates — CLOSED
 
-Thirty-seven decisions: the two gates from the first PR review, eight recorded
+Thirty-eight decisions: the two gates from the first PR review, eight recorded
 with them, the two raised by the exact-head review of those closures, the
 `disclosure.none` grant authority that synchronizing the grant ceiling exposed,
 in-flight Mode C, commercial-mutation authority, the Clean Master,
@@ -2566,9 +2556,19 @@ invoice-paid organization can use purchased Units, from GS-5, what a
 billing cycle's revenue is, and, on 2026-10-28, how a mid-month upgrade is
 charged, that it credits nothing, that its Base-Unit ceiling is pro-rated,
 where an Enterprise organization's revenue comes from and that its amount is
-entered tax-exclusive (ADR-0093).
+entered tax-exclusive (ADR-0093), and, on 2026-11-11, that an organization may
+invite before its plan starts (ADR-0135).
 **Each is settled as policy**; the implementation work each
 one creates is listed in the section above.
+
+- [x] **Whether an organization may invite before its plan starts — CLOSED
+      (it may, up to the plan's seats).** Chosen by the product owner on
+      2026-11-11 (decision card, option 「許可してマージ」, which read:
+      「開始日前でも契約プランの人数(3/10/30人)まで招待できる形で、PR #159を
+      mainに取り込み、AT-6b(招待画面)に進みます。」). Raised by AT-5
+      (ADR-0134): a subscription whose first period starts later is neither
+      "no plan" nor a started one. Its included users are its seats, and
+      inviting costs nothing (ADR-0135 Decision 1). Built in AT-6a.
 
 - [x] **How a mid-month plan upgrade is charged — CLOSED (the upgraded plan
       by the day, for that month).** Decided by the product owner on
