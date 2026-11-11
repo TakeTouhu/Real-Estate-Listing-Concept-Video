@@ -34,7 +34,8 @@ waiting in the `rev_invitation` cookie.
 | `303` to `/accept-invitation?error=<code>` | refused: `invalid`, `expired`, `already-member`, `withdrawn`, `no-plan`, `no-seat` (the wait ended), or `wrong-account`, `unverified`, `failed` (the token waiting) |
 
 The token waits in `rev_invitation`: `HttpOnly`, `SameSite=Lax`, `Secure` in
-production, path `/`, `Max-Age` 86400.
+production, path `/`, `Max-Age` 86400, renewed by each post that keeps it
+waiting.
 
 ### Added: `POST /api/invitations/dismiss`
 
@@ -44,7 +45,8 @@ production, path `/`, `Max-Age` 86400.
 ### Changed: `GET /`
 
 A complete sign-in with an open invitation waiting goes to
-`/accept-invitation` (`307`). `joined={organizationId}` of an organization
+`/accept-invitation` (`307`), unless the page has an `error` to show.
+`joined={organizationId}` of an organization
 the account is in shows "You joined {organization} as {ROLE}."; any other
 value shows nothing.
 
@@ -89,7 +91,7 @@ sequenceDiagram
     B->>A: token (same-origin form post)
     A-->>B: 303 /login, rev_invitation = token
     B->>L: create an account, verify it, MFA as owed
-    L-->>B: 303 /
+    L-->>B: 303 /, or a Continue link to /
     B->>O: GET /
     O->>S: describeInvitation(waiting token)
     O-->>B: 307 /accept-invitation

@@ -20,7 +20,8 @@ caller. The person who opens the link is often not signed in, and often has
 no account: before they can accept they create one, verify its address from a
 second email, and may give an MFA code or set MFA up. Each of those steps ends
 on its own page, and the organizations page (`/`) is where every one of them
-lands once the sign-in is complete (`nextPageFor`, ADR-0129).
+leads once the sign-in is complete, by a redirect (`nextPageFor`, ADR-0129)
+or a **Continue** link.
 
 ---
 
@@ -53,11 +54,11 @@ A post that is not from a complete sign-in keeps the token in a cookie,
 `rev_invitation`, and goes on to `/login`, which sends a sign-in that owes a
 step (the MFA code, the verify page or MFA set-up) on to it, as it always
 does. Neither the page nor the route reads a sign-in that is not complete
-(the boundary of ADR-0065 and ADR-0129 is unchanged). The cookie is `HttpOnly`,
-`SameSite=Lax`, `Secure` in production, on `/`, for 24 hours: as long as a
-verification link works (ADR-0128), the longest step in between. It is set
-only by that post, never by opening the link, and the token goes in no
-address after the link's own.
+(the boundary of ADR-0065 and ADR-0129 is unchanged). The cookie is
+`HttpOnly`, `SameSite=Lax`, `Secure` in production, on `/`, for 24 hours from
+the last post that sets it: as long as a verification link works (ADR-0128),
+the longest step in between. It is set only by such a post, never by opening
+the link, and the token goes in no address after the link's own.
 
 While an open invitation waits:
 
@@ -66,7 +67,10 @@ While an open invitation waits:
 - The organizations page sends a complete sign-in to `/accept-invitation`,
   which shows the waiting invitation with **Accept invitation**. So the
   invitation comes back after a password, an MFA code, a verification or MFA
-  set-up alike, with no change to any of their routes.
+  set-up alike, with no change to any of their routes. When the
+  organizations page was sent an error to show (a Property not found, an
+  organization not created), it shows the error instead, and the next visit
+  brings the invitation back.
 
 A waiting invitation that is no longer open is ignored, and the cookie
 expires. A verification link opened in another browser verifies the address,

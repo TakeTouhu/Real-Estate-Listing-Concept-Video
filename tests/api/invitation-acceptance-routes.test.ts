@@ -299,7 +299,9 @@ describe("reading an invitation", () => {
     const token = await invite("invitee");
     vi.spyOn(deps.repos.invitations, "findByTokenHash").mockRejectedValueOnce(new Error(`db down ${token}`));
     expect(await openInvitation(token)).toEqual({ state: "failed" });
-    expect(log.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(token);
+    const lines = log.mock.calls.map((call) => String(call[0]));
+    expect(lines.some((line) => line.includes("An invitation could not be read"))).toBe(true);
+    expect(lines.join("\n")).not.toContain(token);
   });
 
   it("finds the one waiting in the browser while it is open", async () => {

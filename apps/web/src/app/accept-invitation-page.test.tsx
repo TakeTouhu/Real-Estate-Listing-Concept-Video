@@ -148,16 +148,28 @@ describe("opened from its link", () => {
     expect(formOf("Continue").querySelector<HTMLInputElement>('input[name="token"]')!.value).toBe(token);
   });
 
-  it("shows no form for a token of no open invitation, one too long, or more than one", async () => {
+  /** The page shows "Link not valid" and no button. */
+  async function expectNotValid(token: string | string[]) {
+    render(await AcceptInvitationPage(search({ token })));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Link not valid");
+    expect(screen.queryByRole("button")).toBeNull();
+    cleanup();
+  }
+
+  it("refuses unread a token given twice or too long, even of an open invitation", async () => {
+    const open = invite();
+    const [stored] = await deps.repos.invitations.listByOrganization(orgId);
+    deps.repos.invitations.put({ ...stored!, id: "inv_long", tokenHash: deps.tokens.hash("x".repeat(129)) });
+    const read = vi.spyOn(deps.repos.invitations, "findByTokenHash");
+    for (const value of [[open, open], "x".repeat(129)]) await expectNotValid(value);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("shows no form for a token of no open invitation", async () => {
     const used = ["ACCEPTED", "REVOKED", "EXPIRED"].map((status) => invite("VIEWER", status as InvitationStatus));
     const open = invite();
     deps.clock.set(new Date(deps.clock.now().getTime() + 3_600_000));
-    for (const value of [...used, open, "unknown", "x".repeat(129), [open, open]]) {
-      render(await AcceptInvitationPage(search({ token: value })));
-      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Link not valid");
-      expect(screen.queryByRole("button")).toBeNull();
-      cleanup();
-    }
+    for (const value of [...used, open, "unknown"]) await expectNotValid(value);
   });
 });
 
@@ -212,6 +224,15 @@ describe("the organizations page", () => {
     deps.repos.invitations.put({ ...invitation!, status: "REVOKED" });
     render(await DashboardPage(query()));
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Organizations");
+  });
+
+  it("shows an error it was sent first, and brings the invitation back on the next visit", async () => {
+    await register("someone");
+    await signIn("someone");
+    jar.value[WAITING] = invite();
+    render(await DashboardPage(query({ error: "Property not found" })));
+    expect(screen.getByRole("alert").textContent).toBe("Property not found");
+    expect(await redirectOf(DashboardPage(query()))).toBe("/accept-invitation");
   });
 
   it("names the organization joined, and nothing for one the account is not in", async () => {

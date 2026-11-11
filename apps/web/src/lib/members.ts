@@ -29,7 +29,7 @@ export function getMembersOverviewService(): MembersOverviewService {
   return overview;
 }
 
-/** The page an invitation's link opens, with its token (AT-7 builds it). */
+/** The page an invitation's link opens, with its token (ADR-0138). */
 export const ACCEPT_INVITATION_PATH = "/accept-invitation";
 
 /** How long an invitation's link works, worded as its email words it. */

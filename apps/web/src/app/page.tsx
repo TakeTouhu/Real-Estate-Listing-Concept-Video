@@ -16,9 +16,10 @@ export default async function DashboardPage({
   if (!current) {
     redirect("/login");
   }
-  // An invitation opened before signing in waits here until it is answered (ADR-0138).
-  if (await waitingInvitation()) redirect("/accept-invitation");
   const params = await searchParams;
+  // An invitation opened before signing in waits here until it is answered
+  // (ADR-0138), unless this page has an error to show first.
+  if (!params.error && (await waitingInvitation())) redirect("/accept-invitation");
   const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
   const services = getPropertyServices();
 
