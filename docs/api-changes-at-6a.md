@@ -16,7 +16,7 @@ No change.
 | Export | Shape |
 | --- | --- |
 | `MembershipServiceOptions` | adds `includedSeats(organizationId)` (`number` or `null` without a plan), `email: EmailSender` and `invitationUrl(token)`; all required |
-| `MembershipService.invite(actor, input)` | as before, then: `VALIDATION_FAILED` with `details.reason` `INVALID_EMAIL` (before anything), `NO_PLAN`, `ALREADY_INVITED`, `ALREADY_MEMBER` or `NO_SEAT`. Mails the link after the invitation and its audit entry are kept; still returns `{ invitation, token }` |
+| `MembershipService.invite(actor, input)` | authorized as before (refusals audited), then: `VALIDATION_FAILED` with `details.reason` `INVALID_EMAIL`, `NO_PLAN`, `ALREADY_INVITED`, `ALREADY_MEMBER` or `NO_SEAT`. Mails the link after the invitation and its audit entry are kept; still returns `{ invitation, token }`, the token being the invitee's alone |
 | `InvitationRepository.create(input, audit, { includedSeats, now })` | was `(invitation, audit)` returning the invitation. Takes a `NewInvitation` (no status, acceptance or creation time) and returns an `InvitationCreation`: `CREATED` with the invitation, or `ALREADY_INVITED`, `ALREADY_MEMBER`, `NO_SEAT`, writing nothing more |
 | `InvitationRepository.findPending` | removed; it read the status alone |
 
@@ -30,7 +30,7 @@ No change.
 | `InvitationRefusal` | the five reasons above |
 | `NewInvitation`, `InvitationCreation` | the repository's input and answer |
 | `isOpenInvitation(invitation, now)` | `PENDING` and expiring after `now`; `holdsSeat` now answers with it |
-| `invitationMessage(to, organizationName, role, url, ttlSeconds)` | the invitation email, kind `INVITATION` |
+| `invitationMessage(to, organizationName, role, url, ttlSeconds)` | the invitation email, kind `INVITATION`; the name on one line, without control or formatting characters, at most 100 characters |
 | `INVITATION_TTL_SECONDS` | 7 days |
 | `includedSeatsFrom(subscriptions)` | the `includedSeats` option, read from the organization's subscription |
 | `AuditAction.InvitationRevoked` | `invitation.revoked`, with the actor, the invitation as resource and `metadata: { email, role }` |
@@ -38,9 +38,10 @@ No change.
 ### Changed: `@app/database`
 
 `invitations.create` locks the organization's row `FOR NO KEY UPDATE`, marks
-the address's expired pending invitation `EXPIRED`, checks and counts, then
-writes with the audit entry, in one transaction; a refusal by migration 34's
-index answers `ALREADY_INVITED`. `invitations.revoke` moves a pending
+the address's expired pending invitation `EXPIRED`, checks the address,
+counts members and open invitations in one statement, then writes with the
+audit entry, in one transaction; a refusal by migration 34's index answers
+`ALREADY_INVITED`, and any other key conflict is thrown. `invitations.revoke` moves a pending
 invitation not expired to `REVOKED` with its audit entry, in one transaction.
 
 ### Changed: `apps/web`
@@ -53,8 +54,9 @@ routes.
 
 `membershipTestOptions(overrides)` gives tests a membership service's options:
 30 seats, a `RecordingEmailSender` and `invite:` links. The in-memory
-invitations gain `put(invitation)` for fixtures, and check and write with no
-`await` in between.
+invitations gain `put(invitation)` for fixtures, check and write with no
+`await` in between, and take back the invitation and its expired marks when
+the audit entry fails.
 
 ## Sequence
 
@@ -64,7 +66,7 @@ sequenceDiagram
     participant P as Subscription
     participant R as Invitations (PostgreSQL)
     participant M as Email outbox
-    S->>S: address deliverable? member.manage and ceiling (refusals audited)
+    S->>S: member.manage and ceiling (refusals audited), then address deliverable?
     S->>P: included seats (null: NO_PLAN)
     S->>S: token, link and email built (nothing written yet)
     S->>R: create(invitation, audit, seats, now)

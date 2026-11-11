@@ -660,8 +660,10 @@ class InMemoryInvitationRepository implements InvitationRepository {
   ) {}
   /**
    * Checks and writes with no `await` in between, as the database's
-   * transaction under the organization's lock does (ADR-0135). An audit entry
-   * that cannot be appended takes the invitation back out.
+   * transaction under the organization's lock does (ADR-0135). A refusal
+   * keeps the lapsed invitations it marked, as the committed transaction does;
+   * an audit entry that cannot be appended takes back the invitation and the
+   * marks, as the rolled-back one does.
    */
   async create(
     input: NewInvitation,
@@ -670,11 +672,10 @@ class InMemoryInvitationRepository implements InvitationRepository {
   ): Promise<InvitationCreation> {
     const { organizationId, email } = input;
     const ofOrganization = [...this.byId.values()].filter((i) => i.organizationId === organizationId);
-    for (const lapsed of ofOrganization) {
-      if (lapsed.email === email && lapsed.status === "PENDING" && !isOpenInvitation(lapsed, now)) {
-        this.byId.set(lapsed.id, { ...lapsed, status: "EXPIRED" });
-      }
-    }
+    const lapsed = ofOrganization.filter(
+      (i) => i.email === email && i.status === "PENDING" && !isOpenInvitation(i, now),
+    );
+    for (const invitation of lapsed) this.byId.set(invitation.id, { ...invitation, status: "EXPIRED" });
     if (ofOrganization.some((i) => i.email === email && isOpenInvitation(i, now))) {
       return { outcome: "ALREADY_INVITED" };
     }
@@ -689,6 +690,7 @@ class InMemoryInvitationRepository implements InvitationRepository {
       await this.auditLogs.append(audit);
     } catch (error) {
       this.byId.delete(invitation.id);
+      for (const unmarked of lapsed) this.byId.set(unmarked.id, unmarked);
       throw error;
     }
     return { outcome: "CREATED", invitation };

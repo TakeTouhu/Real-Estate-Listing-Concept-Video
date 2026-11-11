@@ -857,9 +857,9 @@ and so does such an invitation; an organization with no plan has no seats yet.
 The page writes nothing. No page or route invites or changes a member yet.
 
 **AT-6a — invitations within the seats** (ADR-0135, migration 34): inviting
-needs a plan and a free seat, counted in the transaction that writes the
-invitation under a lock on the organization, so two invitations cannot take
-one seat. One pending invitation per address, held by a unique index; an
+needs a plan and a free seat, counted in one statement in the transaction
+that writes the invitation under a lock on the organization, so two
+invitations cannot take one seat. One pending invitation per address, held by a unique index; an
 expired invitation is marked `EXPIRED` when its address is invited again, and
 a member's address is refused. The invitation is mailed after it is kept.
 Cancelling a pending invitation is under the role ceiling, audited, and frees

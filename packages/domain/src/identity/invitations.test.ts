@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTestDeps,
   membershipTestOptions,
@@ -29,6 +29,7 @@ let members: MembershipService;
 let seats: number | null;
 let orgId: string;
 let ids: Record<"OWNER" | "ADMIN" | "CREATOR" | "outsider", string>;
+let register: (name: string) => Promise<string>;
 
 beforeEach(async () => {
   deps = createTestDeps();
@@ -37,7 +38,7 @@ beforeEach(async () => {
   options = membershipTestOptions({ includedSeats: () => Promise.resolve(seats) });
   members = new MembershipService(deps, options);
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
-  const register = async (name: string) =>
+  register = async (name: string) =>
     (await auth.register({ email: `${name}@example.com`, name, password: "password-123456" })).id;
   const owner = await register("owner");
   ({ organization: { id: orgId } } = await new OrganizationService(deps).createOrganization(owner, {
@@ -97,21 +98,38 @@ describe("inviting", () => {
     expect(text).toContain("The invitation expires in 7 days.");
   });
 
-  it("refuses an address mail cannot reach before anything else, writing and sending nothing", async () => {
+  it("quotes the organization's name on one line, with no control characters, cut to 100 characters", () => {
+    const opening = (name: string) =>
+      invitationMessage("a@example.com", name, "VIEWER", "https://x.test/", 3600).text.split("\n")[0];
+    expect(opening("Evil\u001b[31m Org\u202e\r\nBcc: x\u200b")).toBe(
+      "You are invited to join Evil [31m Org Bcc: x on VTaVision as a Viewer.",
+    );
+    expect(opening("a".repeat(100))).toBe(`You are invited to join ${"a".repeat(100)} on VTaVision as a Viewer.`);
+    expect(opening("\u{1F3E0}".repeat(101))).toBe(
+      `You are invited to join ${"\u{1F3E0}".repeat(99)}\u2026 on VTaVision as a Viewer.`,
+    );
+    expect(opening(`${"a".repeat(98)} ${"b".repeat(10)}`)).toBe(
+      `You are invited to join ${"a".repeat(98)}\u2026 on VTaVision as a Viewer.`,
+    );
+  });
+
+  it("refuses an address mail cannot reach before the plan is asked, writing and sending nothing", async () => {
+    seats = null;
     const entries = deps.repos.auditLogs.all().length;
-    expect(await reasonOf(invite("not-an-address", "ADMIN", ids.CREATOR))).toBe("VALIDATION_FAILED:INVALID_EMAIL");
+    expect(await reasonOf(invite("not-an-address"))).toBe("VALIDATION_FAILED:INVALID_EMAIL");
     expect(await invitations()).toEqual([]);
     expect(deps.repos.auditLogs.all()).toHaveLength(entries);
     expect(options.email.sent).toEqual([]);
   });
 
-  it("asks the role ceiling before the plan, so a refused member is audited even with no plan", async () => {
+  it("asks authorization first, so a refused member is audited whatever the address or the plan", async () => {
     seats = null;
     expect(await reasonOf(invite("a@example.com", "VIEWER", ids.CREATOR))).toBe("FORBIDDEN:");
     expect(await reasonOf(invite("a@example.com", "ADMIN", ids.ADMIN))).toBe("FORBIDDEN:");
-    expect(audited("member.role_change_refused")).toHaveLength(2);
+    expect(await reasonOf(invite("not-an-address", "ADMIN", ids.ADMIN))).toBe("FORBIDDEN:");
+    expect(audited("member.role_change_refused")).toHaveLength(3);
     expect(await reasonOf(invite("a@example.com", "VIEWER", ids.outsider))).toBe("FORBIDDEN:");
-    expect(audited("member.role_change_refused")).toHaveLength(2);
+    expect(audited("member.role_change_refused")).toHaveLength(3);
   });
 
   it("refuses an organization with no plan, writing and sending nothing", async () => {
@@ -178,6 +196,15 @@ describe("inviting", () => {
     expect(audited("invitation.created")).toEqual([]);
   });
 
+  it("writes and mails nothing when its audit entry cannot be kept, not even the expired mark", async () => {
+    const lapsed = stored("again@example.com", { expiresAt: NOW });
+    deps.repos.invitations.put(lapsed);
+    vi.spyOn(deps.repos.auditLogs, "append").mockRejectedValueOnce(new Error("audit down"));
+    await expect(invite("again@example.com")).rejects.toThrow("audit down");
+    expect(await invitations()).toEqual([lapsed]);
+    expect(options.email.sent).toEqual([]);
+  });
+
   it("keeps the invitation and its audit entry when the email is refused, and says so", async () => {
     options.email.failing = true;
     await expect(invite("a@example.com")).rejects.toThrow("delivery refused");
@@ -208,13 +235,17 @@ describe("cancelling an invitation", () => {
     await expect(members.acceptInvitation(ids.outsider, token)).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("refuses and audits a member cancelling past its ceiling or without member.manage", async () => {
+  it("refuses and audits a member cancelling past its ceiling, or one who sees but does not manage", async () => {
     const { invitation } = await invite("boss@example.com", "ADMIN");
+    const manager = await register("manager");
+    await deps.repos.memberships.create({ organizationId: orgId, userId: manager, role: "MANAGER" });
     await expect(cancel(invitation.id, ids.ADMIN)).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(cancel(invitation.id, ids.CREATOR)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(cancel(invitation.id, manager)).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(audited("member.role_change_refused").map(({ metadata }) => metadata)).toEqual([
       { operation: "cancel_invitation", actorRole: "ADMIN", invitedRole: "ADMIN" },
       { operation: "cancel_invitation", actorRole: "CREATOR", invitedRole: null },
+      { operation: "cancel_invitation", actorRole: "MANAGER", invitedRole: null },
     ]);
     expect((await invitations()).map(({ status }) => status)).toEqual(["PENDING"]);
   });
@@ -239,15 +270,16 @@ describe("cancelling an invitation", () => {
     ["cancelled", { status: "REVOKED" }],
     ["marked expired", { status: "EXPIRED" }],
     ["past its expiry", { expiresAt: NOW }],
-  ] as const)("finds no pending invitation once it is %s, and writes nothing", async (_, overrides) => {
-    deps.repos.invitations.put(stored("a@example.com", overrides));
-    await expect(cancel("inv_a")).rejects.toMatchObject({ code: "NOT_FOUND" });
+  ] as const)("finds no pending invitation once it is %s, before asking the ceiling", async (_, overrides) => {
+    deps.repos.invitations.put(stored("a@example.com", { role: "ADMIN", ...overrides }));
+    await expect(cancel("inv_a", ids.ADMIN)).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(audited("invitation.revoked")).toEqual([]);
+    expect(audited("member.role_change_refused")).toEqual([]);
   });
 });
 
 /** An invitation as it may be stored, `inv_` and its address's local part. */
-function stored(email: string, overrides: Partial<Pick<Invitation, "status" | "expiresAt">> = {}): Invitation {
+function stored(email: string, overrides: Partial<Pick<Invitation, "status" | "expiresAt" | "role">> = {}): Invitation {
   return {
     id: `inv_${email.split("@")[0]}`,
     organizationId: orgId,

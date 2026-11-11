@@ -37,7 +37,10 @@ export interface InviteInput {
 
 export interface InviteResult {
   readonly invitation: Invitation;
-  /** Raw invitation token — returned once, and mailed; only its hash is stored. */
+  /**
+   * Raw invitation token — returned once, and mailed; only its hash is stored.
+   * It is the invitee's: no route or page may show it to the inviter.
+   */
   readonly token: string;
 }
 
@@ -87,10 +90,24 @@ function lifetime(seconds: number): string {
   return hours === 1 ? "1 hour" : `${hours} hours`;
 }
 
+/** The longest organization name an invitation email quotes; a longer one is cut. */
+const EMAIL_ORGANIZATION_NAME_MAX_LENGTH = 100;
+
 /**
- * The invitation email: who invites, as what, and one link, in plain text.
- * The organization's name is the customer's text, so it is kept to one line.
+ * The organization's name as an email quotes it. It is the customer's text,
+ * taken with no limit, so control and formatting characters (line breaks,
+ * escapes, bidirectional overrides) become spaces, and it is kept to one line
+ * of {@link EMAIL_ORGANIZATION_NAME_MAX_LENGTH} characters.
  */
+function quotedOrganizationName(name: string): string {
+  const plain = name.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim();
+  const chars = [...plain];
+  return chars.length > EMAIL_ORGANIZATION_NAME_MAX_LENGTH
+    ? `${chars.slice(0, EMAIL_ORGANIZATION_NAME_MAX_LENGTH - 1).join("").trimEnd()}…`
+    : plain;
+}
+
+/** The invitation email: who invites, as what, and one link, in plain text. */
 export function invitationMessage(
   to: string,
   organizationName: string,
@@ -103,7 +120,7 @@ export function invitationMessage(
     to,
     subject: "You are invited to join an organization on VTaVision",
     text: [
-      `You are invited to join ${organizationName.replace(/\s+/g, " ").trim()} on VTaVision as ${ROLE_NAMES[role]}.`,
+      `You are invited to join ${quotedOrganizationName(organizationName)} on VTaVision as ${ROLE_NAMES[role]}.`,
       "",
       "Open the link below to accept. You sign in, or create an account, with this email address.",
       "",
@@ -146,9 +163,10 @@ export class MembershipService {
    * Invite an address to the organization with a role, within its seats, and
    * mail it the link (ADR-0135). Every member takes a seat, and so does every
    * pending invitation that has not expired; the count is made in the
-   * transaction that writes the invitation. The email is built before anything
-   * is written, so an application that cannot mail writes nothing, and it is
-   * sent after the invitation and its audit entry are kept.
+   * transaction that writes the invitation. The link and the email are built
+   * before anything is written, so an application with no base address writes
+   * nothing; the email is sent after the invitation and its audit entry are
+   * kept, and a send that fails leaves the invitation pending.
    *
    * @throws AppError FORBIDDEN for a non-member, or for a member without
    *   `member.manage` or past its ceiling (audited);
@@ -156,7 +174,6 @@ export class MembershipService {
    */
   async invite(actorUserId: string, input: InviteInput): Promise<InviteResult> {
     const email = normalizeEmail(input.email);
-    if (!isDeliverableEmailAddress(email)) refuseInvitation("INVALID_EMAIL");
     const refused: RefusedChange = {
       operation: "invite",
       resourceType: "organization",
@@ -165,6 +182,7 @@ export class MembershipService {
     };
     const actor = await this.requireMemberPermission(actorUserId, input.organizationId, "member.manage", refused);
     if (!mayAssignRole(actor.role, input.role)) await this.refuse(actor, refused);
+    if (!isDeliverableEmailAddress(email)) refuseInvitation("INVALID_EMAIL");
     const includedSeats = await this.options.includedSeats(input.organizationId);
     if (includedSeats === null) refuseInvitation("NO_PLAN");
     const organization = await this.deps.repos.organizations.findById(input.organizationId);

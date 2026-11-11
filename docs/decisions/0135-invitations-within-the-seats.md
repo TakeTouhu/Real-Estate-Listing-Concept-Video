@@ -30,17 +30,20 @@ page that accepts an invitation.
 
 The seats are the plan's included users (ADR-0134). An organization with no
 plan is refused (`NO_PLAN`) before anything is written. A plan whose first
-period has not started yet gives its included users: inviting needs a seat,
-and such a plan has them. This is the gate ADR-0134 left open; the product
-owner's answer is recorded in `TODO.md`.
+period has not started yet gives its included users: inviting costs nothing
+and the plan fixes the seats. That is the gate ADR-0134 left open; it was put
+to the product owner on 2026-11-11 with this answer recommended, and
+`TODO.md` records the reply.
 
 The invitation is written in one transaction that first locks the
 organization's row (`FOR NO KEY UPDATE`), so invitations to one organization
 are made one at a time. Within it, members plus pending invitations that have
-not expired are counted; at or above the seats the invitation is refused
-(`NO_SEAT`) and nothing more is written. Two invitations racing for the last
-seat make one. `NO KEY UPDATE` lets writes that only refer to the organization,
-such as an audit entry or a Property, go on meanwhile.
+not expired are counted in one statement, so an acceptance committing
+meanwhile is seen as one or the other, never both or neither. At or above the
+seats the invitation is refused (`NO_SEAT`) and nothing more is written. Two
+invitations racing for the last seat make one. `NO KEY UPDATE` lets writes
+that only refer to the organization, such as an audit entry or a Property, go
+on meanwhile.
 
 The plan is read before the transaction. A plan changed between that read and
 the count can let one invitation through on the old number; plans change only
@@ -51,34 +54,41 @@ when VTaVision provisions them. Inviting never buys a seat (ADR-0053 Decision
 
 Migration 34 adds a unique index on `(organizationId, email)` over the rows
 whose status is `PENDING`. Under the lock above it is a backstop: a second
-pending row from any path is refused by the database.
+pending row from any path is refused by the database, and an invitation the
+index refuses is answered `ALREADY_INVITED`. An id or a token hash used twice
+is an error, not a refusal.
 
 An invitation past its expiry no longer holds its address. The inviting
 transaction first marks `EXPIRED` the address's pending invitation that has
 expired, then checks. This closes the `TODO.md` item from AT-5. An invitation
 of an address with a pending invitation is refused (`ALREADY_INVITED`), and so
 is the address of an account that is already a member (`ALREADY_MEMBER`).
-Addresses are compared as stored, lower case. An address mail cannot reach is
-refused (`INVALID_EMAIL`) before anything else is asked.
+Addresses are compared as stored, lower case.
 
 Every refusal is a `VALIDATION_FAILED` naming its reason in `details.reason`,
 for AT-6b's page to say which. Authorization comes first: a member without
 `member.manage`, or one inviting past its ceiling, is refused and audited as
-before, whether or not the organization has a plan.
+before, whatever the address and whether or not the organization has a plan.
+Then an address mail cannot reach is refused (`INVALID_EMAIL`), before the
+plan is read.
 
 ## Decision 3 — The invitation email
 
 The email says which organization invites, as which role, and when the
 invitation expires, and carries one link, in plain text (kind `INVITATION`,
-ADR-0126). The organization's name is the customer's text, so it is kept to
-one line. The link's address is built by the application from its configured
-base address, never from a request (ADR-0129); its page is AT-7's.
+ADR-0126). The organization's name is the customer's text, so control and
+formatting characters (line breaks, escapes, direction overrides) become
+spaces, and it is kept to one line of at most 100 characters. The link's
+address is built by the application from its configured base address, never
+from a request (ADR-0129); its page is AT-7's. The token is the invitee's: it
+travels in the email only, and no route or page shows it to the inviter.
 
-The email is built before anything is written, so an application that cannot
-mail writes nothing. It is sent after the invitation and its audit entry are
-kept, as a password reset link is (ADR-0131). If sending fails, the invitation
-stays pending and the inviter gets the error. The plan has no resend: the
-inviter can cancel and invite again (AT-6b).
+The link and the email are built before anything is written, so an
+application that cannot build the link writes nothing. The email is sent
+after the invitation and its audit entry are kept, as a password reset link
+is (ADR-0131). If sending fails, the invitation stays pending and the inviter
+gets the error. The plan has no resend: the inviter can cancel and invite
+again (AT-6b).
 
 The product's invitation works for 7 days (`INVITATION_TTL_SECONDS`, now in
 the domain; the web app's own constant is gone).
@@ -110,6 +120,7 @@ its link accepts nothing.
   gone.
 - New audit action `invitation.revoked`.
 - No page or route invites or cancels yet: the dormancy test in
-  `role-templates-shape.test.ts` still finds no caller in either application.
+  `role-templates-shape.test.ts`, which now looks for `cancelInvitation` too,
+  still finds no caller in either application.
 - Acceptance is unchanged here. AT-7 checks the invited, verified address, and
-  needs a free seat counting members only, under the same lock.
+  needs a free seat counting members only, under the same lock (`TODO.md`).

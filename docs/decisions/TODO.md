@@ -2218,6 +2218,12 @@ them is **built**. Each item below records the settled decision and what remains
       (ADR-0135 Decision 2): the inviting transaction marks the address's
       expired invitation `EXPIRED` before it checks, and `findPending` is
       gone.*
+- [ ] **Make acceptance take the organization's lock before it counts** —
+      found in AT-6a's review (ADR-0135). AT-7 rebuilds acceptance with a
+      seat check that counts members only. Two acceptances racing for the
+      last seat would both pass a check made without a lock, so acceptance
+      must lock the organization's row `FOR NO KEY UPDATE`, as inviting
+      does, and count in the same transaction that writes the membership.
 - [x] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact. *Role, individual-permission and group changes
@@ -2538,7 +2544,10 @@ below.
       and that the seats are the plan's included users. A subscription whose
       first period starts later is neither case. The members page shows such
       a plan's included users, which decides nothing about inviting. Must be
-      settled before AT-6 refuses or allows an invitation.
+      settled before AT-6 refuses or allows an invitation. *Put to the
+      product owner on 2026-11-11, recommending to allow it. AT-6a builds
+      that answer (ADR-0135 Decision 1) and is not merged until it is
+      given.*
 
 ### Decision gates — CLOSED
 

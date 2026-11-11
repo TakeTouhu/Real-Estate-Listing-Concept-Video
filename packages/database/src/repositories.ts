@@ -127,6 +127,18 @@ function toInvitation(r: DbInvitation): Invitation {
   };
 }
 
+/**
+ * Whether `error` is migration 34's one-pending-invitation index refusing a
+ * row. Prisma names the index by its columns, as it names the id and token
+ * hash keys by theirs, so the address tells it apart.
+ */
+function isOnePendingInvitationConflict(error: unknown): boolean {
+  const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown; target?: unknown } };
+  return (
+    code === "P2002" && meta?.modelName === "Invitation" && Array.isArray(meta.target) && meta.target.includes("email")
+  );
+}
+
 function toSession(r: DbSession): Session {
   return {
     id: r.id,
@@ -373,11 +385,16 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
           if ((await tx.membership.count({ where: { organizationId, user: { email } } })) > 0) {
             return { outcome: "ALREADY_MEMBER" };
           }
-          const members = await tx.membership.count({ where: { organizationId } });
-          const pending = await tx.invitation.count({
-            where: { organizationId, status: "PENDING", expiresAt: { gt: now } },
-          });
-          if (members + pending >= includedSeats) return { outcome: "NO_SEAT" };
+          // Members and open invitations in one statement, so one snapshot: an
+          // acceptance committing between two counts would move a seat from
+          // one to the other and be counted twice or not at all. The column
+          // holds UTC without a zone, so the instant is turned to UTC.
+          const [seats] = await tx.$queryRaw<{ taken: number }[]>`
+            SELECT (SELECT count(*) FROM "memberships" WHERE "organizationId" = ${organizationId})::int
+                 + (SELECT count(*) FROM "invitations"
+                     WHERE "organizationId" = ${organizationId} AND "status" = 'PENDING'
+                       AND "expiresAt" > (${now}::timestamptz AT TIME ZONE 'UTC'))::int AS "taken"`;
+          if ((seats?.taken ?? 0) >= includedSeats) return { outcome: "NO_SEAT" };
           const row = await tx.invitation.create({
             data: {
               id: input.id,
@@ -395,10 +412,10 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
           return { outcome: "CREATED", invitation: toInvitation(row) };
         });
       } catch (error) {
-        // The one-pending-invitation index refused the row: only a path that
-        // writes without the lock above could get here.
-        const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown } };
-        if (code !== "P2002" || meta?.modelName !== "Invitation") throw error;
+        // The one-pending-invitation index refused the row (migration 34):
+        // only a write that skipped the lock above could get here. Any other
+        // key (an id or a token hash used twice) is an error, not a refusal.
+        if (!isOnePendingInvitationConflict(error)) throw error;
         return { outcome: "ALREADY_INVITED" };
       }
     },

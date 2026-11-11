@@ -9,7 +9,8 @@ import { createPrismaIdentityRepositories } from "@app/database";
  * marked EXPIRED and frees its address; members and pending invitations not
  * expired are counted against the seats; two invitations racing for one seat
  * or one address make one; migration 34's index admits one pending invitation
- * per address; a cancellation commits with its audit entry, once.
+ * per address, and an invitation it refuses is answered ALREADY_INVITED; a
+ * cancellation commits with its audit entry, once.
  */
 
 const ORG = "org_itest_invites";
@@ -107,20 +108,27 @@ async function until(condition: () => Promise<boolean>): Promise<void> {
   throw new Error("the contenders never all waited on the lock holder");
 }
 
+const holdOrganization = (tx: Prisma.TransactionClient) =>
+  tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${ORG} FOR NO KEY UPDATE`;
+
 /**
- * Start `contenders` while another transaction holds the organization's row,
- * and release them only once every contender is waiting for a lock: the
- * interleaving a race needs, made deterministic. (The suite's files run one at
- * a time, so no other session waits on a lock meanwhile.)
+ * Start `contenders` while another transaction holds what `hold` locks (the
+ * organization's row unless said otherwise), and release them only once every
+ * contender is waiting for a lock: the interleaving a race needs, made
+ * deterministic. The holder then commits. (The suite's files run one at a
+ * time, so no other session waits on a lock meanwhile.)
  */
-async function contend(contenders: (() => Promise<unknown>)[]): Promise<PromiseSettledResult<unknown>[]> {
+async function contend(
+  contenders: (() => Promise<unknown>)[],
+  hold: (tx: Prisma.TransactionClient) => Promise<unknown> = holdOrganization,
+): Promise<PromiseSettledResult<unknown>[]> {
   let release = (): void => undefined;
   const released = new Promise<void>((resolve) => (release = resolve));
   let signalHeld = (): void => undefined;
   const held = new Promise<void>((resolve) => (signalHeld = resolve));
   const holder = prisma.$transaction(
     async (tx) => {
-      await tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${ORG} FOR NO KEY UPDATE`;
+      await hold(tx);
       signalHeld();
       await released;
     },
@@ -156,14 +164,31 @@ describe.skipIf(!HAS_DB)("inviting within the seats", () => {
     expect(await auditCount("invitation.created")).toBe(1);
   });
 
-  it("commits no invitation whose audit entry cannot be written", async () => {
+  it("commits no invitation whose audit entry cannot be written, nor the expired mark", async () => {
+    await invite("again@itest-invites.example");
     await expect(
-      invitations.create(invitation("new@itest-invites.example"), audit("invitation.created", UNWRITABLE), {
+      invitations.create(invitation("again@itest-invites.example"), audit("invitation.created", UNWRITABLE), {
         includedSeats: 5,
-        now: NOW,
+        now: LATER,
       }),
     ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
-    expect(await statuses()).toEqual([]);
+    expect(await statuses()).toEqual(["again@itest-invites.example PENDING"]);
+  });
+
+  it("answers an id or a token used twice as an error, not as a refusal", async () => {
+    const first = invitation("first@itest-invites.example");
+    const seats = { includedSeats: 5, now: NOW };
+    await invitations.create(first, audit("invitation.created"), seats);
+    const reused = [
+      { ...invitation("second@itest-invites.example"), id: first.id },
+      { ...invitation("third@itest-invites.example"), tokenHash: first.tokenHash },
+    ];
+    for (const input of reused) {
+      await expect(invitations.create(input, audit("invitation.created"), seats)).rejects.toMatchObject({
+        code: "P2002",
+      });
+    }
+    expect(await statuses()).toEqual(["first@itest-invites.example PENDING"]);
   });
 
   it("refuses the address of a pending invitation, and of a member", async () => {
@@ -209,6 +234,14 @@ describe.skipIf(!HAS_DB)("inviting within the seats", () => {
     expect(await statuses()).toEqual(["same@itest-invites.example PENDING"]);
   });
 
+  it("answers ALREADY_INVITED when the index refuses a row another path was writing", async () => {
+    const raced = "raced@itest-invites.example";
+    const results = await contend([() => invite(raced)], (tx) => tx.invitation.create({ data: invitation(raced) }));
+    expect(outcomes(results)).toEqual(["ALREADY_INVITED"]);
+    expect(await statuses()).toEqual([`${raced} PENDING`]);
+    expect(await auditCount("invitation.created")).toBe(0);
+  });
+
   it("holds one pending invitation per address in an organization at the index, whatever path writes", async () => {
     const indexed = "indexed@itest-invites.example";
     await prisma.invitation.create({ data: invitation(indexed) });
@@ -252,11 +285,16 @@ describe.skipIf(!HAS_DB)("cancelling an invitation", () => {
     const newcomer = "usr_itest_invites_newcomer";
     await prisma.user.create({ data: { id: newcomer, email: "cancel@itest-invites.example", name: newcomer } });
     try {
-      const [revoked, accepted] = await Promise.all([
-        invitations.revoke(ORG, id, NOW, audit("invitation.revoked")),
-        invitations.accept(found, newcomer, NOW, audit("invitation.accepted")),
-      ]);
-      const won = [revoked === "REVOKED", accepted.outcome === "ACCEPTED"];
+      const settled = await contend(
+        [
+          () => invitations.revoke(ORG, id, NOW, audit("invitation.revoked")),
+          () => invitations.accept(found, newcomer, NOW, audit("invitation.accepted")),
+        ],
+        (tx) => tx.$queryRaw`SELECT 1 FROM "invitations" WHERE "id" = ${id} FOR UPDATE`,
+      );
+      expect(settled.map(({ status }) => status)).toEqual(["fulfilled", "fulfilled"]);
+      const [revoked, accepted] = settled.map((result) => (result.status === "fulfilled" ? result.value : null));
+      const won = [revoked === "REVOKED", (accepted as { outcome?: string } | null)?.outcome === "ACCEPTED"];
       expect(won.filter(Boolean)).toHaveLength(1);
       expect(await statuses()).toEqual([`cancel@itest-invites.example ${won[0] ? "REVOKED" : "ACCEPTED"}`]);
     } finally {
