@@ -8,7 +8,8 @@ import { makePhotos } from "./support/photos";
  * The first browser test (GS-13a, ADR-0121): a new customer reaches a
  * Property holding their photos, through the web app's own pages, in a real
  * browser, and has them analyzed from the review page (GS-13b, ADR-0122). The
- * rest of the way to a delivered video follows in GS-13c and GS-13d.
+ * rest of the way to a delivered video follows in GS-13c and GS-13d. On the
+ * way, the owner finds themselves on the members page (AT-5, ADR-0134).
  */
 test("an owner signs up, sets up MFA, is given a plan, uploads a Property's photos and has them analyzed", async ({
   page,
@@ -21,6 +22,13 @@ test("an owner signs up, sets up MFA, is given a plan, uploads a Property's phot
   await page.reload();
   await expect(page.getByText("Premium plan")).toBeVisible();
   await expect(page.getByText("40 of 40 left.")).toBeVisible();
+
+  // AT-5 (ADR-0134): the owner is the one member, taking one of the Premium plan's 10 seats.
+  await page.goto("/");
+  await page.getByRole("link", { name: "Members" }).click();
+  await expect(page.getByText("1 of 10 taken.")).toBeVisible();
+  await expect(page.getByRole("listitem").filter({ hasText: `(you) · ${owner.email} · Owner · joined` })).toBeVisible();
+  await expect(page.getByText("No pending invitations.")).toBeVisible();
 
   await page.goto("/");
   await page.getByText("Add a property").click();

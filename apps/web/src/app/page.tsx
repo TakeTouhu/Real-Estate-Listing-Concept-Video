@@ -61,7 +61,8 @@ export default async function DashboardPage({
               </form>
             ) : null}
             <p>
-              <a href={`/organizations/${organization.id}/units`}>Units and plan</a>
+              <a href={`/organizations/${organization.id}/units`}>Units and plan</a> ·{" "}
+              <a href={`/organizations/${organization.id}/members`}>Members</a>
             </p>
 
             {properties.length === 0 ? (

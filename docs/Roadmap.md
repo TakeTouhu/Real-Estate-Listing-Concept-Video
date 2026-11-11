@@ -849,6 +849,13 @@ every link that resets nothing gets the same answer. After a reset the account
 is signed out everywhere, and the next sign-in still asks for the MFA code and
 for an unverified address to be verified. A browser test runs the whole reset.
 
+**AT-5 — the members page** (ADR-0134, no migration): a holder of
+`member.view` sees, from the dashboard's "Members" link, the organization's
+seats taken out of its plan's included users, its members with their roles,
+and the invitations that can still be accepted. Every member takes a seat, and
+so does such an invitation; an organization with no plan has no seats yet.
+The page writes nothing. No page or route invites or changes a member yet.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

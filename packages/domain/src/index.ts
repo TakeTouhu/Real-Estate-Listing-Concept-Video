@@ -23,6 +23,7 @@ export * from "./generation/index";
 export * from "./orchestration/index";
 export * from "./pricing/index";
 export * from "./entitlement/index";
+export * from "./team/index";
 
 export * from "./authorization/index";
 export * from "./submission/index";
