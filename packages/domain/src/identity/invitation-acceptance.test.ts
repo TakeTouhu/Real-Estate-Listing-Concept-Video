@@ -224,6 +224,54 @@ describe("the seats", () => {
   });
 });
 
+describe("describing an invitation (ADR-0138)", () => {
+  it("tells what an open invitation offers, as its email words it, and nothing of who was invited", async () => {
+    const token = await invite("invitee@example.com", "CREATOR");
+    expect(await members.describeInvitation(token)).toStrictEqual({
+      organizationName: "Org",
+      role: "CREATOR",
+      invitedAs: "a Creator",
+    });
+  });
+
+  it("quotes the organization's name on one line, as the email does", async () => {
+    const { organization } = await new OrganizationService(deps).createOrganization(ids.OWNER, {
+      name: "Kanda\nRealty\u202e",
+    });
+    deps.repos.invitations.put({ ...stored("invitee@example.com"), organizationId: organization.id });
+    expect(await members.describeInvitation("invitee")).toMatchObject({ organizationName: "Kanda Realty" });
+  });
+
+  it.each([
+    ["accepted", "ACCEPTED"],
+    ["cancelled", "REVOKED"],
+    ["marked expired", "EXPIRED"],
+  ] as const)("describes none once %s", async (_, status) => {
+    deps.repos.invitations.put(stored("invitee@example.com", { status }));
+    expect(await members.describeInvitation("invitee")).toBeNull();
+  });
+
+  it("describes none for a token of none, empty or too long to be one, nor of an organization gone", async () => {
+    deps.repos.invitations.put(stored("x".repeat(129) + "@example.com"));
+    deps.repos.invitations.put({ ...stored("gone@example.com"), organizationId: "org_gone" });
+    for (const token of ["unknown", "", "x".repeat(129), "gone"]) {
+      expect(await members.describeInvitation(token)).toBeNull();
+    }
+    deps.repos.invitations.put(stored("x".repeat(128) + "@example.com"));
+    expect(await members.describeInvitation("x".repeat(128))).not.toBeNull();
+  });
+
+  it("describes none once expired, and writes nothing: the invitation is not marked", async () => {
+    const token = await invite("invitee@example.com");
+    const before = await snapshot();
+    expect(await members.describeInvitation(token)).not.toBeNull();
+    deps.clock.set(new Date(NOW.getTime() + HOUR_MS));
+    expect(await members.describeInvitation(token)).toBeNull();
+    expect(await snapshot()).toEqual(before);
+    expect(await statuses()).toEqual(["PENDING"]);
+  });
+});
+
 it("takes back the membership and the acceptance when its audit entry cannot be kept", async () => {
   const token = await invite("invitee@example.com");
   const invitee = await register("invitee");

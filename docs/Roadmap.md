@@ -882,6 +882,16 @@ the acceptance needs a seat counting members only, counted in the transaction
 that writes the membership under the organization's lock, so two acceptances
 cannot take the last seat. No page or route accepts yet (AT-7b).
 
+**AT-7b — opening and accepting an invitation** (ADR-0138, no migration): the
+emailed link opens `/accept-invitation`, which shows the organization and the
+role offered, never the invited address, and asks for one press. A browser
+that is not signed in keeps the invitation waiting in an `HttpOnly` cookie
+for a day while its person signs in or creates an account, verifies it and
+finishes MFA; the organizations page then brings it back to be accepted. A
+refusal is answered with a fixed sentence. A browser test follows an owner's
+invitation through a new colleague's sign-up and verification to the
+membership.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

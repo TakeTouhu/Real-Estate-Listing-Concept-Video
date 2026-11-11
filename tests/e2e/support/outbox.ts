@@ -28,7 +28,7 @@ export function passwordResetLink(to: string): Promise<string> {
   return mailedLink("PASSWORD_RESET", "/reset-password", to);
 }
 
-/** The invitation link last mailed to `to`; its page arrives with AT-7. */
+/** The invitation link last mailed to `to` (ADR-0136, ADR-0138). */
 export function invitationLink(to: string): Promise<string> {
   return mailedLink("INVITATION", "/accept-invitation", to);
 }

@@ -21,7 +21,11 @@ const env = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const identity = vi.hoisted(() => ({ value: null as unknown }));
 
 vi.mock("next/headers", () => ({
-  cookies: () => Promise.resolve({ get: () => (cookie.value ? { value: cookie.value } : undefined) }),
+  // The session cookie only: an invitation waiting in the browser is another cookie (ADR-0138).
+  cookies: () =>
+    Promise.resolve({
+      get: (name: string) => (name === "rev_session" && cookie.value ? { value: cookie.value } : undefined),
+    }),
 }));
 vi.mock("next/navigation", () => ({
   redirect: (path: string) => {

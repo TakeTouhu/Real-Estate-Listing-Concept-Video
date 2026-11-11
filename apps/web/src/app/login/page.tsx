@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSignIn, nextPageFor } from "@/lib/auth";
+import { waitingInvitation } from "@/lib/invitations";
 
 export const dynamic = "force-dynamic";
 
@@ -12,10 +13,17 @@ export default async function LoginPage({
   const signIn = await getSignIn();
   if (signIn && signIn.step !== "SIGNED_IN") redirect(nextPageFor(signIn.step));
   const params = await searchParams;
+  const invitation = await waitingInvitation();
   return (
     <section>
       <h1>Real Estate Virtual Tour AI</h1>
       <p className="muted">Sign in or create an account to manage your organizations.</p>
+      {invitation ? (
+        <p className="status-ok" role="status">
+          To join {invitation.organizationName}, sign in or create an account with the email address your invitation
+          was sent to.
+        </p>
+      ) : null}
       {params.error ? (
         <p className="status-bad" role="alert">
           {params.error}
