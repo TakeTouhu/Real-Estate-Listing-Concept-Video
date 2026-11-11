@@ -2376,3 +2376,12 @@ same and nothing is mailed.
 
 **Rolling back.** To AT-4b-2's build: safe. A link already mailed stops
 working until the pages return, and a password already reset stays reset.
+
+## AT-5 — the members page
+
+**No migration** (ADR-0134). Migration 33 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. The members page
+appears, linked from the dashboard, and only reads.
+
+**Rolling back.** To AT-4c's build: safe. Nothing was written.
