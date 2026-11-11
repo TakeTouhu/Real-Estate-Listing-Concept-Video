@@ -204,11 +204,11 @@ describe("the members overview", () => {
     ["ADMIN", ["MANAGER", "CREATOR", "VIEWER"]],
     ["MANAGER", []],
     ["BILLING", []],
-  ] as const)("lets a %s invite with the roles it may assign, and only with member.manage", async (who, roles) => {
+  ] as const)("lets a %s invite with the roles its ceiling allows", async (who, roles) => {
     expect((await service.overview(ids[who], orgId)).invitableRoles).toEqual(roles);
   });
 
-  it("gives member.manage from a grant no role a MANAGER may not assign", async () => {
+  it("offers a MANAGER granted member.manage no role, since the ceiling goes by role", async () => {
     await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "member.manage");
     expect((await service.overview(ids.MANAGER, orgId)).invitableRoles).toEqual([]);
   });

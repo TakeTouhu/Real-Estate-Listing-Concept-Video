@@ -39,7 +39,8 @@ The page shows the form only when that list has a role in it:
   cancelled. There is no form.
 - **Otherwise:** an email address, a role chosen from that list (nothing is
   chosen to begin with), and a line saying the link works for 7 days and the
-  invitation takes a seat until it is accepted, cancelled or expires.
+  invitation takes a seat until it is accepted, cancelled or expires. The
+  lifetime is written from `INVITATION_TTL_SECONDS`, as the email's is.
 
 Hiding the form only spares a refusal. The service decides every post, and a
 post naming a role the page did not offer is refused and audited as before.
@@ -92,8 +93,8 @@ answered alike (`gone`).
 ## Decision 4 — Failures that are not refusals
 
 - **No outbox or no base address:** the link is built before anything is
-  written (ADR-0135), so `getMailer` fails with `CONFIGURATION_ERROR` first,
-  and the page says nothing was saved (`unavailable`).
+  written (ADR-0135), so the mailer's `link` fails with `CONFIGURATION_ERROR`
+  first, and the page says nothing was saved (`unavailable`).
 - **The email fails once the invitation is kept:** the web app's sender wraps
   whatever the mailer throws, so this is never mistaken for the case above.
   The invitation stays pending, as ADR-0135 decided. The page says that if

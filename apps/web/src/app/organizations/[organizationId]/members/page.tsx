@@ -4,6 +4,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
 import {
+  INVITATION_LIFETIME,
   MEMBERS_ERRORS,
   MEMBERS_NOTICES,
   getMembersOverviewService,
@@ -190,8 +191,8 @@ function Invite({ organizationId, overview }: { organizationId: string; overview
             ))}
           </select>
           <p className="muted">
-            We email the address a link that works for 7 days. The invitation takes a seat until it is accepted,
-            cancelled or expires.
+            We email the address a link that works for {INVITATION_LIFETIME}. The invitation takes a seat until it
+            is accepted, cancelled or expires.
           </p>
           <p className="field">
             <button type="submit">Send invitation</button>

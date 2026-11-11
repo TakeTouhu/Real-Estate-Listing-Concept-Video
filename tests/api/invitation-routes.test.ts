@@ -330,9 +330,21 @@ describe("cancelling", () => {
     expect(await pending()).toEqual(["a@example.com VIEWER"]);
   });
 
-  it("refuses a post from another site before reading anything", async () => {
+  it.each([
+    ["no origin", {}],
+    ["another site", { origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading anything", async (_what, headers) => {
     const id = await invited("a@example.com", "VIEWER");
-    expect((await cancelling(id, orgId, { origin: "https://evil.example.net" })).status).toBe(403);
+    expect((await cancelling(id, orgId, headers)).status).toBe(403);
+    expect(await pending()).toEqual(["a@example.com VIEWER"]);
+  });
+
+  it("sends a signed-out visitor to sign in, cancelling nothing", async () => {
+    const id = await invited("a@example.com", "VIEWER");
+    cookie.value = undefined;
+    const response = await cancelling(id);
+    expect(response.status).toBe(303);
+    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
     expect(await pending()).toEqual(["a@example.com VIEWER"]);
   });
 });

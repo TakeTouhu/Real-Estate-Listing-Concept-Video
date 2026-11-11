@@ -82,8 +82,8 @@ const ROLE_NAMES: Record<Role, string> = {
   BILLING: "a Billing member",
 };
 
-/** How long an invitation works, in whole days, or else in hours, rounded up. */
-function lifetime(seconds: number): string {
+/** How long a link works, in whole days, or else in hours, rounded up, as the email and the members page say it. */
+export function linkLifetime(seconds: number): string {
   const days = seconds / 86_400;
   if (Number.isInteger(days)) return days === 1 ? "1 day" : `${days} days`;
   const hours = Math.ceil(seconds / 3_600);
@@ -126,7 +126,7 @@ export function invitationMessage(
       "",
       url,
       "",
-      `The invitation expires in ${lifetime(ttlSeconds)}.`,
+      `The invitation expires in ${linkLifetime(ttlSeconds)}.`,
       "If you did not expect this invitation, you can ignore this email.",
     ].join("\n"),
   });

@@ -45,6 +45,7 @@ invitation whose role the viewer may assign.
 | --- | --- |
 | `MembersOverview` | adds `invitableRoles: readonly Role[]`: the roles `mayAssignRole` allows the viewer's role, when the viewer holds `member.manage`, in `ROLES` order; else `[]` |
 | `MembersOverviewInvitation` | adds `id`, which names the invitation for cancelling and accepts nothing |
+| `linkLifetime(seconds)` | now exported: how long a link works, as the invitation email words it ("7 days"), for the members page to say it the same way |
 
 ### Added: `apps/web` (`lib/members.ts`)
 
@@ -52,6 +53,7 @@ invitation whose role the viewer may assign.
 | --- | --- |
 | `getMembershipService()` | a `MembershipService` with the plan's seats, the mailer and links to `ACCEPT_INVITATION_PATH` on `APP_BASE_URL`; a send failing after the invitation is kept is told apart from missing configuration |
 | `ACCEPT_INVITATION_PATH` | `/accept-invitation` |
+| `INVITATION_LIFETIME` | `linkLifetime(INVITATION_TTL_SECONDS)`, the page's wording of the link's lifetime |
 | `MEMBERS_NOTICES`, `MEMBERS_ERRORS`, `membersNotice`, `membersError` | the codes and their sentences, and the lookup of a query parameter |
 | `membersPage(requestUrl, organizationId, outcome)` | the members page with one code |
 | `inviteMember(actor, organizationId, { email, role })`, `cancelMemberInvitation(actor, organizationId, invitationId)` | the routes' work: a `MembersOutcome`, a failure logged by its code alone |

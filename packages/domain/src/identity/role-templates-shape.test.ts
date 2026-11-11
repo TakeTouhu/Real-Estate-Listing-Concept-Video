@@ -87,7 +87,7 @@ describe("the old model is gone", () => {
 
 describe("dormancy", () => {
   const callersOf = (pattern: RegExp) =>
-    ["apps/web", "apps/worker"]
+    ["apps/web", "apps/worker", "apps/ops"]
       .flatMap((app) => sourceFiles(join(REPO_ROOT, app)))
       .filter((file) => pattern.test(code(readFileSync(file, "utf8"))))
       .map((file) => file.slice(REPO_ROOT.length + 1))

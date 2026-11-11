@@ -42,7 +42,7 @@ test("an owner signs up, sets up MFA, is given a plan, uploads a Property's phot
   await expect(page.getByText("2 of 10 taken.")).toBeVisible();
   await expect(page.getByRole("listitem").filter({ hasText: `${colleague} · Creator · invited` })).toBeVisible();
   expect(new URL(await invitationLink(colleague)).searchParams.get("token")).toMatch(/\S/);
-  expect(page.url()).not.toContain(colleague);
+  expect(new URL(page.url()).search).toBe("?notice=invited");
   await page.getByRole("button", { name: `Cancel the invitation of ${colleague}` }).click();
   await expect(page.getByRole("status")).toHaveText(
     "The invitation was cancelled. Its link no longer works, and its seat is free.",

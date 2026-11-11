@@ -4,6 +4,7 @@ import {
   MembershipService,
   includedSeatsFrom,
   isRole,
+  linkLifetime,
   type InvitationRefusal,
 } from "@app/domain";
 import { createSubscriptionRepository, getPrismaClient } from "@app/database";
@@ -30,6 +31,9 @@ export function getMembersOverviewService(): MembersOverviewService {
 
 /** The page an invitation's link opens, with its token (AT-7 builds it). */
 export const ACCEPT_INVITATION_PATH = "/accept-invitation";
+
+/** How long an invitation's link works, worded as its email words it. */
+export const INVITATION_LIFETIME = linkLifetime(INVITATION_TTL_SECONDS);
 
 const errorCode = (error: unknown) => (error instanceof AppError ? error.code : "UNEXPECTED");
 
@@ -74,7 +78,7 @@ export function getMembershipService(): MembershipService {
  * never text the address carries, nor the invited address.
  */
 export const MEMBERS_NOTICES = {
-  invited: "The invitation was sent. Its link works for 7 days.",
+  invited: `The invitation was sent. Its link works for ${INVITATION_LIFETIME}.`,
   cancelled: "The invitation was cancelled. Its link no longer works, and its seat is free.",
 } as const;
 

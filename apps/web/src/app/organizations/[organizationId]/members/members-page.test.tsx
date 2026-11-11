@@ -213,8 +213,9 @@ describe("the members page", () => {
 describe("inviting and cancelling on the members page", () => {
   it("offers an owner every role, and posts the form to the organization's invitations", async () => {
     subscribe("premium");
-    await renderMembers("OWNER");
+    const text = await renderMembers("OWNER");
     expect(offeredRoles()).toEqual(["Owner", "Admin", "Manager", "Creator", "Viewer", "Billing"]);
+    expect(text).toContain("We email the address a link that works for 7 days.");
     const form = screen.getByRole("button", { name: "Send invitation" }).closest("form");
     expect(form?.getAttribute("method")).toBe("post");
     expect(form?.getAttribute("action")).toBe(`/api/organizations/${orgId}/invitations`);
