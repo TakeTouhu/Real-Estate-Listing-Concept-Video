@@ -67,22 +67,22 @@ function refuseInvitation(reason: InvitationRefusal): never {
 /**
  * Why an invitation was not accepted (ADR-0137), as `details.reason` of the
  * `VALIDATION_FAILED` it is refused with. `EXPIRED`: its 7 days are over.
- * `WRONG_ACCOUNT`: the signed-in account's address is not the invited one.
- * `EMAIL_NOT_VERIFIED`: it is, but not verified yet. `NO_PLAN`: the
- * organization has no plan, so no seats. The rest are the
+ * `EMAIL_NOT_VERIFIED`: the signed-in account has not verified its address,
+ * whichever it is. `WRONG_ACCOUNT`: it has, and it is not the invited one.
+ * `NO_PLAN`: the organization has no plan, so no seats. The rest are the
  * {@link InvitationAcceptance} refusals.
  */
 export type AcceptanceRefusal =
   | "EXPIRED"
-  | "WRONG_ACCOUNT"
   | "EMAIL_NOT_VERIFIED"
+  | "WRONG_ACCOUNT"
   | "NO_PLAN"
   | Exclude<InvitationAcceptance["outcome"], "ACCEPTED" | "STALE">;
 
 const ACCEPTANCE_REFUSAL_MESSAGES: Record<AcceptanceRefusal, string> = {
   EXPIRED: "Invitation has expired",
-  WRONG_ACCOUNT: "This invitation was sent to another email address",
   EMAIL_NOT_VERIFIED: "Verify your email address before accepting this invitation",
+  WRONG_ACCOUNT: "This invitation was sent to another email address",
   NO_PLAN: "This organization has no plan yet, so it has no seat to join",
   ALREADY_MEMBER: "User is already a member of this organization",
   NO_SEAT: "Every seat of this organization is taken by a member",
@@ -312,12 +312,14 @@ export class MembershipService {
       refuseAcceptance("EXPIRED");
     }
     // Who accepts comes before anything about the organization: the link may
-    // have reached someone it was not sent to. Both addresses are stored in
-    // lower case.
+    // have reached someone it was not sent to. Verification comes first, so
+    // only an account that proved its mailbox learns whether its address is
+    // the invited one: an account never verified tests no guessed address.
+    // Both addresses are stored in lower case.
     const user = await this.deps.repos.users.findById(userId);
     if (!user || user.status !== "ACTIVE") throw new AppError("NOT_FOUND", "Account not found");
-    if (user.email !== invitation.email) refuseAcceptance("WRONG_ACCOUNT");
     if (user.emailVerifiedAt === null) refuseAcceptance("EMAIL_NOT_VERIFIED");
+    if (user.email !== invitation.email) refuseAcceptance("WRONG_ACCOUNT");
     if (await this.deps.repos.memberships.find(invitation.organizationId, userId)) refuseAcceptance("ALREADY_MEMBER");
     // Acceptance is where the role is actually granted, so the ceiling is asked
     // again of the inviter as it is now: an invitation outlives nothing its
@@ -361,7 +363,7 @@ export class MembershipService {
         resourceId: `${invitation.organizationId}:${userId}`,
         metadata: { role: invitation.role, scope: scopeForRole(invitation.role) },
       },
-      { includedSeats, now },
+      { includedSeats, clock: this.deps.clock },
     );
     if (accepted.outcome === "STALE") throw new AppError("NOT_FOUND", "Invitation is invalid or already used");
     if (accepted.outcome !== "ACCEPTED") refuseAcceptance(accepted.outcome);

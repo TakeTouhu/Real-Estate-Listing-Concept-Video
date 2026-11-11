@@ -369,49 +369,54 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     async create(input, audit, { includedSeats, now }) {
       const { organizationId, email } = input;
       try {
-        return await prisma.$transaction(async (tx): Promise<InvitationCreation> => {
-          // Invitations to one organization are made one at a time (ADR-0135):
-          // a second waits here, then counts the seats and reads the address
-          // with the first one committed. NO KEY UPDATE, so writes that only
-          // refer to the organization do not wait.
-          await tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${organizationId} FOR NO KEY UPDATE`;
-          // An invitation past its expiry no longer holds the address.
-          await tx.invitation.updateMany({
-            where: { organizationId, email, status: "PENDING", expiresAt: { lte: now } },
-            data: { status: "EXPIRED" },
-          });
-          if ((await tx.invitation.count({ where: { organizationId, email, status: "PENDING" } })) > 0) {
-            return { outcome: "ALREADY_INVITED" };
-          }
-          if ((await tx.membership.count({ where: { organizationId, user: { email } } })) > 0) {
-            return { outcome: "ALREADY_MEMBER" };
-          }
-          // Members and open invitations in one statement, so one snapshot: an
-          // acceptance committing between two counts would move a seat from
-          // one to the other and be counted twice or not at all. The column
-          // holds UTC without a zone, so the instant is turned to UTC.
-          const [seats] = await tx.$queryRaw<{ taken: number }[]>`
-            SELECT (SELECT count(*) FROM "memberships" WHERE "organizationId" = ${organizationId})::int
-                 + (SELECT count(*) FROM "invitations"
-                     WHERE "organizationId" = ${organizationId} AND "status" = 'PENDING'
-                       AND "expiresAt" > (${now}::timestamptz AT TIME ZONE 'UTC'))::int AS "taken"`;
-          if ((seats?.taken ?? 0) >= includedSeats) return { outcome: "NO_SEAT" };
-          const row = await tx.invitation.create({
-            data: {
-              id: input.id,
-              organizationId,
-              email,
-              role: input.role,
-              tokenHash: input.tokenHash,
-              status: "PENDING",
-              invitedByUserId: input.invitedByUserId,
-              expiresAt: input.expiresAt,
-              acceptedAt: null,
-            },
-          });
-          await tx.auditLog.create({ data: auditLogData(audit) });
-          return { outcome: "CREATED", invitation: toInvitation(row) };
-        });
+        return await prisma.$transaction(
+          async (tx): Promise<InvitationCreation> => {
+            // Invitations to one organization are made one at a time (ADR-0135):
+            // a second waits here, then counts the seats and reads the address
+            // with the first one committed. NO KEY UPDATE, so writes that only
+            // refer to the organization do not wait.
+            await tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${organizationId} FOR NO KEY UPDATE`;
+            // An invitation past its expiry no longer holds the address.
+            await tx.invitation.updateMany({
+              where: { organizationId, email, status: "PENDING", expiresAt: { lte: now } },
+              data: { status: "EXPIRED" },
+            });
+            if ((await tx.invitation.count({ where: { organizationId, email, status: "PENDING" } })) > 0) {
+              return { outcome: "ALREADY_INVITED" };
+            }
+            if ((await tx.membership.count({ where: { organizationId, user: { email } } })) > 0) {
+              return { outcome: "ALREADY_MEMBER" };
+            }
+            // Members and open invitations in one statement, so one snapshot: an
+            // acceptance committing between two counts would move a seat from
+            // one to the other and be counted twice or not at all. The column
+            // holds UTC without a zone, so the instant is turned to UTC.
+            const [seats] = await tx.$queryRaw<{ taken: number }[]>`
+              SELECT (SELECT count(*) FROM "memberships" WHERE "organizationId" = ${organizationId})::int
+                   + (SELECT count(*) FROM "invitations"
+                       WHERE "organizationId" = ${organizationId} AND "status" = 'PENDING'
+                         AND "expiresAt" > (${now}::timestamptz AT TIME ZONE 'UTC'))::int AS "taken"`;
+            if ((seats?.taken ?? 0) >= includedSeats) return { outcome: "NO_SEAT" };
+            const row = await tx.invitation.create({
+              data: {
+                id: input.id,
+                organizationId,
+                email,
+                role: input.role,
+                tokenHash: input.tokenHash,
+                status: "PENDING",
+                invitedByUserId: input.invitedByUserId,
+                expiresAt: input.expiresAt,
+                acceptedAt: null,
+              },
+            });
+            await tx.auditLog.create({ data: auditLogData(audit) });
+            return { outcome: "CREATED", invitation: toInvitation(row) };
+          },
+          // As acceptance's (ADR-0137): the counts after the lock must see
+          // what committed before it.
+          { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+        );
       } catch (error) {
         // The one-pending-invitation index refused the row (migration 34):
         // only a write that skipped the lock above could get here. Any other
@@ -431,32 +436,42 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     async expire(invitationId) {
       await prisma.invitation.updateMany({ where: { id: invitationId, status: "PENDING" }, data: { status: "EXPIRED" } });
     },
-    async accept(invitation, userId, audit, { includedSeats, now }) {
+    async accept(invitation, userId, audit, { includedSeats, clock }) {
       const { organizationId, role } = invitation;
       try {
-        return await prisma.$transaction(async (tx): Promise<InvitationAcceptance> => {
-          // Acceptances and invitations to one organization are made one at a
-          // time (ADR-0137, as ADR-0135): a second acceptance waits here, then
-          // counts the members with the first one committed.
-          await tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${organizationId} FOR NO KEY UPDATE`;
-          const open = { id: invitation.id, status: "PENDING" as const, expiresAt: { gt: now } };
-          // An invitation already used is answered as such, before the seats.
-          if ((await tx.invitation.count({ where: open })) === 0) return { outcome: "STALE" };
-          // The members only: the invitation held its own seat while pending.
-          if ((await tx.membership.count({ where: { organizationId } })) >= includedSeats) {
-            return { outcome: "NO_SEAT" };
-          }
-          // Moves from PENDING exactly once: a cancellation, which takes no
-          // organization lock, may have moved it since the count above.
-          const { count } = await tx.invitation.updateMany({
-            where: open,
-            data: { status: "ACCEPTED", acceptedAt: now },
-          });
-          if (count === 0) return { outcome: "STALE" };
-          const row = await tx.membership.create({ data: { organizationId, userId, role } });
-          await tx.auditLog.create({ data: auditLogData(audit) });
-          return { outcome: "ACCEPTED", membership: toMembership(row) };
-        });
+        return await prisma.$transaction(
+          async (tx): Promise<InvitationAcceptance> => {
+            // Acceptances and invitations to one organization are made one at a
+            // time (ADR-0137, as ADR-0135): a second acceptance waits here, then
+            // counts the members with the first one committed.
+            await tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${organizationId} FOR NO KEY UPDATE`;
+            // The instant is read once the lock is held, so an acceptance that
+            // waited behind an invitation is judged no earlier than that
+            // invitation counted: one it found expired, and whose seat it gave
+            // away, is not accepted afterwards.
+            const now = clock.now();
+            const open = { id: invitation.id, status: "PENDING" as const, expiresAt: { gt: now } };
+            // An invitation already used is answered as such, before the seats.
+            if ((await tx.invitation.count({ where: open })) === 0) return { outcome: "STALE" };
+            // The members only: the invitation held its own seat while pending.
+            if ((await tx.membership.count({ where: { organizationId } })) >= includedSeats) {
+              return { outcome: "NO_SEAT" };
+            }
+            // Moves from PENDING exactly once: a cancellation, which takes no
+            // organization lock, may have moved it since the count above.
+            const { count } = await tx.invitation.updateMany({
+              where: open,
+              data: { status: "ACCEPTED", acceptedAt: now },
+            });
+            if (count === 0) return { outcome: "STALE" };
+            const row = await tx.membership.create({ data: { organizationId, userId, role } });
+            await tx.auditLog.create({ data: auditLogData(audit) });
+            return { outcome: "ACCEPTED", membership: toMembership(row) };
+          },
+          // The counts after the lock must see what committed before it; a
+          // snapshot taken at the lock (REPEATABLE READ) would not.
+          { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+        );
       } catch (error) {
         // The membership key refused the row: the user became a member
         // meanwhile, and the whole acceptance rolled back. Classified from the

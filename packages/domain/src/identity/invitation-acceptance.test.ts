@@ -8,7 +8,8 @@ import type { Invitation } from "./types";
 
 /**
  * Accepting an invitation (AT-7a, ADR-0137): only the account with the
- * invited address, once verified, accepts; an expired invitation is refused
+ * invited address, once verified, accepts, and an account never verified
+ * learns nothing about its address; an expired invitation is refused
  * and marked; who accepts is asked before the inviter's ceiling and the plan;
  * acceptance needs a seat counting members only; a refusal writes nothing.
  * Every instant is written out literally.
@@ -94,6 +95,14 @@ describe("who accepts", () => {
     expect(await roleOf(ids.ADMIN)).toBe("ADMIN");
   });
 
+  it("tells an account never verified only to verify, so it cannot test a guessed address", async () => {
+    const token = await invite("invitee@example.com");
+    const guess = await register("guess", false);
+    expect(await reasonOf(accept(guess, token))).toBe("VALIDATION_FAILED:EMAIL_NOT_VERIFIED");
+    markEmailVerified(deps, guess);
+    expect(await reasonOf(accept(guess, token))).toBe("VALIDATION_FAILED:WRONG_ACCOUNT");
+  });
+
   it("refuses the invited address until it is verified, writing nothing, then accepts", async () => {
     const token = await invite("invitee@example.com");
     const invitee = await register("invitee", false);
@@ -116,8 +125,10 @@ describe("who accepts", () => {
     await expectNothingWritten(invitee, before);
   });
 
-  it("refuses a member of the organization whose address was invited", async () => {
+  it("refuses a member of the organization whose address was invited, also when every seat is taken", async () => {
     deps.repos.invitations.put(stored("creator@example.com"));
+    expect(await reasonOf(accept(ids.CREATOR, "creator"))).toBe("VALIDATION_FAILED:ALREADY_MEMBER");
+    seats = 3;
     expect(await reasonOf(accept(ids.CREATOR, "creator"))).toBe("VALIDATION_FAILED:ALREADY_MEMBER");
     expect(await roleOf(ids.CREATOR)).toBe("CREATOR");
     expect(await statuses()).toEqual(["PENDING"]);

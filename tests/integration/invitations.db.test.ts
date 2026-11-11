@@ -106,6 +106,9 @@ async function statuses(): Promise<string[]> {
   return rows.map(({ email, status }) => `${email} ${status}`);
 }
 
+/** A clock that stays at `instant`. */
+const at = (instant: Date) => ({ now: () => instant });
+
 const auditCount = (action: string) => prisma.auditLog.count({ where: { organizationId: ORG, action } });
 
 async function until(condition: () => Promise<boolean>): Promise<void> {
@@ -129,6 +132,7 @@ const holdOrganization = (tx: Prisma.TransactionClient) =>
 async function contend(
   contenders: (() => Promise<unknown>)[],
   hold: (tx: Prisma.TransactionClient) => Promise<unknown> = holdOrganization,
+  beforeRelease: () => void = () => undefined,
 ): Promise<PromiseSettledResult<unknown>[]> {
   let release = (): void => undefined;
   const released = new Promise<void>((resolve) => (release = resolve));
@@ -152,6 +156,7 @@ async function contend(
       return (row?.waiting ?? 0) >= contenders.length;
     });
   } finally {
+    beforeRelease();
     release();
   }
   await holder;
@@ -296,7 +301,7 @@ describe.skipIf(!HAS_DB)("cancelling an invitation", () => {
       const settled = await contend(
         [
           () => invitations.revoke(ORG, id, NOW, audit("invitation.revoked")),
-          () => invitations.accept(found, newcomer, audit("invitation.accepted"), { includedSeats: 5, now: NOW }),
+          () => invitations.accept(found, newcomer, audit("invitation.accepted"), { includedSeats: 5, clock: at(NOW) }),
         ],
         (tx) => tx.$queryRaw`SELECT 1 FROM "invitations" WHERE "id" = ${id} FOR UPDATE`,
       );
@@ -319,7 +324,7 @@ describe.skipIf(!HAS_DB)("accepting within the seats", () => {
   }
 
   const accept = (found: Invitation, userId: string, includedSeats = 5, now = NOW) =>
-    invitations.accept(found, userId, audit("invitation.accepted"), { includedSeats, now });
+    invitations.accept(found, userId, audit("invitation.accepted"), { includedSeats, clock: at(now) });
 
   const membersOf = async () =>
     (await prisma.membership.findMany({ where: { organizationId: ORG }, orderBy: { userId: "asc" } })).map(
@@ -372,10 +377,23 @@ describe.skipIf(!HAS_DB)("accepting within the seats", () => {
     expect(await auditCount("invitation.accepted")).toBe(1);
   });
 
-  it("counts an acceptance and an invitation racing for the last seat once", async () => {
+  it("lets an acceptance and an invitation racing for the last seat each wait on the lock", async () => {
     const one = await pending("one@itest-invites.example");
     const results = await contend([() => accept(one, ONE, 3), () => invite("two@itest-invites.example", 3)]);
     expect(outcomes(results)).toEqual(["ACCEPTED", "NO_SEAT"]);
     expect(await statuses()).toEqual(["one@itest-invites.example ACCEPTED"]);
+  });
+
+  it("judges an acceptance that waited on the lock at the instant it holds it", async () => {
+    const one = await pending("one@itest-invites.example");
+    let released = false;
+    const clock = { now: () => (released ? LATER : NOW) };
+    const results = await contend(
+      [() => invitations.accept(one, ONE, audit("invitation.accepted"), { includedSeats: 5, clock })],
+      holdOrganization,
+      () => (released = true),
+    );
+    expect(outcomes(results)).toEqual(["STALE"]);
+    expect(await statuses()).toEqual(["one@itest-invites.example PENDING"]);
   });
 });

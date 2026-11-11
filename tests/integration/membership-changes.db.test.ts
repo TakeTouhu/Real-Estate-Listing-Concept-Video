@@ -96,7 +96,7 @@ function auditCount(): Promise<number> {
  * An acceptance here happens at the test clock's instant, with seats to spare:
  * invitations.db.test.ts is where acceptance counts them (ADR-0137).
  */
-const SEATS = { includedSeats: 30, now: deps.clock.now() };
+const SEATS = { includedSeats: 30, clock: deps.clock };
 
 async function pendingInvitation(role: Role = "CREATOR"): Promise<Invitation> {
   const { invitation } = await members.invite(OWNER, { organizationId: ORG, email: `${NEWCOMER}@example.com`, role });

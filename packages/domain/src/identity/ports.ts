@@ -217,17 +217,18 @@ export interface InvitationRepository {
   /**
    * Accept an invitation within the organization's seats, in one transaction
    * that no invitation or other acceptance to the organization runs beside
-   * (ADR-0137). It writes nothing and answers `STALE` for an invitation no
-   * longer pending or expired by `now`, then `NO_SEAT` when the members number
+   * (ADR-0137). It reads the instant from `clock` once no other runs beside
+   * it. It writes nothing and answers `STALE` for an invitation no longer
+   * pending or expired at that instant, then `NO_SEAT` when the members number
    * `includedSeats` or more, pending invitations not counted. Otherwise it
    * writes the user's membership with the invitation's role, the invitation
-   * ACCEPTED at `now`, and `audit`.
+   * ACCEPTED at that instant, and `audit`.
    */
   accept(
     invitation: Invitation,
     userId: string,
     audit: MembershipChangeAudit,
-    seats: { readonly includedSeats: number; readonly now: Date },
+    seats: { readonly includedSeats: number; readonly clock: Clock },
   ): Promise<InvitationAcceptance>;
   listByOrganization(organizationId: string): Promise<Invitation[]>;
 }

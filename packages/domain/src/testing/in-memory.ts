@@ -726,9 +726,10 @@ class InMemoryInvitationRepository implements InvitationRepository {
     invitation: Invitation,
     userId: string,
     audit: MembershipChangeAudit,
-    { includedSeats, now }: { readonly includedSeats: number; readonly now: Date },
+    { includedSeats, clock }: { readonly includedSeats: number; readonly clock: Clock },
   ): Promise<InvitationAcceptance> {
     const { organizationId, role } = invitation;
+    const now = clock.now();
     const current = this.byId.get(invitation.id);
     if (current === undefined || !isOpenInvitation(current, now)) return { outcome: "STALE" };
     if (this.memberships.userIdsIn(organizationId).length >= includedSeats) return { outcome: "NO_SEAT" };
