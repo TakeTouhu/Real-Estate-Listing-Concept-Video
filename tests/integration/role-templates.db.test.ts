@@ -2,7 +2,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { MembershipService, ROLES, type Role } from "@app/domain";
 import { createPrismaIdentityRepositories } from "@app/database";
-import { fakePasswordHasher, fakeTokenService, TestClock } from "@app/domain/testing";
+import { fakePasswordHasher, fakeTokenService, membershipTestOptions, TestClock } from "@app/domain/testing";
 
 /**
  * The role templates and the role-assignment ceiling against PostgreSQL
@@ -30,7 +30,7 @@ const members = new MembershipService(
     passwords: fakePasswordHasher,
     tokens: fakeTokenService(),
   },
-  { invitationTtlSeconds: 3600 },
+  membershipTestOptions(),
 );
 
 async function cleanup(): Promise<void> {

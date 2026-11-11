@@ -2,7 +2,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { MembershipService, type Invitation, type Role } from "@app/domain";
 import { createPrismaIdentityRepositories } from "@app/database";
-import { fakePasswordHasher, fakeTokenService, TestClock } from "@app/domain/testing";
+import { fakePasswordHasher, fakeTokenService, membershipTestOptions, TestClock } from "@app/domain/testing";
 
 /**
  * Membership changes against PostgreSQL (Phase 6E, ADR-0059): each change
@@ -44,7 +44,7 @@ const deps = {
   passwords: fakePasswordHasher,
   tokens: fakeTokenService(),
 };
-const members = new MembershipService(deps, { invitationTtlSeconds: 3600 });
+const members = new MembershipService(deps, membershipTestOptions());
 
 async function cleanup(): Promise<void> {
   await prisma.auditLog.deleteMany({ where: { organizationId: ORG } });
@@ -162,13 +162,14 @@ describe.skipIf(!HAS_DB)("each membership change commits with its audit entry or
       email: "invitee@example.com",
       role: "CREATOR" as const,
       tokenHash: "hash:itest_members_unwritable",
-      status: "PENDING" as const,
       invitedByUserId: OWNER,
       expiresAt: new Date("2030-01-01T00:00:00.000Z"),
-      acceptedAt: null,
     };
     await expect(
-      deps.repos.invitations.create(invitation, audit("invitation.created", UNWRITABLE)),
+      deps.repos.invitations.create(invitation, audit("invitation.created", UNWRITABLE), {
+        includedSeats: 30,
+        now: new Date("2029-12-25T00:00:00.000Z"),
+      }),
     ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
     expect(await prisma.invitation.count({ where: { organizationId: ORG } })).toBe(0);
   });

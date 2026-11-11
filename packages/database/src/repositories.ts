@@ -14,6 +14,7 @@ import type {
   AuditLogRepository,
   CredentialRepository,
   IdentityRepositories,
+  InvitationCreation,
   InvitationRepository,
   MembershipRepository,
   OrganizationRepository,
@@ -352,33 +353,61 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
   };
 
   const invitations: InvitationRepository = {
-    async create(input, audit) {
-      return prisma.$transaction(async (tx) => {
-        const row = await tx.invitation.create({
-          data: {
-            id: input.id,
-            organizationId: input.organizationId,
-            email: input.email,
-            role: input.role,
-            tokenHash: input.tokenHash,
-            status: input.status,
-            invitedByUserId: input.invitedByUserId,
-            expiresAt: input.expiresAt,
-            acceptedAt: input.acceptedAt,
-          },
+    async create(input, audit, { includedSeats, now }) {
+      const { organizationId, email } = input;
+      try {
+        return await prisma.$transaction(async (tx): Promise<InvitationCreation> => {
+          // Invitations to one organization are made one at a time (ADR-0135):
+          // a second waits here, then counts the seats and reads the address
+          // with the first one committed. NO KEY UPDATE, so writes that only
+          // refer to the organization do not wait.
+          await tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${organizationId} FOR NO KEY UPDATE`;
+          // An invitation past its expiry no longer holds the address.
+          await tx.invitation.updateMany({
+            where: { organizationId, email, status: "PENDING", expiresAt: { lte: now } },
+            data: { status: "EXPIRED" },
+          });
+          if ((await tx.invitation.count({ where: { organizationId, email, status: "PENDING" } })) > 0) {
+            return { outcome: "ALREADY_INVITED" };
+          }
+          if ((await tx.membership.count({ where: { organizationId, user: { email } } })) > 0) {
+            return { outcome: "ALREADY_MEMBER" };
+          }
+          const members = await tx.membership.count({ where: { organizationId } });
+          const pending = await tx.invitation.count({
+            where: { organizationId, status: "PENDING", expiresAt: { gt: now } },
+          });
+          if (members + pending >= includedSeats) return { outcome: "NO_SEAT" };
+          const row = await tx.invitation.create({
+            data: {
+              id: input.id,
+              organizationId,
+              email,
+              role: input.role,
+              tokenHash: input.tokenHash,
+              status: "PENDING",
+              invitedByUserId: input.invitedByUserId,
+              expiresAt: input.expiresAt,
+              acceptedAt: null,
+            },
+          });
+          await tx.auditLog.create({ data: auditLogData(audit) });
+          return { outcome: "CREATED", invitation: toInvitation(row) };
         });
-        await tx.auditLog.create({ data: auditLogData(audit) });
-        return toInvitation(row);
-      });
+      } catch (error) {
+        // The one-pending-invitation index refused the row: only a path that
+        // writes without the lock above could get here.
+        const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown } };
+        if (code !== "P2002" || meta?.modelName !== "Invitation") throw error;
+        return { outcome: "ALREADY_INVITED" };
+      }
     },
     async findByTokenHash(tokenHash) {
       const r = await prisma.invitation.findUnique({ where: { tokenHash } });
       return r ? toInvitation(r) : null;
     },
-    async findPending(organizationId, email) {
-      const r = await prisma.invitation.findFirst({
-        where: { organizationId, email, status: "PENDING" },
-      });
+    async find(organizationId, invitationId) {
+      const r = await prisma.invitation.findFirst({ where: { id: invitationId, organizationId } });
       return r ? toInvitation(r) : null;
     },
     async expire(invitationId) {
@@ -408,6 +437,19 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
         if (code !== "P2002" || meta?.modelName !== "Membership") throw error;
         return { outcome: "ALREADY_MEMBER" };
       }
+    },
+    async revoke(organizationId, invitationId, now, audit) {
+      return prisma.$transaction(async (tx) => {
+        // Moves from PENDING once: a concurrent acceptance or cancellation
+        // waits on this row, then finds it no longer pending.
+        const { count } = await tx.invitation.updateMany({
+          where: { id: invitationId, organizationId, status: "PENDING", expiresAt: { gt: now } },
+          data: { status: "REVOKED" },
+        });
+        if (count === 0) return "STALE";
+        await tx.auditLog.create({ data: auditLogData(audit) });
+        return "REVOKED";
+      });
     },
     async listByOrganization(organizationId) {
       return (await prisma.invitation.findMany({ where: { organizationId } })).map(toInvitation);

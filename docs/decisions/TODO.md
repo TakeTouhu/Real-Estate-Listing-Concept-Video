@@ -2205,7 +2205,7 @@ them is **built**. Each item below records the settled decision and what remains
       table grows with every link sent. Deleting them needs a scheduled job,
       which stays blocked until production scheduling is authorized
       (ADR-0054 Decision 7).
-- [ ] **Let an address be invited again once its invitation expires** — found
+- [x] **Let an address be invited again once its invitation expires** — found
       in AT-5's review (ADR-0134). Only an acceptance attempt marks an
       invitation `EXPIRED`, so one nobody opened stays `PENDING` past its
       expiry. The members page neither lists it nor counts its seat, but
@@ -2214,7 +2214,10 @@ them is **built**. Each item below records the settled decision and what remains
       never be invited again; the one-pending-invitation index AT-6 adds
       would make that a hard conflict. AT-6 must treat a lapsed invitation as
       not pending: mark it `EXPIRED` in the transaction that writes the new
-      one, or leave it out of the check and the index.
+      one, or leave it out of the check and the index. *Done in AT-6a
+      (ADR-0135 Decision 2): the inviting transaction marks the address's
+      expired invitation `EXPIRED` before it checks, and `findPending` is
+      gone.*
 - [x] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact. *Role, individual-permission and group changes

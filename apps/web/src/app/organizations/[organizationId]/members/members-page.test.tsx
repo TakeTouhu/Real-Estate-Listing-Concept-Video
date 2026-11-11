@@ -145,27 +145,18 @@ describe("the members page", () => {
 
   it("shows the seats taken, the members and the pending invitations, in Japan time", async () => {
     subscribe("standard");
-    await deps.repos.invitations.create(
-      {
-        id: "inv_1",
-        organizationId: orgId,
-        email: "new.hire@example.com",
-        role: "VIEWER",
-        tokenHash: "hash:inv_1",
-        status: "PENDING",
-        invitedByUserId: ownerId,
-        expiresAt: iso("2026-11-17T03:00:00.000Z"),
-        acceptedAt: null,
-      },
-      {
-        organizationId: orgId,
-        actorUserId: ownerId,
-        action: "invitation.created",
-        resourceType: "invitation",
-        resourceId: "inv_1",
-        metadata: {},
-      },
-    );
+    deps.repos.invitations.put({
+      id: "inv_1",
+      organizationId: orgId,
+      email: "new.hire@example.com",
+      role: "VIEWER",
+      tokenHash: "hash:inv_1",
+      status: "PENDING",
+      invitedByUserId: ownerId,
+      expiresAt: iso("2026-11-17T03:00:00.000Z"),
+      acceptedAt: null,
+      createdAt: iso("2026-11-10T03:00:00.000Z"),
+    });
     deps.clock.set(iso("2026-11-10T05:00:00.000Z"));
     const text = await renderMembers("BILLING");
 

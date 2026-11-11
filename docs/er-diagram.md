@@ -816,3 +816,15 @@ erDiagram
 Migration 33. A link is mailed to a user and works once, until it expires
 (ADR-0128). Like MFA, it belongs to the person, so it carries no organization.
 Every user existing at migration 33 is unverified.
+
+## AT-4 and AT-5
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0130 to ADR-0134).
+
+## AT-6a — one pending invitation per address
+
+No new entity, relationship or column. Migration 34 adds a partial unique
+index, `invitations(organizationId, email)` where `status = 'PENDING'`, so an
+organization holds at most one pending invitation per address (ADR-0135).
+Prisma cannot express it; the schema carries a comment.

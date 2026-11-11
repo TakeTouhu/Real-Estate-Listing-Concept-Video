@@ -9,7 +9,7 @@ import type { Invitation, InvitationStatus } from "../identity/types";
 import { createTestDeps, type TestDeps } from "../testing/in-memory";
 import { InMemoryUnitsReader } from "../testing/in-memory-units";
 import { MembersOverviewService } from "./members-overview";
-import { holdsSeat, includedSeats } from "./seats";
+import { holdsSeat, includedSeats, includedSeatsFrom } from "./seats";
 
 /**
  * The members page's reading (AT-5, ADR-0134): `member.view` to see it; the
@@ -60,36 +60,23 @@ function subscribe(planKey: CustomerPlanKey, anchorAt = iso("2026-10-15T00:00:00
   });
 }
 
-async function invite(
+function invite(
   email: string,
-  overrides: Partial<Pick<Invitation, "organizationId" | "role" | "status" | "expiresAt">> & { createdAt?: Date } = {},
-): Promise<void> {
-  const { createdAt = iso("2026-11-09T00:00:00.000Z"), ...rest } = overrides;
-  const organizationId = rest.organizationId ?? orgId;
-  deps.clock.set(createdAt);
-  await deps.repos.invitations.create(
-    {
-      id: deps.ids.generate("inv"),
-      organizationId,
-      email,
-      role: "CREATOR",
-      tokenHash: `hash:${email}`,
-      status: "PENDING",
-      invitedByUserId: ids.OWNER,
-      expiresAt: iso("2026-11-16T00:00:00.000Z"),
-      acceptedAt: null,
-      ...rest,
-    },
-    {
-      organizationId,
-      actorUserId: ids.OWNER,
-      action: "invitation.created",
-      resourceType: "invitation",
-      resourceId: email,
-      metadata: {},
-    },
-  );
-  deps.clock.set(NOW);
+  overrides: Partial<Pick<Invitation, "organizationId" | "role" | "status" | "expiresAt" | "createdAt">> = {},
+): void {
+  deps.repos.invitations.put({
+    id: deps.ids.generate("inv"),
+    organizationId: orgId,
+    email,
+    role: "CREATOR",
+    tokenHash: `hash:${email}`,
+    status: "PENDING",
+    invitedByUserId: ids.OWNER,
+    expiresAt: iso("2026-11-16T00:00:00.000Z"),
+    acceptedAt: null,
+    createdAt: iso("2026-11-09T00:00:00.000Z"),
+    ...overrides,
+  });
 }
 
 describe("the members overview", () => {
@@ -181,16 +168,16 @@ describe("the members overview", () => {
   });
 
   it("shows only pending invitations that have not expired, oldest first, never another organization's", async () => {
-    await invite("later@example.com", { role: "VIEWER", createdAt: iso("2026-11-09T06:00:00.000Z") });
-    await invite("first@example.com", { role: "MANAGER", createdAt: iso("2026-11-08T00:00:00.000Z") });
-    await invite("lapsed@example.com", { expiresAt: NOW });
+    invite("later@example.com", { role: "VIEWER", createdAt: iso("2026-11-09T06:00:00.000Z") });
+    invite("first@example.com", { role: "MANAGER", createdAt: iso("2026-11-08T00:00:00.000Z") });
+    invite("lapsed@example.com", { expiresAt: NOW });
     for (const status of ["ACCEPTED", "REVOKED", "EXPIRED"] satisfies InvitationStatus[]) {
-      await invite(`${status.toLowerCase()}@example.com`, { status });
+      invite(`${status.toLowerCase()}@example.com`, { status });
     }
     const { organization: other } = await new OrganizationService(deps).createOrganization(ids.outsider, {
       name: "Other",
     });
-    await invite("elsewhere@example.com", { organizationId: other.id });
+    invite("elsewhere@example.com", { organizationId: other.id });
 
     const { invitations } = await service.overview(ids.MANAGER, orgId);
     expect(invitations).toEqual([
@@ -229,10 +216,10 @@ describe("the members overview", () => {
 
   it("counts every member and every pending invitation that has not expired, even beyond the seats", async () => {
     subscribe("premium");
-    await invite("one@example.com");
-    await invite("two@example.com");
-    await invite("lapsed@example.com", { expiresAt: NOW });
-    await invite("revoked@example.com", { status: "REVOKED" });
+    invite("one@example.com");
+    invite("two@example.com");
+    invite("lapsed@example.com", { expiresAt: NOW });
+    invite("revoked@example.com", { status: "REVOKED" });
     expect((await service.overview(ids.OWNER, orgId)).seats).toEqual({ included: 10, taken: 8 });
     subscribe("standard");
     expect((await service.overview(ids.OWNER, orgId)).seats).toEqual({ included: 3, taken: 8 });
@@ -240,18 +227,26 @@ describe("the members overview", () => {
 
   it("writes nothing: no audit entry, and an invitation past its expiry stays pending", async () => {
     subscribe("premium");
-    await invite("lapsed@example.com", { expiresAt: NOW });
+    invite("lapsed@example.com", { expiresAt: NOW });
     const audits = (await deps.repos.auditLogs.listByOrganization(orgId)).length;
     await service.overview(ids.OWNER, orgId);
     await service.overview(ids.VIEWER, orgId).catch(() => undefined);
     expect(await deps.repos.auditLogs.listByOrganization(orgId)).toHaveLength(audits);
-    expect((await deps.repos.invitations.findPending(orgId, "lapsed@example.com"))?.status).toBe("PENDING");
+    const stored = await deps.repos.invitations.listByOrganization(orgId);
+    expect(stored.find(({ email }) => email === "lapsed@example.com")?.status).toBe("PENDING");
   });
 });
 
 describe("seats", () => {
   it("are none without a plan", () => {
     expect(includedSeats(null)).toBeNull();
+  });
+
+  it("are read from the organization's plan for inviting, a plan not yet started included", async () => {
+    const seatsOf = includedSeatsFrom(reader);
+    expect(await seatsOf(orgId)).toBeNull();
+    subscribe("premium", iso("2026-12-01T00:00:00.000Z"));
+    expect(await seatsOf(orgId)).toBe(10);
   });
 
   it("are not held by an invitation from the instant it expires", () => {

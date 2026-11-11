@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AuthService } from "../identity/auth-service";
 import { OrganizationService } from "../identity/organization-service";
 import { MembershipService } from "../identity/membership-service";
-import { createTestDeps, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 import {
   InMemoryMediaAssetRepository,
   InMemoryPropertyRepository,
@@ -675,7 +675,7 @@ describe("tenant isolation for properties and assets", () => {
   it("denies asset writes to a VIEWER (insufficient role)", async () => {
     const ctx = await setup();
     const auth = new AuthService(ctx.deps, { sessionTtlSeconds: 3600 });
-    const members = new MembershipService(ctx.deps, { invitationTtlSeconds: 3600 });
+    const members = new MembershipService(ctx.deps, membershipTestOptions());
     const property = await ctx.properties.create(ctx.ownerId, {
       organizationId: ctx.orgId,
       name: "Listing",

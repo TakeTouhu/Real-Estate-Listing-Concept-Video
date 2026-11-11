@@ -1,4 +1,5 @@
-import type { OrganizationSubscription } from "../entitlement/subscription";
+import type { OrganizationSubscription, SubscriptionRepository } from "../entitlement/subscription";
+import { isOpenInvitation } from "../identity/membership-service";
 import type { Invitation } from "../identity/types";
 import { createCustomerPlanCatalog } from "../pricing/customer-plan-catalog";
 
@@ -24,5 +25,16 @@ export function includedSeats(subscription: Pick<OrganizationSubscription, "plan
  * holds none, whether or not it has been marked `EXPIRED` yet.
  */
 export function holdsSeat(invitation: Pick<Invitation, "status" | "expiresAt">, now: Date): boolean {
-  return invitation.status === "PENDING" && invitation.expiresAt.getTime() > now.getTime();
+  return isOpenInvitation(invitation, now);
+}
+
+/**
+ * The seats each organization's plan includes, read from its subscription, for
+ * the membership service's invitations (ADR-0135). A plan whose first period
+ * has not started yet gives its seats as well.
+ */
+export function includedSeatsFrom(
+  subscriptions: Pick<SubscriptionRepository, "findByOrganization">,
+): (organizationId: string) => Promise<number | null> {
+  return async (organizationId) => includedSeats(await subscriptions.findByOrganization(organizationId));
 }

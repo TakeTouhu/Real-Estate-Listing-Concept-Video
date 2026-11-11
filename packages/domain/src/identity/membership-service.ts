@@ -1,13 +1,32 @@
 import { AppError } from "@app/shared";
+import { isDeliverableEmailAddress, outgoingEmail, type OutgoingEmail } from "../email/outgoing-email";
+import type { EmailSender } from "../email/ports";
 import { AuditAction, recordAudit } from "./audit";
 import { authorizeOrganization, effectivePermissionsOf, type AuthContext } from "./authorization";
-import type { IdentityServiceDeps, MembershipChangeOutcome } from "./ports";
+import type { IdentityServiceDeps, InvitationCreation, MembershipChangeOutcome } from "./ports";
 import { mayAssignRole, scopeForRole, type Permission, type Role } from "./roles";
 import type { Invitation, Membership } from "./types";
 import { normalizeEmail } from "./util";
 
+/** How long an invitation works: 7 days, as the approved plan keeps it (ADR-0135). */
+export const INVITATION_TTL_SECONDS = 7 * 24 * 60 * 60;
+
 export interface MembershipServiceOptions {
+  /** {@link INVITATION_TTL_SECONDS} in the product. */
   readonly invitationTtlSeconds: number;
+  /**
+   * The seats the organization's plan includes, or `null` while it has no plan
+   * (ADR-0134). An invitation is refused without a plan, and beyond its seats
+   * (ADR-0135).
+   */
+  readonly includedSeats: (organizationId: string) => Promise<number | null>;
+  /** Where an invitation's email goes (ADR-0126). */
+  readonly email: EmailSender;
+  /**
+   * The address of the page that accepts `token`. The application builds it
+   * from its own configured base URL, never from a request's headers.
+   */
+  readonly invitationUrl: (token: string) => string;
 }
 
 export interface InviteInput {
@@ -18,13 +37,87 @@ export interface InviteInput {
 
 export interface InviteResult {
   readonly invitation: Invitation;
-  /** Raw invitation token — returned once; only its hash is stored. */
+  /** Raw invitation token — returned once, and mailed; only its hash is stored. */
   readonly token: string;
+}
+
+/**
+ * Why an invitation was not made (ADR-0135), as `details.reason` of the
+ * `VALIDATION_FAILED` it is refused with. `INVALID_EMAIL`: mail cannot reach
+ * the address. `NO_PLAN`: the organization has no plan, so no seats. The rest
+ * are the {@link InvitationCreation} refusals.
+ */
+export type InvitationRefusal = "INVALID_EMAIL" | "NO_PLAN" | Exclude<InvitationCreation["outcome"], "CREATED">;
+
+const REFUSAL_MESSAGES: Record<InvitationRefusal, string> = {
+  INVALID_EMAIL: "This is not an email address we can send an invitation to",
+  NO_PLAN: "This organization has no plan yet, so it has no seats to invite anyone to",
+  ALREADY_INVITED: "A pending invitation already exists for this email",
+  ALREADY_MEMBER: "This email already belongs to a member of this organization",
+  NO_SEAT: "Every seat is taken by a member or a pending invitation",
+};
+
+function refuseInvitation(reason: InvitationRefusal): never {
+  throw new AppError("VALIDATION_FAILED", REFUSAL_MESSAGES[reason], { details: { reason } });
+}
+
+/**
+ * Whether an invitation can still be accepted as far as its own state goes:
+ * `PENDING`, and not expired at `now`. One that expired stays `PENDING` until
+ * something marks it, so the status alone does not say (ADR-0134, ADR-0135).
+ */
+export function isOpenInvitation(invitation: Pick<Invitation, "status" | "expiresAt">, now: Date): boolean {
+  return invitation.status === "PENDING" && invitation.expiresAt.getTime() > now.getTime();
+}
+
+const ROLE_NAMES: Record<Role, string> = {
+  OWNER: "an Owner",
+  ADMIN: "an Admin",
+  MANAGER: "a Manager",
+  CREATOR: "a Creator",
+  VIEWER: "a Viewer",
+  BILLING: "a Billing member",
+};
+
+/** How long an invitation works, in whole days, or else in hours, rounded up. */
+function lifetime(seconds: number): string {
+  const days = seconds / 86_400;
+  if (Number.isInteger(days)) return days === 1 ? "1 day" : `${days} days`;
+  const hours = Math.ceil(seconds / 3_600);
+  return hours === 1 ? "1 hour" : `${hours} hours`;
+}
+
+/**
+ * The invitation email: who invites, as what, and one link, in plain text.
+ * The organization's name is the customer's text, so it is kept to one line.
+ */
+export function invitationMessage(
+  to: string,
+  organizationName: string,
+  role: Role,
+  url: string,
+  ttlSeconds: number,
+): OutgoingEmail {
+  return outgoingEmail({
+    kind: "INVITATION",
+    to,
+    subject: "You are invited to join an organization on VTaVision",
+    text: [
+      `You are invited to join ${organizationName.replace(/\s+/g, " ").trim()} on VTaVision as ${ROLE_NAMES[role]}.`,
+      "",
+      "Open the link below to accept. You sign in, or create an account, with this email address.",
+      "",
+      url,
+      "",
+      `The invitation expires in ${lifetime(ttlSeconds)}.`,
+      "If you did not expect this invitation, you can ignore this email.",
+    ].join("\n"),
+  });
 }
 
 /** What a refused role change was trying to do, for its audit entry. */
 interface RefusedChange {
-  readonly operation: "invite" | "change_role" | "remove_member" | "accept_invitation";
+  readonly operation: "invite" | "cancel_invitation" | "change_role" | "remove_member" | "accept_invitation";
   readonly resourceType: "organization" | "membership" | "invitation";
   readonly resourceId: string;
   readonly metadata: Record<string, unknown>;
@@ -33,11 +126,11 @@ interface RefusedChange {
 /**
  * Who holds which role, under the role-assignment ceiling (ADR-0052 Decision 10).
  *
- * Every path that gives or takes a role — invitation, its acceptance, role
- * change, removal — asks `mayAssignRole` of every role it touches, so no member
- * can reach a role it could not assign directly. A member refused on any of
- * these paths is audited: a refused escalation attempt is an event, not a silent
- * no-op.
+ * Every path that gives or takes a role — invitation, its cancellation, its
+ * acceptance, role change, removal — asks `mayAssignRole` of every role it
+ * touches, so no member can reach a role it could not assign directly. A
+ * member refused on any of these paths is audited: a refused escalation
+ * attempt is an event, not a silent no-op.
  *
  * Each change commits in one transaction with its audit entry, and only against
  * the state its checks read (ADR-0059): a member whose role changed meanwhile is
@@ -49,8 +142,21 @@ export class MembershipService {
     private readonly options: MembershipServiceOptions,
   ) {}
 
+  /**
+   * Invite an address to the organization with a role, within its seats, and
+   * mail it the link (ADR-0135). Every member takes a seat, and so does every
+   * pending invitation that has not expired; the count is made in the
+   * transaction that writes the invitation. The email is built before anything
+   * is written, so an application that cannot mail writes nothing, and it is
+   * sent after the invitation and its audit entry are kept.
+   *
+   * @throws AppError FORBIDDEN for a non-member, or for a member without
+   *   `member.manage` or past its ceiling (audited);
+   *   VALIDATION_FAILED with an {@link InvitationRefusal} as `details.reason`.
+   */
   async invite(actorUserId: string, input: InviteInput): Promise<InviteResult> {
     const email = normalizeEmail(input.email);
+    if (!isDeliverableEmailAddress(email)) refuseInvitation("INVALID_EMAIL");
     const refused: RefusedChange = {
       operation: "invite",
       resourceType: "organization",
@@ -59,23 +165,30 @@ export class MembershipService {
     };
     const actor = await this.requireMemberPermission(actorUserId, input.organizationId, "member.manage", refused);
     if (!mayAssignRole(actor.role, input.role)) await this.refuse(actor, refused);
-    if (await this.deps.repos.invitations.findPending(input.organizationId, email)) {
-      throw new AppError("VALIDATION_FAILED", "A pending invitation already exists for this email");
-    }
+    const includedSeats = await this.options.includedSeats(input.organizationId);
+    if (includedSeats === null) refuseInvitation("NO_PLAN");
+    const organization = await this.deps.repos.organizations.findById(input.organizationId);
+    if (!organization) throw new AppError("NOT_FOUND", "Organization not found");
+
     const token = this.deps.tokens.generate();
     const now = this.deps.clock.now();
+    const message = invitationMessage(
+      email,
+      organization.name,
+      input.role,
+      this.options.invitationUrl(token),
+      this.options.invitationTtlSeconds,
+    );
     const id = this.deps.ids.generate("inv");
-    const invitation = await this.deps.repos.invitations.create(
+    const created = await this.deps.repos.invitations.create(
       {
         id,
         organizationId: input.organizationId,
         email,
         role: input.role,
         tokenHash: this.deps.tokens.hash(token),
-        status: "PENDING",
         invitedByUserId: actorUserId,
         expiresAt: new Date(now.getTime() + this.options.invitationTtlSeconds * 1000),
-        acceptedAt: null,
       },
       {
         organizationId: input.organizationId,
@@ -85,8 +198,45 @@ export class MembershipService {
         resourceId: id,
         metadata: { email, role: input.role },
       },
+      { includedSeats, now },
     );
-    return { invitation, token };
+    if (created.outcome !== "CREATED") refuseInvitation(created.outcome);
+    await this.options.email.send(message);
+    return { invitation: created.invitation, token };
+  }
+
+  /**
+   * Cancel a pending invitation before anyone accepts it (ADR-0135): it no
+   * longer works, and its seat is free. Cancelling takes the invited role
+   * away, so the ceiling is asked of it, as removing a member does.
+   *
+   * @throws AppError FORBIDDEN as {@link MembershipService.invite} does;
+   *   NOT_FOUND for an invitation of another organization, or one no longer
+   *   pending or expired.
+   */
+  async cancelInvitation(actorUserId: string, organizationId: string, invitationId: string): Promise<void> {
+    const refused = (invitedRole: Role | null): RefusedChange => ({
+      operation: "cancel_invitation",
+      resourceType: "invitation",
+      resourceId: invitationId,
+      metadata: { invitedRole },
+    });
+    const actor = await this.requireMemberPermission(actorUserId, organizationId, "member.manage", refused(null));
+    const now = this.deps.clock.now();
+    const invitation = await this.deps.repos.invitations.find(organizationId, invitationId);
+    if (!invitation || !isOpenInvitation(invitation, now)) {
+      throw new AppError("NOT_FOUND", "This invitation is no longer pending");
+    }
+    if (!mayAssignRole(actor.role, invitation.role)) await this.refuse(actor, refused(invitation.role));
+    const revoked = await this.deps.repos.invitations.revoke(organizationId, invitationId, now, {
+      organizationId,
+      actorUserId,
+      action: AuditAction.InvitationRevoked,
+      resourceType: "invitation",
+      resourceId: invitationId,
+      metadata: { email: invitation.email, role: invitation.role },
+    });
+    if (revoked === "STALE") throw new AppError("NOT_FOUND", "This invitation is no longer pending");
   }
 
   async acceptInvitation(userId: string, token: string): Promise<Membership> {

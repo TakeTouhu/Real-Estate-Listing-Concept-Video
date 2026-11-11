@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AuthService } from "./auth-service";
 import { OrganizationService } from "./organization-service";
 import { MembershipService } from "./membership-service";
-import { createTestDeps, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 
 const PASSWORD = "password-123456";
 
@@ -12,7 +12,7 @@ function setup() {
     deps,
     auth: new AuthService(deps, { sessionTtlSeconds: 3600 }),
     orgs: new OrganizationService(deps),
-    members: new MembershipService(deps, { invitationTtlSeconds: 3600 }),
+    members: new MembershipService(deps, membershipTestOptions()),
   };
 }
 

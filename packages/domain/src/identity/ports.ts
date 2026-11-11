@@ -164,13 +164,53 @@ export type InvitationAcceptance =
   | { readonly outcome: "STALE" }
   | { readonly outcome: "ALREADY_MEMBER" };
 
+/** A new invitation, `PENDING` until it is accepted, cancelled or expires. */
+export type NewInvitation = Omit<Invitation, "status" | "acceptedAt" | "createdAt">;
+
+/**
+ * How inviting ended (ADR-0135). Only `CREATED` wrote the invitation.
+ * `ALREADY_INVITED`: the address has a pending invitation that has not
+ * expired. `ALREADY_MEMBER`: an account with the address is a member.
+ * `NO_SEAT`: the members and the pending invitations that have not expired
+ * already take every included seat.
+ */
+export type InvitationCreation =
+  | { readonly outcome: "CREATED"; readonly invitation: Invitation }
+  | { readonly outcome: "ALREADY_INVITED" }
+  | { readonly outcome: "ALREADY_MEMBER" }
+  | { readonly outcome: "NO_SEAT" };
+
 export interface InvitationRepository {
-  /** Record an invitation and its audit entry atomically. */
-  create(input: Omit<Invitation, "createdAt">, audit: MembershipChangeAudit): Promise<Invitation>;
+  /**
+   * Invite within the organization's seats, in one transaction that no other
+   * invitation to the organization runs beside (ADR-0135). It first marks
+   * EXPIRED the address's pending invitation that expired by `now`; then it
+   * refuses, writing nothing more, an address with a pending invitation or of
+   * a member, and an organization whose members and pending invitations not
+   * expired by `now` number `includedSeats` or more. Otherwise it writes the
+   * invitation, PENDING, with `audit`.
+   */
+  create(
+    input: NewInvitation,
+    audit: MembershipChangeAudit,
+    seats: { readonly includedSeats: number; readonly now: Date },
+  ): Promise<InvitationCreation>;
   findByTokenHash(tokenHash: string): Promise<Invitation | null>;
-  findPending(organizationId: string, email: string): Promise<Invitation | null>;
+  /** The organization's invitation, or `null`: never another organization's. */
+  find(organizationId: string, invitationId: string): Promise<Invitation | null>;
   /** Mark an invitation EXPIRED if it is still pending; otherwise leave it as it is. */
   expire(invitationId: string): Promise<void>;
+  /**
+   * Cancel a pending invitation that has not expired by `now`: REVOKED, with
+   * `audit`, in one transaction. `STALE`: it was no longer pending or had
+   * expired, and nothing was written.
+   */
+  revoke(
+    organizationId: string,
+    invitationId: string,
+    now: Date,
+    audit: MembershipChangeAudit,
+  ): Promise<"REVOKED" | "STALE">;
   /**
    * Accept a pending invitation atomically: the user's membership with the
    * invitation's role, the invitation ACCEPTED at `acceptedAt`, and `audit`.
