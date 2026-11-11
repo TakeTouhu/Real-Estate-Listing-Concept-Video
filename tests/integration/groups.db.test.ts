@@ -2,7 +2,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { GroupService, MembershipService } from "@app/domain";
 import { createPrismaIdentityRepositories } from "@app/database";
-import { fakePasswordHasher, fakeTokenService, TestClock } from "@app/domain/testing";
+import { fakePasswordHasher, fakeTokenService, membershipTestOptions, TestClock } from "@app/domain/testing";
 
 /**
  * Groups against PostgreSQL (Phase 6F, ADR-0060): the tables' constraints and
@@ -45,7 +45,7 @@ const deps = {
   tokens: fakeTokenService(),
 };
 const groups = new GroupService(deps);
-const members = new MembershipService(deps, { invitationTtlSeconds: 3600 });
+const members = new MembershipService(deps, membershipTestOptions());
 
 async function cleanup(): Promise<void> {
   await prisma.auditLog.deleteMany({ where: { organizationId: { in: [ORG, OTHER_ORG] } } });

@@ -22,10 +22,12 @@ import type {
   IdentityServiceDeps,
   IdGenerator,
   InvitationAcceptance,
+  InvitationCreation,
   InvitationRepository,
   MembershipChangeAudit,
   MembershipChangeOutcome,
   MembershipRepository,
+  NewInvitation,
   OrganizationRepository,
   PasswordHasher,
   PermissionGrantRepository,
@@ -52,6 +54,9 @@ import type {
   Session,
   User,
 } from "../identity/types";
+import type { OutgoingEmail } from "../email/outgoing-email";
+import type { EmailSender } from "../email/ports";
+import { isOpenInvitation, type MembershipServiceOptions } from "../identity/membership-service";
 import { GROUP_GRANTABLE_PERMISSIONS, type Permission, type Role } from "../identity/roles";
 import { InMemoryMfaRepository, type InMemorySessionStore } from "./in-memory-mfa";
 
@@ -347,6 +352,10 @@ class InMemoryMembershipRepository implements MembershipRepository {
   }
   has(organizationId: string, userId: string): boolean {
     return this.rows.has(this.key(organizationId, userId));
+  }
+  /** The organization's members, read with no `await`. */
+  userIdsIn(organizationId: string): string[] {
+    return [...this.rows.values()].filter((m) => m.organizationId === organizationId).map((m) => m.userId);
   }
   roleOf(organizationId: string, userId: string): Role | undefined {
     return this.rows.get(this.key(organizationId, userId))?.role;
@@ -647,24 +656,60 @@ class InMemoryInvitationRepository implements InvitationRepository {
     private readonly clock: Clock,
     private readonly auditLogs: AuditLogRepository,
     private readonly memberships: InMemoryMembershipRepository,
+    private readonly users: InMemoryUserRepository,
   ) {}
-  async create(input: Omit<Invitation, "createdAt">, audit: MembershipChangeAudit): Promise<Invitation> {
-    const invitation: Invitation = { ...input, createdAt: this.clock.now() };
+  /**
+   * Checks and writes with no `await` in between, as the database's
+   * transaction under the organization's lock does (ADR-0135). A refusal
+   * keeps the lapsed invitations it marked, as the committed transaction does;
+   * an audit entry that cannot be appended takes back the invitation and the
+   * marks, as the rolled-back one does.
+   */
+  async create(
+    input: NewInvitation,
+    audit: MembershipChangeAudit,
+    { includedSeats, now }: { readonly includedSeats: number; readonly now: Date },
+  ): Promise<InvitationCreation> {
+    const { organizationId, email } = input;
+    const ofOrganization = [...this.byId.values()].filter((i) => i.organizationId === organizationId);
+    const lapsed = ofOrganization.filter(
+      (i) => i.email === email && i.status === "PENDING" && !isOpenInvitation(i, now),
+    );
+    for (const invitation of lapsed) this.byId.set(invitation.id, { ...invitation, status: "EXPIRED" });
+    if (ofOrganization.some((i) => i.email === email && isOpenInvitation(i, now))) {
+      return { outcome: "ALREADY_INVITED" };
+    }
+    const members = this.memberships.userIdsIn(organizationId);
+    if (members.some((userId) => this.users.peek(userId)?.email === email)) return { outcome: "ALREADY_MEMBER" };
+    const pending = ofOrganization.filter((i) => isOpenInvitation(i, now)).length;
+    if (members.length + pending >= includedSeats) return { outcome: "NO_SEAT" };
+    if (this.byId.has(input.id)) throw new Error("Unique constraint failed on the fields: (`id`)");
+    const invitation: Invitation = { ...input, status: "PENDING", acceptedAt: null, createdAt: this.clock.now() };
     this.byId.set(invitation.id, invitation);
-    await this.auditLogs.append(audit);
-    return invitation;
+    try {
+      await this.auditLogs.append(audit);
+    } catch (error) {
+      this.byId.delete(invitation.id);
+      for (const unmarked of lapsed) this.byId.set(unmarked.id, unmarked);
+      throw error;
+    }
+    return { outcome: "CREATED", invitation };
+  }
+  /**
+   * Test-only: store an invitation as it is, in any state, as no product path
+   * writes one but {@link InMemoryInvitationRepository.create}.
+   */
+  put(invitation: Invitation): void {
+    this.byId.set(invitation.id, invitation);
   }
   findByTokenHash(tokenHash: string): Promise<Invitation | null> {
     return Promise.resolve(
       [...this.byId.values()].find((i) => i.tokenHash === tokenHash) ?? null,
     );
   }
-  findPending(organizationId: string, email: string): Promise<Invitation | null> {
-    return Promise.resolve(
-      [...this.byId.values()].find(
-        (i) => i.organizationId === organizationId && i.email === email && i.status === "PENDING",
-      ) ?? null,
-    );
+  find(organizationId: string, invitationId: string): Promise<Invitation | null> {
+    const invitation = this.byId.get(invitationId);
+    return Promise.resolve(invitation?.organizationId === organizationId ? invitation : null);
   }
   expire(invitationId: string): Promise<void> {
     const current = this.byId.get(invitationId);
@@ -684,6 +729,23 @@ class InMemoryInvitationRepository implements InvitationRepository {
     const membership = this.memberships.insert({ organizationId: invitation.organizationId, userId, role: invitation.role });
     await this.auditLogs.append(audit);
     return { outcome: "ACCEPTED", membership };
+  }
+  async revoke(
+    organizationId: string,
+    invitationId: string,
+    now: Date,
+    audit: MembershipChangeAudit,
+  ): Promise<"REVOKED" | "STALE"> {
+    const current = this.byId.get(invitationId);
+    if (current?.organizationId !== organizationId || !isOpenInvitation(current, now)) return "STALE";
+    this.byId.set(invitationId, { ...current, status: "REVOKED" });
+    try {
+      await this.auditLogs.append(audit);
+    } catch (error) {
+      this.byId.set(invitationId, current);
+      throw error;
+    }
+    return "REVOKED";
   }
   listByOrganization(organizationId: string): Promise<Invitation[]> {
     return Promise.resolve(
@@ -784,6 +846,7 @@ export interface TestRepositories extends IdentityRepositories {
   readonly mfa: InMemoryMfaRepository;
   readonly auditLogs: InMemoryAuditLogRepository;
   readonly propertyLinks: PropertyAssignmentLinks;
+  readonly invitations: InMemoryInvitationRepository;
 }
 
 export function createInMemoryRepositories(clock: Clock): TestRepositories {
@@ -820,7 +883,7 @@ export function createInMemoryRepositories(clock: Clock): TestRepositories {
     memberships,
     permissionGrants,
     groups,
-    invitations: new InMemoryInvitationRepository(clock, auditLogs, memberships),
+    invitations: new InMemoryInvitationRepository(clock, auditLogs, memberships, users),
     sessions,
     mfa: new InMemoryMfaRepository(sessions, auditLogs),
     accountLinks: new InMemoryAccountLinkRepository(clock, users, credentials, sessions, auditLogs),
@@ -843,6 +906,38 @@ export function createTestDeps(): TestDeps {
     ids: sequentialIdGenerator(),
     passwords: fakePasswordHasher,
     tokens: fakeTokenService(),
+  };
+}
+
+/** Test-only: an email sender that keeps every email it is handed, or refuses them while `failing`. */
+export class RecordingEmailSender implements EmailSender {
+  readonly sent: OutgoingEmail[] = [];
+  failing = false;
+  send(email: OutgoingEmail): Promise<void> {
+    if (this.failing) return Promise.reject(new Error("delivery refused"));
+    this.sent.push(email);
+    return Promise.resolve();
+  }
+}
+
+export interface MembershipTestOptions extends MembershipServiceOptions {
+  readonly email: RecordingEmailSender;
+}
+
+/**
+ * Test-only: a membership service's options (ADR-0135). An invitation works
+ * for an hour, every organization's plan includes 30 seats, the emails are
+ * kept in `email.sent`, and a link is `invite:` and its token.
+ */
+export function membershipTestOptions(
+  overrides: Partial<Omit<MembershipServiceOptions, "email">> = {},
+): MembershipTestOptions {
+  return {
+    invitationTtlSeconds: 3600,
+    includedSeats: () => Promise.resolve(30),
+    invitationUrl: (token) => `invite:${token}`,
+    ...overrides,
+    email: new RecordingEmailSender(),
   };
 }
 

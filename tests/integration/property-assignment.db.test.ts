@@ -2,7 +2,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { GroupService, MembershipService, PropertyService } from "@app/domain";
 import { createPrismaIdentityRepositories, createPrismaPropertyRepositories } from "@app/database";
-import { fakePasswordHasher, fakeTokenService, TestClock } from "@app/domain/testing";
+import { fakePasswordHasher, fakeTokenService, membershipTestOptions, TestClock } from "@app/domain/testing";
 
 /**
  * Property assignment against PostgreSQL (Phase 6H, ADR-0062): the foreign keys
@@ -54,7 +54,7 @@ const deps = {
 const repos = createPrismaPropertyRepositories(prisma);
 const properties = new PropertyService({ identity: deps, ...repos, clock: deps.clock, ids: deps.ids });
 const groups = new GroupService(deps);
-const members = new MembershipService(deps, { invitationTtlSeconds: 3600 });
+const members = new MembershipService(deps, membershipTestOptions());
 
 async function cleanup(): Promise<void> {
   // Properties first: their foreign keys refuse the memberships' and groups' cascade.

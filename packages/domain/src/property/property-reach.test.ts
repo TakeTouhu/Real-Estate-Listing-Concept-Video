@@ -5,7 +5,7 @@ import { GroupService } from "../identity/group-service";
 import { MembershipService } from "../identity/membership-service";
 import { OrganizationService } from "../identity/organization-service";
 import { ROLES, type Role } from "../identity/roles";
-import { createTestDeps, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 import { InMemoryMediaAssetRepository, InMemoryPropertyRepository } from "../testing/in-memory-property";
 import { AssetService } from "./asset-service";
 import type { ObjectStorage } from "./ports";
@@ -169,7 +169,7 @@ beforeEach(async () => {
     assets,
     storage,
     groups,
-    members: new MembershipService(deps, { invitationTtlSeconds: 3600 }),
+    members: new MembershipService(deps, membershipTestOptions()),
     orgId,
     ownerId: owner.id,
     ids,

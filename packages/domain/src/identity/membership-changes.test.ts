@@ -3,7 +3,7 @@ import { AuthService } from "./auth-service";
 import { OrganizationService } from "./organization-service";
 import { MembershipService } from "./membership-service";
 import type { Role } from "./roles";
-import { createTestDeps, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 
 /**
  * Membership changes made concurrently (Phase 6E, ADR-0059). Each change checks
@@ -23,7 +23,7 @@ let ids: Record<"owner" | "coOwner" | "admin" | "creator" | "newcomer" | "other"
 beforeEach(async () => {
   deps = createTestDeps();
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
-  members = new MembershipService(deps, { invitationTtlSeconds: 3600 });
+  members = new MembershipService(deps, membershipTestOptions());
   const register = async (name: string) =>
     (await auth.register({ email: `${name}@example.com`, name, password: PASSWORD })).id;
   const owner = await register("owner");

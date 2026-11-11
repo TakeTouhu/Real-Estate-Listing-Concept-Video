@@ -1,6 +1,5 @@
 import {
   AuthService,
-  MembershipService,
   OrganizationService,
   randomIdGenerator,
   scryptPasswordHasher,
@@ -11,13 +10,10 @@ import {
 import { createPrismaIdentityRepositories, getPrismaClient } from "@app/database";
 import { getServerEnv } from "./env";
 
-const INVITATION_TTL_SECONDS = 7 * 24 * 60 * 60;
-
 export interface IdentityServices {
   readonly deps: IdentityServiceDeps;
   readonly auth: AuthService;
   readonly organizations: OrganizationService;
-  readonly memberships: MembershipService;
 }
 
 let services: IdentityServices | undefined;
@@ -40,7 +36,6 @@ export function getIdentityServices(): IdentityServices {
     deps,
     auth: new AuthService(deps, { sessionTtlSeconds: env.USER_SESSION_TTL_SECONDS }),
     organizations: new OrganizationService(deps),
-    memberships: new MembershipService(deps, { invitationTtlSeconds: INVITATION_TTL_SECONDS }),
   };
   return services;
 }

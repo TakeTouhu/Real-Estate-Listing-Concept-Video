@@ -48,7 +48,7 @@ describe("durable shape", () => {
     expect(dirs.filter((dir) => dir.includes("phase6c"))).toEqual([MIGRATION_DIR]);
     // MFA-4 added migration 26 after them all, UP-2 migration 27, UP-5 migration 28
     // and DS-3 migration 29.
-    expect(dirs).toHaveLength(34);
+    expect(dirs).toHaveLength(35);
   });
 
   it("recreates the Role type and maps REVIEWER to VIEWER in both tables, touching nothing else", () => {
@@ -89,8 +89,11 @@ describe("dormancy", () => {
   it("adds no member-management caller to either application", () => {
     const callers = ["apps/web", "apps/worker"]
       .flatMap((app) => sourceFiles(join(REPO_ROOT, app)))
-      // The service is wired into the web container, but none of its writes is called.
-      .filter((file) => /\.(invite|acceptInvitation|changeRole|removeMember)\(/.test(code(readFileSync(file, "utf8"))));
+      // No application builds the membership service since AT-6a, and none
+      // calls its writes until AT-6b's routes (ADR-0135).
+      .filter((file) =>
+        /\.(invite|cancelInvitation|acceptInvitation|changeRole|removeMember)\(/.test(code(readFileSync(file, "utf8"))),
+      );
     expect(callers).toEqual([]);
   });
 });

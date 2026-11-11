@@ -449,9 +449,10 @@ describe("nothing about the existing adapters changed shape", () => {
     // Clean Master record, by DS-5b-2a (ADR-0077), which is authorized to
     // add migration 31 for two Clean Master block codes, by GS-4b
     // (ADR-0087), which is authorized to add migration 32 for the start key,
-    // and by AT-3a (ADR-0128), which is authorized to add migration 33 for
-    // email verification links.
-    expect(dirs.at(-1)).toBe("00000000000033_account_links");
+    // by AT-3a (ADR-0128), which is authorized to add migration 33 for email
+    // verification links, and by AT-6a (ADR-0135), which is authorized to add
+    // migration 34 for one pending invitation per address.
+    expect(dirs.at(-1)).toBe("00000000000034_one_pending_invitation");
     expect(dirs.filter((d) => d.includes("2h3b1") || d.includes("2h3b2"))).toEqual([]);
 
     const schema = readFileSync(

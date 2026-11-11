@@ -6,7 +6,7 @@ import { PermissionGrantService } from "./permission-grant-service";
 import { authorizeOrganization } from "./authorization";
 import { PROTECTED_PERMISSIONS, ROLES, type Permission, type Role } from "./roles";
 import type { AuditLog } from "./types";
-import { createTestDeps, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 
 /**
  * Individual permission grants under the grant ceiling (ADR-0052 Decision 10,
@@ -49,7 +49,7 @@ beforeEach(async () => {
     deps,
     auth,
     grants: new PermissionGrantService(deps),
-    members: new MembershipService(deps, { invitationTtlSeconds: 3600 }),
+    members: new MembershipService(deps, membershipTestOptions()),
     orgId: organization.id,
     otherOrgId: other.organization.id,
     ownerId: owner.id,

@@ -6,7 +6,7 @@ import { PermissionGrantService } from "./permission-grant-service";
 import { GROUP_NAME_MAX_LENGTH, GroupService } from "./group-service";
 import { mayAssignRole, ROLES, type Role } from "./roles";
 import type { AuditLog, Group } from "./types";
-import { createTestDeps, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 
 /**
  * Groups and group membership (ADR-0052 Decisions 10 and 11, Phase 6F): who may
@@ -50,7 +50,7 @@ beforeEach(async () => {
     deps,
     groups: new GroupService(deps),
     grants: new PermissionGrantService(deps),
-    members: new MembershipService(deps, { invitationTtlSeconds: 3600 }),
+    members: new MembershipService(deps, membershipTestOptions()),
     orgId: organization.id,
     otherOrgId: other.organization.id,
     ownerId: owner.id,

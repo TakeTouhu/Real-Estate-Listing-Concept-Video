@@ -299,6 +299,9 @@ model Invitation {
   organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, email])
+  // At most one PENDING invitation per (organizationId, email) is enforced by a
+  // partial unique index added by raw SQL in migration 34 (ADR-0135): Prisma
+  // cannot express `WHERE` on an index. See docs/migration-notes.md.
   @@map("invitations")
 }
 

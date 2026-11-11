@@ -25,6 +25,8 @@ export const AuditAction = {
   SessionRevoked: "session.revoked",
   InvitationCreated: "invitation.created",
   InvitationAccepted: "invitation.accepted",
+  /** A pending invitation was cancelled before anyone accepted it (ADR-0135). */
+  InvitationRevoked: "invitation.revoked",
   MemberRoleChanged: "member.role_changed",
   MemberRemoved: "member.removed",
   /** A member's attempt to give or take a role past its ceiling (ADR-0052 Decision 10). */

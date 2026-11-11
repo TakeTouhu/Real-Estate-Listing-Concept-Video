@@ -15,7 +15,7 @@ import {
   type Role,
 } from "./roles";
 import type { AuditLog, Group } from "./types";
-import { createTestDeps, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 
 /**
  * Group permissions (ADR-0052 Decision 10, Phase 6G): every group change that
@@ -59,7 +59,7 @@ beforeEach(async () => {
     deps,
     groups: new GroupService(deps),
     grants: new PermissionGrantService(deps),
-    members: new MembershipService(deps, { invitationTtlSeconds: 3600 }),
+    members: new MembershipService(deps, membershipTestOptions()),
     orgId: organization.id,
     otherOrgId: other.organization.id,
     ownerId: owner.id,

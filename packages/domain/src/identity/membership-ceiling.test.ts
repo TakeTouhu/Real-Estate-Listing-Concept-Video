@@ -5,7 +5,7 @@ import { MembershipService } from "./membership-service";
 import { authorizeOrganization } from "./authorization";
 import { ROLES, type Role } from "./roles";
 import type { AuditLog } from "./types";
-import { createTestDeps, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 
 /**
  * The role-assignment ceiling on every membership path (ADR-0052 Decision 10,
@@ -31,7 +31,7 @@ let fx: Fixture;
 beforeEach(async () => {
   const deps = createTestDeps();
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
-  const members = new MembershipService(deps, { invitationTtlSeconds: 3600 });
+  const members = new MembershipService(deps, membershipTestOptions());
   const owner = await auth.register({ email: "owner@example.com", name: "Owner", password: PASSWORD });
   const { organization } = await new OrganizationService(deps).createOrganization(owner.id, { name: "Org" });
   const ids = {} as Record<Role, string>;

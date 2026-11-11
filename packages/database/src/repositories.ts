@@ -14,6 +14,7 @@ import type {
   AuditLogRepository,
   CredentialRepository,
   IdentityRepositories,
+  InvitationCreation,
   InvitationRepository,
   MembershipRepository,
   OrganizationRepository,
@@ -124,6 +125,18 @@ function toInvitation(r: DbInvitation): Invitation {
     acceptedAt: r.acceptedAt,
     createdAt: r.createdAt,
   };
+}
+
+/**
+ * Whether `error` is migration 34's one-pending-invitation index refusing a
+ * row. Prisma names the index by its columns, as it names the id and token
+ * hash keys by theirs, so the address tells it apart.
+ */
+function isOnePendingInvitationConflict(error: unknown): boolean {
+  const { code, meta } = error as { code?: unknown; meta?: { modelName?: unknown; target?: unknown } };
+  return (
+    code === "P2002" && meta?.modelName === "Invitation" && Array.isArray(meta.target) && meta.target.includes("email")
+  );
 }
 
 function toSession(r: DbSession): Session {
@@ -352,33 +365,66 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
   };
 
   const invitations: InvitationRepository = {
-    async create(input, audit) {
-      return prisma.$transaction(async (tx) => {
-        const row = await tx.invitation.create({
-          data: {
-            id: input.id,
-            organizationId: input.organizationId,
-            email: input.email,
-            role: input.role,
-            tokenHash: input.tokenHash,
-            status: input.status,
-            invitedByUserId: input.invitedByUserId,
-            expiresAt: input.expiresAt,
-            acceptedAt: input.acceptedAt,
-          },
+    async create(input, audit, { includedSeats, now }) {
+      const { organizationId, email } = input;
+      try {
+        return await prisma.$transaction(async (tx): Promise<InvitationCreation> => {
+          // Invitations to one organization are made one at a time (ADR-0135):
+          // a second waits here, then counts the seats and reads the address
+          // with the first one committed. NO KEY UPDATE, so writes that only
+          // refer to the organization do not wait.
+          await tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${organizationId} FOR NO KEY UPDATE`;
+          // An invitation past its expiry no longer holds the address.
+          await tx.invitation.updateMany({
+            where: { organizationId, email, status: "PENDING", expiresAt: { lte: now } },
+            data: { status: "EXPIRED" },
+          });
+          if ((await tx.invitation.count({ where: { organizationId, email, status: "PENDING" } })) > 0) {
+            return { outcome: "ALREADY_INVITED" };
+          }
+          if ((await tx.membership.count({ where: { organizationId, user: { email } } })) > 0) {
+            return { outcome: "ALREADY_MEMBER" };
+          }
+          // Members and open invitations in one statement, so one snapshot: an
+          // acceptance committing between two counts would move a seat from
+          // one to the other and be counted twice or not at all. The column
+          // holds UTC without a zone, so the instant is turned to UTC.
+          const [seats] = await tx.$queryRaw<{ taken: number }[]>`
+            SELECT (SELECT count(*) FROM "memberships" WHERE "organizationId" = ${organizationId})::int
+                 + (SELECT count(*) FROM "invitations"
+                     WHERE "organizationId" = ${organizationId} AND "status" = 'PENDING'
+                       AND "expiresAt" > (${now}::timestamptz AT TIME ZONE 'UTC'))::int AS "taken"`;
+          if ((seats?.taken ?? 0) >= includedSeats) return { outcome: "NO_SEAT" };
+          const row = await tx.invitation.create({
+            data: {
+              id: input.id,
+              organizationId,
+              email,
+              role: input.role,
+              tokenHash: input.tokenHash,
+              status: "PENDING",
+              invitedByUserId: input.invitedByUserId,
+              expiresAt: input.expiresAt,
+              acceptedAt: null,
+            },
+          });
+          await tx.auditLog.create({ data: auditLogData(audit) });
+          return { outcome: "CREATED", invitation: toInvitation(row) };
         });
-        await tx.auditLog.create({ data: auditLogData(audit) });
-        return toInvitation(row);
-      });
+      } catch (error) {
+        // The one-pending-invitation index refused the row (migration 34):
+        // only a write that skipped the lock above could get here. Any other
+        // key (an id or a token hash used twice) is an error, not a refusal.
+        if (!isOnePendingInvitationConflict(error)) throw error;
+        return { outcome: "ALREADY_INVITED" };
+      }
     },
     async findByTokenHash(tokenHash) {
       const r = await prisma.invitation.findUnique({ where: { tokenHash } });
       return r ? toInvitation(r) : null;
     },
-    async findPending(organizationId, email) {
-      const r = await prisma.invitation.findFirst({
-        where: { organizationId, email, status: "PENDING" },
-      });
+    async find(organizationId, invitationId) {
+      const r = await prisma.invitation.findFirst({ where: { id: invitationId, organizationId } });
       return r ? toInvitation(r) : null;
     },
     async expire(invitationId) {
@@ -408,6 +454,19 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
         if (code !== "P2002" || meta?.modelName !== "Membership") throw error;
         return { outcome: "ALREADY_MEMBER" };
       }
+    },
+    async revoke(organizationId, invitationId, now, audit) {
+      return prisma.$transaction(async (tx) => {
+        // Moves from PENDING once: a concurrent acceptance or cancellation
+        // waits on this row, then finds it no longer pending.
+        const { count } = await tx.invitation.updateMany({
+          where: { id: invitationId, organizationId, status: "PENDING", expiresAt: { gt: now } },
+          data: { status: "REVOKED" },
+        });
+        if (count === 0) return "STALE";
+        await tx.auditLog.create({ data: auditLogData(audit) });
+        return "REVOKED";
+      });
     },
     async listByOrganization(organizationId) {
       return (await prisma.invitation.findMany({ where: { organizationId } })).map(toInvitation);

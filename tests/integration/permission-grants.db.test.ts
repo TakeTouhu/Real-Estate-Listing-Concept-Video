@@ -2,7 +2,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { MembershipService, PermissionGrantService, authorizeOrganization } from "@app/domain";
 import { createPrismaIdentityRepositories } from "@app/database";
-import { fakePasswordHasher, fakeTokenService, TestClock } from "@app/domain/testing";
+import { fakePasswordHasher, fakeTokenService, membershipTestOptions, TestClock } from "@app/domain/testing";
 
 /**
  * Individual permission grants against PostgreSQL (Phase 6D, ADR-0058): the
@@ -28,7 +28,7 @@ const deps = {
   tokens: fakeTokenService(),
 };
 const grants = new PermissionGrantService(deps);
-const members = new MembershipService(deps, { invitationTtlSeconds: 3600 });
+const members = new MembershipService(deps, membershipTestOptions());
 
 async function cleanup(): Promise<void> {
   await prisma.auditLog.deleteMany({ where: { organizationId: { in: [ORG_A, ORG_B] } } });

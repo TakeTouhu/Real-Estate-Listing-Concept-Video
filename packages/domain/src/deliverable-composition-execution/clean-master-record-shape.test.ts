@@ -80,7 +80,7 @@ describe("DS-5b-2a shape", () => {
       .sort();
     // No longer the newest: GS-4b added migration 32 after it.
     expect(dirs.indexOf(MIGRATION_DIR)).toBe(31);
-    expect(dirs).toHaveLength(34);
+    expect(dirs).toHaveLength(35);
   });
 
   it("adds two block codes and nothing else", () => {

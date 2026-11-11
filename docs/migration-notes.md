@@ -2385,3 +2385,22 @@ working until the pages return, and a password already reset stays reset.
 appears, linked from the dashboard, and only reads.
 
 **Rolling back.** To AT-4c's build: safe. Nothing was written.
+
+## AT-6a — one pending invitation per address
+
+**Migration 34** (`00000000000034_one_pending_invitation`, ADR-0135): one
+partial unique index, `invitations_one_pending_per_email`, on
+`("organizationId", "email")` where `status = 'PENDING'`. It is added by raw
+SQL: Prisma cannot express the `WHERE`, so the schema drift check does not see
+it, and the schema carries a comment instead.
+
+**What changes at deploy.** The index is built. No route has created an
+invitation yet, so no environment holds two pending invitations of one
+address; if one did, the migration would fail rather than choose between them.
+No row is changed. Nothing reachable changes: no page or route invites or
+cancels until AT-6b.
+
+**Rolling back.** To AT-5's build: drop the index
+(`DROP INDEX "invitations_one_pending_per_email";`), or leave it: AT-5's build
+writes no invitation. An invitation already marked `EXPIRED` or `REVOKED`
+stays so.
