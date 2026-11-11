@@ -155,13 +155,16 @@ export interface MembershipRepository {
 }
 
 /**
- * How an acceptance ended. Only `ACCEPTED` wrote anything. `STALE`: the
- * invitation is no longer pending (a concurrent acceptance won).
- * `ALREADY_MEMBER`: the user is already a member of the organization.
+ * How an acceptance ended (ADR-0137). Only `ACCEPTED` wrote anything.
+ * `STALE`: the invitation is no longer pending, or has expired (a concurrent
+ * acceptance or cancellation won). `NO_SEAT`: the members already take every
+ * included seat. `ALREADY_MEMBER`: the user is already a member of the
+ * organization.
  */
 export type InvitationAcceptance =
   | { readonly outcome: "ACCEPTED"; readonly membership: Membership }
   | { readonly outcome: "STALE" }
+  | { readonly outcome: "NO_SEAT" }
   | { readonly outcome: "ALREADY_MEMBER" };
 
 /** A new invitation, `PENDING` until it is accepted, cancelled or expires. */
@@ -212,10 +215,20 @@ export interface InvitationRepository {
     audit: MembershipChangeAudit,
   ): Promise<"REVOKED" | "STALE">;
   /**
-   * Accept a pending invitation atomically: the user's membership with the
-   * invitation's role, the invitation ACCEPTED at `acceptedAt`, and `audit`.
+   * Accept an invitation within the organization's seats, in one transaction
+   * that no invitation or other acceptance to the organization runs beside
+   * (ADR-0137). It writes nothing and answers `STALE` for an invitation no
+   * longer pending or expired by `now`, then `NO_SEAT` when the members number
+   * `includedSeats` or more, pending invitations not counted. Otherwise it
+   * writes the user's membership with the invitation's role, the invitation
+   * ACCEPTED at `now`, and `audit`.
    */
-  accept(invitation: Invitation, userId: string, acceptedAt: Date, audit: MembershipChangeAudit): Promise<InvitationAcceptance>;
+  accept(
+    invitation: Invitation,
+    userId: string,
+    audit: MembershipChangeAudit,
+    seats: { readonly includedSeats: number; readonly now: Date },
+  ): Promise<InvitationAcceptance>;
   listByOrganization(organizationId: string): Promise<Invitation[]>;
 }
 

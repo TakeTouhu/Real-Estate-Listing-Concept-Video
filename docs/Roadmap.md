@@ -874,6 +874,14 @@ address and the token never reach the page's address. The link opens
 `/accept-invitation`, which AT-7 builds; until then the email goes only to the
 development outbox.
 
+**AT-7a — accepting an invitation** (ADR-0137, no migration): only the
+account with the invited address, once that address is verified, accepts,
+with the invited role; another account, or an unverified one, is refused and
+nothing is written. The inviter's ceiling and the plan are asked again, and
+the acceptance needs a seat counting members only, counted in the transaction
+that writes the membership under the organization's lock, so two acceptances
+cannot take the last seat. No page or route accepts yet (AT-7b).
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

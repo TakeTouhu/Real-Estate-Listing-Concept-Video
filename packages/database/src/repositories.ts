@@ -14,6 +14,7 @@ import type {
   AuditLogRepository,
   CredentialRepository,
   IdentityRepositories,
+  InvitationAcceptance,
   InvitationCreation,
   InvitationRepository,
   MembershipRepository,
@@ -430,20 +431,31 @@ export function createPrismaIdentityRepositories(prisma: PrismaClient): Identity
     async expire(invitationId) {
       await prisma.invitation.updateMany({ where: { id: invitationId, status: "PENDING" }, data: { status: "EXPIRED" } });
     },
-    async accept(invitation, userId, acceptedAt, audit) {
+    async accept(invitation, userId, audit, { includedSeats, now }) {
       const { organizationId, role } = invitation;
       try {
-        return await prisma.$transaction(async (tx) => {
-          // Moves from PENDING exactly once: a concurrent acceptance waits on
-          // this row, then finds it no longer pending and writes nothing.
+        return await prisma.$transaction(async (tx): Promise<InvitationAcceptance> => {
+          // Acceptances and invitations to one organization are made one at a
+          // time (ADR-0137, as ADR-0135): a second acceptance waits here, then
+          // counts the members with the first one committed.
+          await tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${organizationId} FOR NO KEY UPDATE`;
+          const open = { id: invitation.id, status: "PENDING" as const, expiresAt: { gt: now } };
+          // An invitation already used is answered as such, before the seats.
+          if ((await tx.invitation.count({ where: open })) === 0) return { outcome: "STALE" };
+          // The members only: the invitation held its own seat while pending.
+          if ((await tx.membership.count({ where: { organizationId } })) >= includedSeats) {
+            return { outcome: "NO_SEAT" };
+          }
+          // Moves from PENDING exactly once: a cancellation, which takes no
+          // organization lock, may have moved it since the count above.
           const { count } = await tx.invitation.updateMany({
-            where: { id: invitation.id, status: "PENDING" },
-            data: { status: "ACCEPTED", acceptedAt },
+            where: open,
+            data: { status: "ACCEPTED", acceptedAt: now },
           });
-          if (count === 0) return { outcome: "STALE" } as const;
+          if (count === 0) return { outcome: "STALE" };
           const row = await tx.membership.create({ data: { organizationId, userId, role } });
           await tx.auditLog.create({ data: auditLogData(audit) });
-          return { outcome: "ACCEPTED", membership: toMembership(row) } as const;
+          return { outcome: "ACCEPTED", membership: toMembership(row) };
         });
       } catch (error) {
         // The membership key refused the row: the user became a member

@@ -55,7 +55,9 @@ async function cleanup(): Promise<void> {
 beforeEach(async () => {
   if (!HAS_DB) return;
   await cleanup();
-  for (const id of USERS) await prisma.user.create({ data: { id, email: `${id}@example.com`, name: id } });
+  for (const id of USERS) {
+    await prisma.user.create({ data: { id, email: `${id}@example.com`, name: id, emailVerifiedAt: new Date() } });
+  }
   await prisma.organization.create({ data: { id: ORG, name: ORG, slug: `slug-${ORG}` } });
   await prisma.membership.createMany({
     data: [
@@ -90,8 +92,14 @@ function auditCount(): Promise<number> {
   return prisma.auditLog.count({ where: { organizationId: ORG } });
 }
 
+/**
+ * An acceptance here happens at the test clock's instant, with seats to spare:
+ * invitations.db.test.ts is where acceptance counts them (ADR-0137).
+ */
+const SEATS = { includedSeats: 30, now: deps.clock.now() };
+
 async function pendingInvitation(role: Role = "CREATOR"): Promise<Invitation> {
-  const { invitation } = await members.invite(OWNER, { organizationId: ORG, email: "invitee@example.com", role });
+  const { invitation } = await members.invite(OWNER, { organizationId: ORG, email: `${NEWCOMER}@example.com`, role });
   await prisma.auditLog.deleteMany({ where: { organizationId: ORG } });
   return invitation;
 }
@@ -177,7 +185,7 @@ describe.skipIf(!HAS_DB)("each membership change commits with its audit entry or
   it("commits no acceptance whose audit entry cannot be written", async () => {
     const invitation = await pendingInvitation();
     await expect(
-      deps.repos.invitations.accept(invitation, NEWCOMER, new Date(), audit("invitation.accepted", UNWRITABLE)),
+      deps.repos.invitations.accept(invitation, NEWCOMER, audit("invitation.accepted", UNWRITABLE), SEATS),
     ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
     expect(await roleOf(NEWCOMER)).toBeUndefined();
     expect((await prisma.invitation.findUnique({ where: { id: invitation.id } }))?.status).toBe("PENDING");
@@ -204,7 +212,7 @@ describe.skipIf(!HAS_DB)("each membership change commits with its audit entry or
   it("records invite, acceptance, role change and removal, each with its own audit row", async () => {
     const { invitation, token } = await members.invite(OWNER, {
       organizationId: ORG,
-      email: "invitee@example.com",
+      email: `${NEWCOMER}@example.com`,
       role: "VIEWER",
     });
     await members.acceptInvitation(NEWCOMER, token);
@@ -220,7 +228,7 @@ describe.skipIf(!HAS_DB)("each membership change commits with its audit entry or
     expect(rows).toHaveLength(5);
     expect(rows.map((r) => [r.action, r.actorUserId, r.resourceId, r.metadata])).toEqual(
       expect.arrayContaining([
-        ["invitation.created", OWNER, invitation.id, { email: "invitee@example.com", role: "VIEWER" }],
+        ["invitation.created", OWNER, invitation.id, { email: `${NEWCOMER}@example.com`, role: "VIEWER" }],
         ["invitation.accepted", NEWCOMER, newcomer, { role: "VIEWER", scope: "OWN" }],
         ["member.role_changed", OWNER, newcomer, { targetUserId: NEWCOMER, role: "MANAGER", previousRole: "VIEWER", scope: "GROUP" }],
         ["member.role_changed", OWNER, coOwner, { targetUserId: CO_OWNER, role: "ADMIN", previousRole: "OWNER", scope: "ORGANIZATION" }],
@@ -260,9 +268,9 @@ describe.skipIf(!HAS_DB)("a change checked against what is no longer true writes
 
   it("does not accept an invitation that is no longer pending", async () => {
     const invitation = await pendingInvitation();
-    const first = await deps.repos.invitations.accept(invitation, NEWCOMER, new Date(), audit("invitation.accepted"));
+    const first = await deps.repos.invitations.accept(invitation, NEWCOMER, audit("invitation.accepted"), SEATS);
     expect(first.outcome).toBe("ACCEPTED");
-    const again = await deps.repos.invitations.accept(invitation, OTHER, new Date(), audit("invitation.accepted"));
+    const again = await deps.repos.invitations.accept(invitation, OTHER, audit("invitation.accepted"), SEATS);
     expect(again).toEqual({ outcome: "STALE" });
     expect(await roleOf(OTHER)).toBeUndefined();
     expect(await auditCount()).toBe(1);
@@ -270,7 +278,7 @@ describe.skipIf(!HAS_DB)("a change checked against what is no longer true writes
 
   it("does not accept an invitation for a user who is already a member, leaving it pending", async () => {
     const invitation = await pendingInvitation("VIEWER");
-    expect(await deps.repos.invitations.accept(invitation, CREATOR, new Date(), audit("invitation.accepted"))).toEqual({
+    expect(await deps.repos.invitations.accept(invitation, CREATOR, audit("invitation.accepted"), SEATS)).toEqual({
       outcome: "ALREADY_MEMBER",
     });
     expect(await roleOf(CREATOR)).toBe("CREATOR");
@@ -280,7 +288,7 @@ describe.skipIf(!HAS_DB)("a change checked against what is no longer true writes
 
   it("expires a pending invitation but never an accepted one", async () => {
     const accepted = await pendingInvitation();
-    await deps.repos.invitations.accept(accepted, NEWCOMER, new Date(), audit("invitation.accepted"));
+    await deps.repos.invitations.accept(accepted, NEWCOMER, audit("invitation.accepted"), SEATS);
     await deps.repos.invitations.expire(accepted.id);
     expect((await prisma.invitation.findUnique({ where: { id: accepted.id } }))?.status).toBe("ACCEPTED");
 
@@ -311,21 +319,21 @@ describe.skipIf(!HAS_DB)("membership changes racing each other", () => {
     expect(await auditCount()).toBe(1);
   });
 
-  it("makes one membership and one audit row of two acceptances of one invitation", async () => {
-    const { invitation, token } = await members.invite(OWNER, {
+  it("makes one membership and one audit row of one invitation accepted twice at once", async () => {
+    const { token } = await members.invite(OWNER, {
       organizationId: ORG,
-      email: "invitee@example.com",
+      email: `${NEWCOMER}@example.com`,
       role: "CREATOR",
     });
     await prisma.auditLog.deleteMany({ where: { organizationId: ORG } });
     const results = await contend(
-      (tx) => tx.$queryRaw`SELECT 1 FROM "invitations" WHERE "id" = ${invitation.id} FOR UPDATE`,
-      [() => members.acceptInvitation(NEWCOMER, token), () => members.acceptInvitation(OTHER, token)],
+      (tx) => tx.$queryRaw`SELECT 1 FROM "organizations" WHERE "id" = ${ORG} FOR NO KEY UPDATE`,
+      [() => members.acceptInvitation(NEWCOMER, token), () => members.acceptInvitation(NEWCOMER, token)],
     );
     expect(refusals(results)).toEqual([
       expect.objectContaining({ code: "NOT_FOUND", message: "Invitation is invalid or already used" }),
     ]);
-    expect([await roleOf(NEWCOMER), await roleOf(OTHER)].filter(Boolean)).toEqual(["CREATOR"]);
+    expect(await roleOf(NEWCOMER)).toBe("CREATOR");
     expect(await auditCount()).toBe(1);
   });
 });

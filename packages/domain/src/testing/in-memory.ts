@@ -716,18 +716,32 @@ class InMemoryInvitationRepository implements InvitationRepository {
     if (current?.status === "PENDING") this.byId.set(invitationId, { ...current, status: "EXPIRED" });
     return Promise.resolve();
   }
+  /**
+   * Checks and writes with no `await` in between, as the database's
+   * transaction under the organization's lock does (ADR-0137); an audit entry
+   * that cannot be appended takes back the membership and the acceptance, as
+   * the rolled-back transaction does.
+   */
   async accept(
     invitation: Invitation,
     userId: string,
-    acceptedAt: Date,
     audit: MembershipChangeAudit,
+    { includedSeats, now }: { readonly includedSeats: number; readonly now: Date },
   ): Promise<InvitationAcceptance> {
+    const { organizationId, role } = invitation;
     const current = this.byId.get(invitation.id);
-    if (current?.status !== "PENDING") return { outcome: "STALE" };
-    if (this.memberships.has(invitation.organizationId, userId)) return { outcome: "ALREADY_MEMBER" };
-    this.byId.set(invitation.id, { ...current, status: "ACCEPTED", acceptedAt });
-    const membership = this.memberships.insert({ organizationId: invitation.organizationId, userId, role: invitation.role });
-    await this.auditLogs.append(audit);
+    if (current === undefined || !isOpenInvitation(current, now)) return { outcome: "STALE" };
+    if (this.memberships.userIdsIn(organizationId).length >= includedSeats) return { outcome: "NO_SEAT" };
+    if (this.memberships.has(organizationId, userId)) return { outcome: "ALREADY_MEMBER" };
+    this.byId.set(invitation.id, { ...current, status: "ACCEPTED", acceptedAt: now });
+    const membership = this.memberships.insert({ organizationId, userId, role });
+    try {
+      await this.auditLogs.append(audit);
+    } catch (error) {
+      this.memberships.forget(organizationId, userId);
+      this.byId.set(invitation.id, current);
+      throw error;
+    }
     return { outcome: "ACCEPTED", membership };
   }
   async revoke(

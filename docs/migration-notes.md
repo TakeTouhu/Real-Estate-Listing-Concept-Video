@@ -2419,3 +2419,12 @@ arrives with AT-7.
 **Rolling back.** To AT-6a's build: safe. Invitations already made stay
 pending, taking their seats until they expire after 7 days; that build cannot
 cancel them, and nothing can accept them yet.
+
+## AT-7a — accepting an invitation
+
+**No migration** (ADR-0137). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data, and nothing
+reachable: no page or route accepts an invitation until AT-7b.
+
+**Rolling back.** To AT-6b's build: safe. Nothing accepts in either build.
