@@ -40,19 +40,23 @@ Units page does. The dashboard links each organization to the page, beside
 ## Decision 2 — Every member takes a seat, and so does a pending invitation
 
 An organization's seats are its plan's included users from the plan catalog,
-until seat purchase is built. A plan that has not started yet already gives its
-seats. **An organization with no plan has no seats**, and the page says that
-its seats come with the plan.
+until seat purchase is built. **An organization with no plan has no seats**,
+and the page says that its seats come with the plan. A plan whose first period
+has not started yet is shown with its included users. That shows what the
+contract includes; whether such an organization may invite before its plan
+starts is not decided here (an open gate in `TODO.md`, for AT-6).
 
-Seats taken = members + invitations that can still be accepted. An invitation
-can be accepted while it is `PENDING` and its expiry is still ahead
-(`holdsSeat`, the same boundary acceptance uses: at its expiry instant it no
-longer can). An invitation past its expiry and not yet marked `EXPIRED` holds
-no seat and is not listed. Every member counts, whatever their role.
+Seats taken = members + pending invitations that have not expired
+(`holdsSeat`: `PENDING`, and its expiry still ahead, the boundary acceptance
+uses). Such an invitation holds its seat even where acceptance would now refuse
+it for another reason, for instance because its inviter has since left: only
+its expiry frees the seat. An invitation past its expiry and not yet marked
+`EXPIRED` holds no seat and is not listed. Every member counts, whatever their
+role.
 
-The page shows the count as it is, even above the seats (an organization's
-members were never limited before AT-6). It chooses, removes or deactivates no
-one, and buys nothing (ADR-0053 Decision 5A).
+The page shows the count as it is, even above the seats: nothing limits an
+organization's members yet. It chooses, removes or deactivates no one, and
+buys nothing (ADR-0053 Decision 5A).
 
 ## Decision 3 — Viewing reads only
 
@@ -64,8 +68,11 @@ and not yet in another. That is enough for a page, and a seat limit must not
 rely on it: AT-6 must count again in the transaction that writes the
 invitation.
 
-The accounts behind the members are asked for together, so the database client
-reads them in one query.
+The accounts behind the members are asked for together, and Prisma's client
+batches lookups made together into one query (checked against a local
+database; no test pins it). A member whose account is gone by the time it is
+read is neither listed nor counted. The membership's foreign key deletes it
+with its account, so only that race can show it.
 
 ## Consequences
 
@@ -74,4 +81,10 @@ reads them in one query.
 - Who can invite, cancel an invitation, change a role or remove a member is
   unchanged: no page or route does any of these yet (AT-6 and AT-8).
 - `includedSeats` and `holdsSeat` state the seat rule once, for AT-6's
-  invitation and AT-7's acceptance to check against when they are built.
+  invitation to check against when it is built. Acceptance (AT-7) needs a
+  free seat counting members only, as the approved plan says, so the
+  invitation being accepted does not count against itself.
+- Two items for AT-6 are in `TODO.md`: an invitation past its expiry still
+  blocks inviting its address again, since only acceptance marks it
+  `EXPIRED`; and whether an organization may invite before its plan
+  starts.

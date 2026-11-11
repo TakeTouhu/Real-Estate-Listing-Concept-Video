@@ -4,8 +4,8 @@ import { createCustomerPlanCatalog } from "../pricing/customer-plan-catalog";
 
 /**
  * An organization's seats (ADR-0134). Every member takes one, the `OWNER`
- * included, and so does an invitation while it can still be accepted. Until
- * seat purchase is built, the seats are the plan's included users (Standard 3,
+ * included, and so does a pending invitation until it expires. Until seat
+ * purchase is built, the seats are the plan's included users (Standard 3,
  * Premium 10, Enterprise 30), and an organization with no plan has none.
  */
 
@@ -19,8 +19,9 @@ export function includedSeats(subscription: Pick<OrganizationSubscription, "plan
 
 /**
  * Whether `invitation` holds a seat at `now`: it is pending and has not expired,
- * so it can still be accepted. An expired one holds none, whether or not it has
- * been marked `EXPIRED` yet.
+ * at the boundary acceptance uses. It holds its seat even where acceptance would
+ * now refuse it for another reason (its inviter has left, say). An expired one
+ * holds none, whether or not it has been marked `EXPIRED` yet.
  */
 export function holdsSeat(invitation: Pick<Invitation, "status" | "expiresAt">, now: Date): boolean {
   return invitation.status === "PENDING" && invitation.expiresAt.getTime() > now.getTime();

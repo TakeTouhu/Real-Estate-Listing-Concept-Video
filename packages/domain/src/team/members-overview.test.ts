@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CustomerPlanKey } from "../pricing/customer-plan-catalog";
 import { AuthService } from "../identity/auth-service";
+import { GroupService } from "../identity/group-service";
 import { OrganizationService } from "../identity/organization-service";
 import { PermissionGrantService } from "../identity/permission-grant-service";
 import type { Role } from "../identity/roles";
@@ -12,8 +13,8 @@ import { holdsSeat, includedSeats } from "./seats";
 
 /**
  * The members page's reading (AT-5, ADR-0134): `member.view` to see it; the
- * members by role with their accounts; only invitations that can still be
- * accepted; seats from the plan's included users, taken by members and those
+ * members by role with their accounts; only pending invitations that have not
+ * expired; seats from the plan's included users, taken by members and those
  * invitations; and nothing written. Every instant is written out literally.
  */
 
@@ -102,6 +103,14 @@ describe("the members overview", () => {
     await expect(service.overview(ids.CREATOR, orgId)).resolves.toMatchObject({ members: expect.any(Array) });
   });
 
+  it("lets a group's member.view through too", async () => {
+    const groups = new GroupService(deps);
+    const group = await groups.create(ids.OWNER, orgId, "Leads");
+    await groups.addMember(ids.OWNER, orgId, group.id, ids.VIEWER);
+    await groups.grantPermission(ids.OWNER, orgId, group.id, "member.view");
+    await expect(service.overview(ids.VIEWER, orgId)).resolves.toMatchObject({ members: expect.any(Array) });
+  });
+
   it.each(["OWNER", "ADMIN", "MANAGER", "BILLING"] as const)(
     "lists a %s the members by role, then the longest-standing first",
     async (who) => {
@@ -118,6 +127,18 @@ describe("the members overview", () => {
     },
   );
 
+  it("never lists or counts another organization's members", async () => {
+    subscribe("standard");
+    const { organization: other } = await new OrganizationService(deps).createOrganization(ids.outsider, {
+      name: "Other",
+    });
+    await deps.repos.memberships.create({ organizationId: other.id, userId: ids.VIEWER, role: "ADMIN" });
+    const { members, seats } = await service.overview(ids.OWNER, orgId);
+    expect(members.map(({ email }) => email)).not.toContain("outsider@example.com");
+    expect(members.filter(({ email }) => email === "viewer@example.com").map(({ role }) => role)).toEqual(["VIEWER"]);
+    expect(seats).toEqual({ included: 3, taken: 6 });
+  });
+
   it("puts members of one role in the order they joined", async () => {
     deps.clock.set(iso("2026-11-08T00:00:00.000Z"));
     const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
@@ -131,6 +152,26 @@ describe("the members overview", () => {
     ]);
   });
 
+  it("puts members who joined at the same instant in one fixed order", async () => {
+    const at = iso("2026-11-08T00:00:00.000Z");
+    deps.clock.set(at);
+    for (const { id, email } of [
+      { id: "usr_b", email: "b@example.com" },
+      { id: "usr_a", email: "a@example.com" },
+    ]) {
+      const user = { id, email, name: email, status: "ACTIVE" as const };
+      deps.repos.users.put({ ...user, emailVerifiedAt: at, createdAt: at, updatedAt: at });
+      await deps.repos.memberships.create({ organizationId: orgId, userId: id, role: "MANAGER" });
+    }
+    deps.clock.set(NOW);
+    const { members } = await service.overview(ids.OWNER, orgId);
+    expect(members.filter(({ role }) => role === "MANAGER").map(({ email }) => email)).toEqual([
+      "manager@example.com",
+      "a@example.com",
+      "b@example.com",
+    ]);
+  });
+
   it("leaves out, and does not count, a member whose account is gone by the time it is read", async () => {
     subscribe("premium");
     await deps.repos.memberships.create({ organizationId: orgId, userId: "usr_gone", role: "CREATOR" });
@@ -139,7 +180,7 @@ describe("the members overview", () => {
     expect(seats).toEqual({ included: 10, taken: 6 });
   });
 
-  it("shows only invitations that can still be accepted, oldest first, and never another organization's", async () => {
+  it("shows only pending invitations that have not expired, oldest first, never another organization's", async () => {
     await invite("later@example.com", { role: "VIEWER", createdAt: iso("2026-11-09T06:00:00.000Z") });
     await invite("first@example.com", { role: "MANAGER", createdAt: iso("2026-11-08T00:00:00.000Z") });
     await invite("lapsed@example.com", { expiresAt: NOW });
@@ -186,7 +227,7 @@ describe("the members overview", () => {
     expect((await service.overview(ids.OWNER, orgId)).seats).toEqual({ included: 3, taken: 6 });
   });
 
-  it("counts every member and every invitation that can still be accepted, even beyond the seats", async () => {
+  it("counts every member and every pending invitation that has not expired, even beyond the seats", async () => {
     subscribe("premium");
     await invite("one@example.com");
     await invite("two@example.com");

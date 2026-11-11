@@ -22,7 +22,7 @@ export interface MembersOverviewMember {
   readonly you: boolean;
 }
 
-/** An invitation that can still be accepted. */
+/** A pending invitation that has not expired. */
 export interface MembersOverviewInvitation {
   readonly email: string;
   readonly role: Role;
@@ -54,8 +54,8 @@ export class MembersOverviewService {
   constructor(private readonly deps: MembersOverviewDeps) {}
 
   /**
-   * The organization's members, its invitations that can still be accepted, and
-   * its seats.
+   * The organization's members, its pending invitations that have not expired,
+   * and its seats.
    *
    * @throws AppError FORBIDDEN for a non-member, or a member without `member.view`.
    */

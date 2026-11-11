@@ -72,8 +72,8 @@ export default async function MembersPage({ params }: { params: Promise<{ organi
           <p className="muted">No pending invitations.</p>
         ) : (
           <ul>
-            {overview.invitations.map((invitation, index) => (
-              <li key={index}>
+            {overview.invitations.map((invitation) => (
+              <li key={`${invitation.email}:${invitation.invitedAt.getTime()}`}>
                 {invitation.email} · {ROLE_NAMES[invitation.role]} · invited {formatJst(invitation.invitedAt)},
                 expires {formatJst(invitation.expiresAt)}
               </li>

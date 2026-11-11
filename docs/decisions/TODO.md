@@ -2205,6 +2205,16 @@ them is **built**. Each item below records the settled decision and what remains
       table grows with every link sent. Deleting them needs a scheduled job,
       which stays blocked until production scheduling is authorized
       (ADR-0054 Decision 7).
+- [ ] **Let an address be invited again once its invitation expires** — found
+      in AT-5's review (ADR-0134). Only an acceptance attempt marks an
+      invitation `EXPIRED`, so one nobody opened stays `PENDING` past its
+      expiry. The members page neither lists it nor counts its seat, but
+      `MembershipService.invite` refuses a new invitation while one is
+      `PENDING` (`findPending` reads the status alone), so the address can
+      never be invited again; the one-pending-invitation index AT-6 adds
+      would make that a hard conflict. AT-6 must treat a lapsed invitation as
+      not pending: mark it `EXPIRED` in the transaction that writes the new
+      one, or leave it out of the check and the index.
 - [x] **Audit every role, permission, group and Property-assignment change**,
       recording the acting user, so a ceiling violation is both preventable and
       detectable after the fact. *Role, individual-permission and group changes
@@ -2449,10 +2459,11 @@ them is **built**. Each item below records the settled decision and what remains
 
 ### Decision gates — OPEN
 
-Six gates: one found by the Phase 6A gap analysis
+Seven gates: one found by the Phase 6A gap analysis
 (`docs/phase-6a-gap-analysis.md`), one by Phase 6B (ADR-0056), two by GS-1
-(ADR-0082), one by GS-5b (ADR-0091), one by AT-1 (ADR-0126). **None may be
-guessed.** Every other gate is closed and recorded below.
+(ADR-0082), one by GS-5b (ADR-0091), one by AT-1 (ADR-0126), one by AT-5
+(ADR-0134). **None may be guessed.** Every other gate is closed and recorded
+below.
 
 - [ ] **Choose the production email service** — from AT-1 (ADR-0126); does
       not block the accounts-and-team plan, whose emails go to the development
@@ -2518,6 +2529,13 @@ guessed.** Every other gate is closed and recorded below.
       plan price changes. *Where an Enterprise organization's contracted price
       comes from, the other half of this gate, was decided on 2026-10-28
       (ADR-0093 Decision 2, CLOSED below).*
+- [ ] **Decide whether an organization may invite before its plan starts** —
+      from AT-5 (ADR-0134); blocks AT-6's seat limit. The approved
+      accounts-and-team plan says an organization with no plan cannot invite
+      and that the seats are the plan's included users. A subscription whose
+      first period starts later is neither case. The members page shows such
+      a plan's included users, which decides nothing about inviting. Must be
+      settled before AT-6 refuses or allows an invitation.
 
 ### Decision gates — CLOSED
 

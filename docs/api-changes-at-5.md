@@ -9,7 +9,7 @@ action.** One page; the dashboard links to it.
 
 | Route | Who | Does |
 | --- | --- | --- |
-| `GET /organizations/{organizationId}/members` | a member holding `member.view` | The seats taken out of the plan's included users (or that there is no plan yet), the members (name, email address, role, joined; by role, then longest-standing first; the viewer marked "(you)"), and the invitations that can still be accepted (email address, role, sent, expires; oldest first). Writes nothing. Anyone else: "You cannot view this organization's members.", without the organization's name. Signed out: redirect to `/login` |
+| `GET /organizations/{organizationId}/members` | a member holding `member.view` | The seats taken out of the plan's included users (or that there is no plan yet), the members (name, email address, role, joined; by role, then longest-standing first; the viewer marked "(you)"), and the pending invitations that have not expired (email address, role, sent, expires; oldest first). Writes nothing. Anyone else: "You cannot view this organization's members.", without the organization's name. Signed out: redirect to `/login` |
 
 ### Changed
 
