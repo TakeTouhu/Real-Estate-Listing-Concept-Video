@@ -1,12 +1,13 @@
 import type { SubscriptionRepository } from "../entitlement/subscription";
 import { authorizeOrganization } from "../identity/authorization";
 import type { IdentityServiceDeps } from "../identity/ports";
-import { ROLES, type Role } from "../identity/roles";
+import { ROLES, mayAssignRole, type Role } from "../identity/roles";
 import { holdsSeat, includedSeats } from "./seats";
 
 /**
  * Who belongs to an organization, who is invited to it, and its seats, as a
- * holder of `member.view` sees them (AT-5, ADR-0134).
+ * holder of `member.view` sees them (AT-5, ADR-0134), and which roles the
+ * viewer may invite (AT-6b, ADR-0136).
  *
  * **Read only.** Viewing writes nothing and audits nothing, as a `member.view`
  * listing never has: an invitation past its expiry is left as it is and simply
@@ -24,6 +25,8 @@ export interface MembersOverviewMember {
 
 /** A pending invitation that has not expired. */
 export interface MembersOverviewInvitation {
+  /** What cancelling it names; it carries nothing that accepts it. */
+  readonly id: string;
   readonly email: string;
   readonly role: Role;
   readonly invitedAt: Date;
@@ -40,6 +43,12 @@ export interface MembersOverview {
    * the invitations above, and is shown as it is even above `included`.
    */
   readonly seats: { readonly included: number; readonly taken: number } | null;
+  /**
+   * The roles the viewer may invite with, and so whose invitations it may
+   * cancel: with `member.manage`, those its role may assign (ADR-0052
+   * Decision 10); without it, none. In the order of `ROLES`.
+   */
+  readonly invitableRoles: readonly Role[];
 }
 
 export interface MembersOverviewDeps {
@@ -61,7 +70,7 @@ export class MembersOverviewService {
    */
   async overview(actorUserId: string, organizationId: string): Promise<MembersOverview> {
     const { identity } = this.deps;
-    await authorizeOrganization(identity, actorUserId, organizationId, "member.view");
+    const actor = await authorizeOrganization(identity, actorUserId, organizationId, "member.view");
     const now = identity.clock.now();
     const [memberships, invitations, subscription] = await Promise.all([
       identity.repos.memberships.listByOrganization(organizationId),
@@ -96,12 +105,15 @@ export class MembersOverviewService {
     const pending = invitations
       .filter((invitation) => holdsSeat(invitation, now))
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || compareIds(a.id, b.id))
-      .map(({ email, role, createdAt, expiresAt }) => ({ email, role, invitedAt: createdAt, expiresAt }));
+      .map(({ id, email, role, createdAt, expiresAt }) => ({ id, email, role, invitedAt: createdAt, expiresAt }));
     const included = includedSeats(subscription);
     return {
       members,
       invitations: pending,
       seats: included === null ? null : { included, taken: members.length + pending.length },
+      invitableRoles: actor.permissions.includes("member.manage")
+        ? ROLES.filter((role) => mayAssignRole(actor.role, role))
+        : [],
     };
   }
 }

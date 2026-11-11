@@ -1,7 +1,8 @@
 import { basename } from "node:path";
 import { expect, test } from "@playwright/test";
 import { hydrated } from "./support/hydration";
-import { provisionPremiumPlan, signUpOwner } from "./support/owner";
+import { invitationLink } from "./support/outbox";
+import { newEmail, provisionPremiumPlan, signUpOwner } from "./support/owner";
 import { makePhotos } from "./support/photos";
 
 /**
@@ -9,7 +10,8 @@ import { makePhotos } from "./support/photos";
  * Property holding their photos, through the web app's own pages, in a real
  * browser, and has them analyzed from the review page (GS-13b, ADR-0122). The
  * rest of the way to a delivered video follows in GS-13c and GS-13d. On the
- * way, the owner finds themselves on the members page (AT-5, ADR-0134).
+ * way, the owner finds themselves on the members page (AT-5, ADR-0134), and
+ * invites a colleague and cancels the invitation (AT-6b, ADR-0136).
  */
 test("an owner signs up, sets up MFA, is given a plan, uploads a Property's photos and has them analyzed", async ({
   page,
@@ -28,6 +30,24 @@ test("an owner signs up, sets up MFA, is given a plan, uploads a Property's phot
   await page.getByRole("link", { name: "Members" }).click();
   await expect(page.getByText("1 of 10 taken.")).toBeVisible();
   await expect(page.getByRole("listitem").filter({ hasText: `(you) · ${owner.email} · Owner · joined` })).toBeVisible();
+  await expect(page.getByText("No pending invitations.")).toBeVisible();
+
+  // AT-6b (ADR-0136): the owner invites a colleague, whose invitation takes a seat and is mailed,
+  // then cancels it, freeing the seat.
+  const colleague = newEmail("colleague");
+  await page.getByLabel("Email address").fill(colleague);
+  await page.getByLabel("Role").selectOption({ label: "Creator" });
+  await page.getByRole("button", { name: "Send invitation" }).click();
+  await expect(page.getByRole("status")).toHaveText("The invitation was sent. Its link works for 7 days.");
+  await expect(page.getByText("2 of 10 taken.")).toBeVisible();
+  await expect(page.getByRole("listitem").filter({ hasText: `${colleague} · Creator · invited` })).toBeVisible();
+  expect(new URL(await invitationLink(colleague)).searchParams.get("token")).toMatch(/\S/);
+  expect(new URL(page.url()).search).toBe("?notice=invited");
+  await page.getByRole("button", { name: `Cancel the invitation of ${colleague}` }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "The invitation was cancelled. Its link no longer works, and its seat is free.",
+  );
+  await expect(page.getByText("1 of 10 taken.")).toBeVisible();
   await expect(page.getByText("No pending invitations.")).toBeVisible();
 
   await page.goto("/");

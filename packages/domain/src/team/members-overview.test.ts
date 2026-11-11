@@ -15,7 +15,8 @@ import { holdsSeat, includedSeats, includedSeatsFrom } from "./seats";
  * The members page's reading (AT-5, ADR-0134): `member.view` to see it; the
  * members by role with their accounts; only pending invitations that have not
  * expired; seats from the plan's included users, taken by members and those
- * invitations; and nothing written. Every instant is written out literally.
+ * invitations; and nothing written. Which roles the viewer may invite with
+ * (AT-6b, ADR-0136). Every instant is written out literally.
  */
 
 const iso = (value: string) => new Date(value);
@@ -62,7 +63,7 @@ function subscribe(planKey: CustomerPlanKey, anchorAt = iso("2026-10-15T00:00:00
 
 function invite(
   email: string,
-  overrides: Partial<Pick<Invitation, "organizationId" | "role" | "status" | "expiresAt" | "createdAt">> = {},
+  overrides: Partial<Pick<Invitation, "id" | "organizationId" | "role" | "status" | "expiresAt" | "createdAt">> = {},
 ): void {
   deps.repos.invitations.put({
     id: deps.ids.generate("inv"),
@@ -168,8 +169,8 @@ describe("the members overview", () => {
   });
 
   it("shows only pending invitations that have not expired, oldest first, never another organization's", async () => {
-    invite("later@example.com", { role: "VIEWER", createdAt: iso("2026-11-09T06:00:00.000Z") });
-    invite("first@example.com", { role: "MANAGER", createdAt: iso("2026-11-08T00:00:00.000Z") });
+    invite("later@example.com", { id: "inv_later", role: "VIEWER", createdAt: iso("2026-11-09T06:00:00.000Z") });
+    invite("first@example.com", { id: "inv_first", role: "MANAGER", createdAt: iso("2026-11-08T00:00:00.000Z") });
     invite("lapsed@example.com", { expiresAt: NOW });
     for (const status of ["ACCEPTED", "REVOKED", "EXPIRED"] satisfies InvitationStatus[]) {
       invite(`${status.toLowerCase()}@example.com`, { status });
@@ -182,18 +183,34 @@ describe("the members overview", () => {
     const { invitations } = await service.overview(ids.MANAGER, orgId);
     expect(invitations).toEqual([
       {
+        id: "inv_first",
         email: "first@example.com",
         role: "MANAGER",
         invitedAt: iso("2026-11-08T00:00:00.000Z"),
         expiresAt: iso("2026-11-16T00:00:00.000Z"),
       },
       {
+        id: "inv_later",
         email: "later@example.com",
         role: "VIEWER",
         invitedAt: iso("2026-11-09T06:00:00.000Z"),
         expiresAt: iso("2026-11-16T00:00:00.000Z"),
       },
     ]);
+  });
+
+  it.each([
+    ["OWNER", ["OWNER", "ADMIN", "MANAGER", "CREATOR", "VIEWER", "BILLING"]],
+    ["ADMIN", ["MANAGER", "CREATOR", "VIEWER"]],
+    ["MANAGER", []],
+    ["BILLING", []],
+  ] as const)("lets a %s invite with the roles its ceiling allows", async (who, roles) => {
+    expect((await service.overview(ids[who], orgId)).invitableRoles).toEqual(roles);
+  });
+
+  it("offers a MANAGER granted member.manage no role, since the ceiling goes by role", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "member.manage");
+    expect((await service.overview(ids.MANAGER, orgId)).invitableRoles).toEqual([]);
   });
 
   it("has no seats while the organization has no plan", async () => {

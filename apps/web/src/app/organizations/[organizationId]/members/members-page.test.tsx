@@ -18,7 +18,10 @@ import { AppError, hotp } from "@app/shared";
 /**
  * The members page (AT-5, ADR-0134): a holder of `member.view` sees the seats,
  * the members and the pending invitations; anyone else is refused alike. The
- * dashboard links each organization to it.
+ * dashboard links each organization to it. A holder of `member.manage` invites
+ * with the roles it may assign and cancels those roles' invitations, and the
+ * page says what a fixed code in its address names, and nothing else (AT-6b,
+ * ADR-0136).
  */
 const PASSWORD = "password-123456";
 const KEY = "55".repeat(32);
@@ -38,7 +41,10 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
-vi.mock("@/lib/members", () => ({ getMembersOverviewService: () => members.value }));
+vi.mock("@/lib/members", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/members")>()),
+  getMembersOverviewService: () => members.value,
+}));
 vi.mock("@/lib/property", () => ({ getPropertyServices: () => ({ properties: { list: () => Promise.resolve([]) } }) }));
 
 const { default: MembersPage } = await import("./page");
@@ -88,12 +94,45 @@ async function signInAs(role: Role | null): Promise<void> {
   cookie.value = token;
 }
 
-async function renderMembers(role: Role | null): Promise<string> {
+type Query = Record<string, string | string[]>;
+
+async function renderMembers(role: Role | null, query: Query = {}): Promise<string> {
   await signInAs(role);
   const { container } = render(
-    (await MembersPage({ params: Promise.resolve({ organizationId: orgId }) })) as ReactElement,
+    (await MembersPage({
+      params: Promise.resolve({ organizationId: orgId }),
+      searchParams: Promise.resolve(query),
+    })) as ReactElement,
   );
   return (container.textContent ?? "").replace(/\s+/g, " ");
+}
+
+function invited(id: string, email: string, role: Role): void {
+  deps.repos.invitations.put({
+    id,
+    organizationId: orgId,
+    email,
+    role,
+    tokenHash: `hash:${id}`,
+    status: "PENDING",
+    invitedByUserId: ownerId,
+    expiresAt: iso("2026-11-17T03:00:00.000Z"),
+    acceptedAt: null,
+    createdAt: iso("2026-11-10T03:00:00.000Z"),
+  });
+}
+
+/** The role options the invite form offers, by their names. */
+function offeredRoles(): (string | null)[] {
+  const select = screen.getByLabelText("Role");
+  return [...select.querySelectorAll("option:not([disabled])")].map((option) => option.textContent);
+}
+
+/** The addresses whose invitations have a cancel button, and where each posts. */
+function cancelButtons(): string[] {
+  return screen
+    .queryAllByRole("button", { name: /^Cancel the invitation of / })
+    .map((button) => `${button.getAttribute("aria-label")} -> ${button.closest("form")?.getAttribute("action")}`);
 }
 
 function subscribe(planKey: "standard" | "premium" | "enterprise"): void {
@@ -145,18 +184,7 @@ describe("the members page", () => {
 
   it("shows the seats taken, the members and the pending invitations, in Japan time", async () => {
     subscribe("standard");
-    deps.repos.invitations.put({
-      id: "inv_1",
-      organizationId: orgId,
-      email: "new.hire@example.com",
-      role: "VIEWER",
-      tokenHash: "hash:inv_1",
-      status: "PENDING",
-      invitedByUserId: ownerId,
-      expiresAt: iso("2026-11-17T03:00:00.000Z"),
-      acceptedAt: null,
-      createdAt: iso("2026-11-10T03:00:00.000Z"),
-    });
+    invited("inv_1", "new.hire@example.com", "VIEWER");
     deps.clock.set(iso("2026-11-10T05:00:00.000Z"));
     const text = await renderMembers("BILLING");
 
@@ -179,6 +207,95 @@ describe("the members page", () => {
     expect(text).toContain("2 of 10 taken.");
     expect(screen.getByRole("heading", { name: "Pending invitations (0)" })).toBeTruthy();
     expect(text).toContain("No pending invitations.");
+  });
+});
+
+describe("inviting and cancelling on the members page", () => {
+  it("offers an owner every role, and posts the form to the organization's invitations", async () => {
+    subscribe("premium");
+    const text = await renderMembers("OWNER");
+    expect(offeredRoles()).toEqual(["Owner", "Admin", "Manager", "Creator", "Viewer", "Billing"]);
+    expect(text).toContain("We email the address a link that works for 7 days.");
+    const form = screen.getByRole("button", { name: "Send invitation" }).closest("form");
+    expect(form?.getAttribute("method")).toBe("post");
+    expect(form?.getAttribute("action")).toBe(`/api/organizations/${orgId}/invitations`);
+    expect((screen.getByLabelText("Email address") as HTMLInputElement).required).toBe(true);
+    expect((screen.getByLabelText("Role") as HTMLSelectElement).value).toBe("");
+  });
+
+  it("offers an admin only the roles below its ceiling, and cancels only those roles' invitations", async () => {
+    subscribe("premium");
+    invited("inv_admin", "second.admin@example.com", "ADMIN");
+    invited("inv_viewer", "viewer@example.com", "VIEWER");
+    await renderMembers("ADMIN");
+    expect(offeredRoles()).toEqual(["Manager", "Creator", "Viewer"]);
+    expect(cancelButtons()).toEqual([
+      `Cancel the invitation of viewer@example.com -> /api/organizations/${orgId}/invitations/inv_viewer/cancel`,
+    ]);
+  });
+
+  it.each([["MANAGER" as const], ["BILLING" as const]])(
+    "shows %s neither the form nor a cancel button",
+    async (role) => {
+      subscribe("premium");
+      invited("inv_viewer", "viewer@example.com", "VIEWER");
+      const text = await renderMembers(role);
+      expect(text).not.toContain("Invite someone");
+      expect(screen.queryByRole("button")).toBeNull();
+    },
+  );
+
+  it("says inviting waits for the plan, without a form", async () => {
+    const text = await renderMembers("OWNER");
+    expect(screen.getByRole("heading", { name: "Invite someone" })).toBeTruthy();
+    expect(text).toContain("You can invite people once the plan is set up.");
+    expect(screen.queryByRole("button", { name: "Send invitation" })).toBeNull();
+  });
+
+  it("says when every seat is taken, without a form, and still offers to cancel", async () => {
+    subscribe("standard");
+    invited("inv_viewer", "viewer@example.com", "VIEWER");
+    const text = await renderMembers("OWNER");
+    expect(text).toContain("3 of 3 taken.");
+    expect(screen.getByRole("heading", { name: "Invite someone" })).toBeTruthy();
+    expect(text).toContain(
+      "Every seat is taken by a member or a pending invitation. Inviting never adds a seat: a member who manages " +
+        "billing must buy one, or an invitation can be cancelled.",
+    );
+    expect(screen.queryByRole("button", { name: "Send invitation" })).toBeNull();
+    expect(cancelButtons()).toHaveLength(1);
+  });
+
+  it.each([
+    [{ notice: "invited" }, "status", "The invitation was sent. Its link works for 7 days."],
+    [
+      { notice: "cancelled" },
+      "status",
+      "The invitation was cancelled. Its link no longer works, and its seat is free.",
+    ],
+    [
+      { error: "already-invited" },
+      "alert",
+      "That email address already has a pending invitation. Cancel it to invite the address again.",
+    ],
+    [{ error: "gone" }, "alert", "That invitation is no longer pending: it was accepted, cancelled, or it expired."],
+  ] as const)("says what %o names", async (query, role, sentence) => {
+    subscribe("premium");
+    await renderMembers("OWNER", query);
+    expect(screen.getByRole(role).textContent).toBe(sentence);
+  });
+
+  it.each([
+    [{ notice: "<b>hello</b>" }],
+    [{ error: "constructor" }],
+    [{ notice: ["invited", "cancelled"] }],
+    [{ error: ["gone"] }],
+  ])("ignores %o, showing nothing it carries", async (query) => {
+    subscribe("premium");
+    const text = await renderMembers("OWNER", query);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(text).not.toContain("hello");
   });
 });
 

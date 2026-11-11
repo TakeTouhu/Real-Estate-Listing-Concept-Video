@@ -4,9 +4,9 @@ import { E2E_BASE_URL, E2E_EMAIL_OUTBOX_DIR } from "./environment";
 
 /**
  * The link last mailed to `to` of this kind, read from the web app's outbox as
- * a person reads their inbox (ADR-0126, ADR-0129, ADR-0133). The link is a
- * one-time secret: it is never printed, and a failure names neither it nor the
- * folder.
+ * a person reads their inbox (ADR-0126, ADR-0129, ADR-0133, ADR-0136). The
+ * link is a one-time secret: it is never printed, and a failure names neither
+ * it nor the folder.
  */
 async function mailedLink(kind: EmailKind, path: string, to: string): Promise<string> {
   const mail = (await readDevelopmentEmailOutbox(E2E_EMAIL_OUTBOX_DIR)).filter(
@@ -26,4 +26,9 @@ export function verificationLink(to: string): Promise<string> {
 /** The password reset link last mailed to `to`. */
 export function passwordResetLink(to: string): Promise<string> {
   return mailedLink("PASSWORD_RESET", "/reset-password", to);
+}
+
+/** The invitation link last mailed to `to`; its page arrives with AT-7. */
+export function invitationLink(to: string): Promise<string> {
+  return mailedLink("INVITATION", "/accept-invitation", to);
 }

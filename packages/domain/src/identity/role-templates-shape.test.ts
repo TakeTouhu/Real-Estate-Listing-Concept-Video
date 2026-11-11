@@ -86,14 +86,24 @@ describe("the old model is gone", () => {
 });
 
 describe("dormancy", () => {
-  it("adds no member-management caller to either application", () => {
-    const callers = ["apps/web", "apps/worker"]
+  const callersOf = (pattern: RegExp) =>
+    ["apps/web", "apps/worker", "apps/ops"]
       .flatMap((app) => sourceFiles(join(REPO_ROOT, app)))
-      // No application builds the membership service since AT-6a, and none
-      // calls its writes until AT-6b's routes (ADR-0135).
-      .filter((file) =>
-        /\.(invite|cancelInvitation|acceptInvitation|changeRole|removeMember)\(/.test(code(readFileSync(file, "utf8"))),
-      );
-    expect(callers).toEqual([]);
+      .filter((file) => pattern.test(code(readFileSync(file, "utf8"))))
+      .map((file) => file.slice(REPO_ROOT.length + 1))
+      .sort();
+
+  it("invites and cancels only from the members page's routes, through the web app's members module", () => {
+    // AT-6b (ADR-0136): the two routes call `inviteMember` and `cancelMemberInvitation` there.
+    expect(callersOf(/\.(invite|cancelInvitation)\(/)).toEqual(["apps/web/src/lib/members.ts"]);
+    expect(callersOf(/\b(inviteMember|cancelMemberInvitation)\(/)).toEqual([
+      "apps/web/src/app/api/organizations/[organizationId]/invitations/[invitationId]/cancel/route.ts",
+      "apps/web/src/app/api/organizations/[organizationId]/invitations/route.ts",
+      "apps/web/src/lib/members.ts",
+    ]);
+  });
+
+  it("adds no caller that accepts an invitation, changes a role or removes a member", () => {
+    expect(callersOf(/\.(acceptInvitation|changeRole|removeMember)\(/)).toEqual([]);
   });
 });

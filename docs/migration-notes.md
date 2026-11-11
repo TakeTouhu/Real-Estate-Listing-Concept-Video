@@ -2404,3 +2404,18 @@ cancels until AT-6b.
 (`DROP INDEX "invitations_one_pending_per_email";`), or leave it: AT-5's build
 writes no invitation. An invitation already marked `EXPIRED` or `REVOKED`
 stays so.
+
+## AT-6b — inviting and cancelling from the members page
+
+**No migration** (ADR-0136). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. The members
+page gets the invite form and the cancel buttons, and two form posts appear.
+Inviting needs `EMAIL_OUTBOX_DIR` and `APP_BASE_URL`, as email verification
+does; without them the page says nothing was saved. Production has no email
+service yet, so nothing is mailed there. The link's page, `/accept-invitation`,
+arrives with AT-7.
+
+**Rolling back.** To AT-6a's build: safe. Invitations already made stay
+pending, taking their seats until they expire after 7 days; that build cannot
+cancel them, and nothing can accept them yet.

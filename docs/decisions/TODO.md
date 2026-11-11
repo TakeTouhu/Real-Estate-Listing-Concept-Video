@@ -262,7 +262,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       blunts telling addresses with accounts from the rest by timing*)
       (*since AT-4c, ADR-0133, that ask is a route anyone can post to:
       `POST /api/auth/reset-password/request`; its limit must be in place
-      before production gets an email service*);
+      before production gets an email service*) (*since AT-6b, ADR-0136,
+      inviting sends mail to any address an `OWNER` or `ADMIN` enters, from
+      `POST /api/organizations/{id}/invitations`; each pending invitation
+      takes a seat, but cancelling and inviting again sends again, so its
+      limit too must be in place before production gets an email service*);
       progressive cooldown on login failure; a rate-limited request must not
       consume a Unit or cause a Provider POST; plan generation concurrency is a
       **separate** control from abuse limiting. The working value *5 failures /
