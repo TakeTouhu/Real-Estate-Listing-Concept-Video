@@ -865,6 +865,15 @@ a member's address is refused. The invitation is mailed after it is kept.
 Cancelling a pending invitation is under the role ceiling, audited, and frees
 its seat. No page or route invites or cancels yet (AT-6b).
 
+**AT-6b — inviting and cancelling from the members page** (ADR-0136, no
+migration): a member holding `member.manage` invites from the members page
+with the roles its ceiling allows, and cancels pending invitations of those
+roles. With no plan, or every seat taken, the page says why there is no form.
+Two same-origin form posts answer with the members page and a fixed code; the
+address and the token never reach the page's address. The link opens
+`/accept-invitation`, which AT-7 builds; until then the email goes only to the
+development outbox.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
