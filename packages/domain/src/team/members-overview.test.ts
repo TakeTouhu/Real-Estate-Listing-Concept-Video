@@ -131,6 +131,14 @@ describe("the members overview", () => {
     ]);
   });
 
+  it("leaves out, and does not count, a member whose account is gone by the time it is read", async () => {
+    subscribe("premium");
+    await deps.repos.memberships.create({ organizationId: orgId, userId: "usr_gone", role: "CREATOR" });
+    const { members, seats } = await service.overview(ids.OWNER, orgId);
+    expect(members.map(({ role }) => role)).toEqual(["OWNER", "ADMIN", "MANAGER", "CREATOR", "VIEWER", "BILLING"]);
+    expect(seats).toEqual({ included: 10, taken: 6 });
+  });
+
   it("shows only invitations that can still be accepted, oldest first, and never another organization's", async () => {
     await invite("later@example.com", { role: "VIEWER", createdAt: iso("2026-11-09T06:00:00.000Z") });
     await invite("first@example.com", { role: "MANAGER", createdAt: iso("2026-11-08T00:00:00.000Z") });
