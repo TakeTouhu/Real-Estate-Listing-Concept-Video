@@ -2428,3 +2428,17 @@ cancel them, and nothing can accept them yet.
 reachable: no page or route accepts an invitation until AT-7b.
 
 **Rolling back.** To AT-6b's build: safe. Nothing accepts in either build.
+
+## AT-7b — opening and accepting an invitation
+
+**No migration** (ADR-0138). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. The page
+`/accept-invitation` and two form posts appear, and the emailed links AT-6b
+sent start to work: invitations still pending can be accepted. Accepting needs
+no email configuration. A browser may now hold a `rev_invitation` cookie for
+up to a day.
+
+**Rolling back.** To AT-7a's build: safe. Memberships made by accepting stay.
+The links of invitations still pending lead nowhere again, and a waiting
+`rev_invitation` cookie is ignored until it expires.

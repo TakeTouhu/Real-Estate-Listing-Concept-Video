@@ -2,6 +2,7 @@ import { AppError } from "@app/shared";
 import { isDeliverableEmailAddress, outgoingEmail, type OutgoingEmail } from "../email/outgoing-email";
 import type { EmailSender } from "../email/ports";
 import { AuditAction, recordAudit } from "./audit";
+import { ACCOUNT_LINK_TOKEN_MAX_LENGTH } from "./email-verification-service";
 import { authorizeOrganization, effectivePermissionsOf, type AuthContext } from "./authorization";
 import type { IdentityServiceDeps, InvitationAcceptance, InvitationCreation, MembershipChangeOutcome } from "./ports";
 import { mayAssignRole, scopeForRole, type Permission, type Role } from "./roles";
@@ -160,6 +161,18 @@ export function invitationMessage(
   });
 }
 
+/**
+ * What an open invitation offers, as the page its link opens shows it
+ * (ADR-0138): never the invited address, nor who invited.
+ */
+export interface InvitationOffer {
+  /** The organization's name, as the invitation email quotes it. */
+  readonly organizationName: string;
+  readonly role: Role;
+  /** The role as the invitation email words it: "a Creator". */
+  readonly invitedAs: string;
+}
+
 /** What a refused role change was trying to do, for its audit entry. */
 interface RefusedChange {
   readonly operation: "invite" | "cancel_invitation" | "change_role" | "remove_member" | "accept_invitation";
@@ -283,6 +296,27 @@ export class MembershipService {
       metadata: { email: invitation.email, role: invitation.role },
     });
     if (revoked === "STALE") throw new AppError("NOT_FOUND", "This invitation is no longer pending");
+  }
+
+  /**
+   * What the invitation of `token` offers, for the page its link opens
+   * (ADR-0138), or `null` for a token of no invitation, of one no longer
+   * pending or expired, or of an organization gone. The token is the key, as
+   * the email it came in is, so no sign-in is asked. It reads and writes
+   * nothing more: an expired invitation is not marked, so a mail scanner that
+   * opens the link changes nothing.
+   */
+  async describeInvitation(token: string): Promise<InvitationOffer | null> {
+    if (token.length === 0 || token.length > ACCOUNT_LINK_TOKEN_MAX_LENGTH) return null;
+    const invitation = await this.deps.repos.invitations.findByTokenHash(this.deps.tokens.hash(token));
+    if (!invitation || !isOpenInvitation(invitation, this.deps.clock.now())) return null;
+    const organization = await this.deps.repos.organizations.findById(invitation.organizationId);
+    if (!organization) return null;
+    return {
+      organizationName: quotedOrganizationName(organization.name),
+      role: invitation.role,
+      invitedAs: ROLE_NAMES[invitation.role],
+    };
   }
 
   /**

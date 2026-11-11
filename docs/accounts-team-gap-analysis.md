@@ -43,7 +43,7 @@ is split further where it would exceed about 500 changed lines.
 | AT-4 | Password reset (*split: AT-4a sign-up in one transaction, ADR-0130; AT-4b-1 asking for a link and the sign-in check, ADR-0131; AT-4b-2 the reset, ADR-0132; AT-4c the reset pages, ADR-0133*) | none |
 | AT-5 | Members page, read only, with seats used (ADR-0134) | none |
 | AT-6 | Invite and cancel, the seat limit, one pending invitation per email (*split: AT-6a the rules and migration 34, ADR-0135; AT-6b the page and routes, ADR-0136*) | 1 |
-| AT-7 | Accept an invitation with the invited email (*split: AT-7a the rules, ADR-0137; AT-7b the page and the route*) | none |
+| AT-7 | Accept an invitation with the invited email (*split: AT-7a the rules, ADR-0137; AT-7b the page and the route, ADR-0138*) | none |
 | AT-8 | Change a member's role, remove a member | none |
 | AT-9 | Groups page | none |
 | AT-10 | Property assignment on the Property page | none |

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { PROPERTY_TYPES, mayChangeMfaRequirement } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
+import { waitingInvitation } from "@/lib/invitations";
 import { getPropertyServices } from "@/lib/property";
 
 export const dynamic = "force-dynamic";
@@ -9,12 +10,14 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; joined?: string }>;
 }) {
   const current = await getCurrentUser();
   if (!current) {
     redirect("/login");
   }
+  // An invitation opened before signing in waits here until it is answered (ADR-0138).
+  if (await waitingInvitation()) redirect("/accept-invitation");
   const params = await searchParams;
   const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
   const services = getPropertyServices();
@@ -26,6 +29,7 @@ export default async function DashboardPage({
       properties: await services.properties.list(current.user.id, organization.id),
     })),
   );
+  const joined = groups.find(({ organization }) => organization.id === params.joined);
 
   return (
     <section>
@@ -36,6 +40,11 @@ export default async function DashboardPage({
       {params.error ? (
         <p className="status-bad" role="alert">
           {params.error}
+        </p>
+      ) : null}
+      {joined ? (
+        <p className="status-ok" role="status">
+          You joined {joined.organization.name} as {joined.role}.
         </p>
       ) : null}
 

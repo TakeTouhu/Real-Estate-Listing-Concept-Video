@@ -103,7 +103,16 @@ describe("dormancy", () => {
     ]);
   });
 
-  it("adds no caller that accepts an invitation, changes a role or removes a member", () => {
-    expect(callersOf(/\.(acceptInvitation|changeRole|removeMember)\(/)).toEqual([]);
+  it("accepts only from the invitation's route, through the web app's invitations module", () => {
+    // AT-7b (ADR-0138): the route calls `acceptInvitationAs` there.
+    expect(callersOf(/\.acceptInvitation\(/)).toEqual(["apps/web/src/lib/invitations.ts"]);
+    expect(callersOf(/\bacceptInvitationAs\(/)).toEqual([
+      "apps/web/src/app/api/invitations/accept/route.ts",
+      "apps/web/src/lib/invitations.ts",
+    ]);
+  });
+
+  it("adds no caller that changes a role or removes a member", () => {
+    expect(callersOf(/\.(changeRole|removeMember)\(/)).toEqual([]);
   });
 });
