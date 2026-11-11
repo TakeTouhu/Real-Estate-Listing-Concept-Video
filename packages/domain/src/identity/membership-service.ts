@@ -412,20 +412,23 @@ export class MembershipService {
   /**
    * Give a member another role (ADR-0057, ADR-0059), as the members page asks
    * (ADR-0139). The ceiling is asked of the role the member holds and of the
-   * new one. The role decides the member's scope; grants and Property
-   * assignments stay (ADR-0052 Decision 10, ADR-0058). A change to the role
-   * the member holds writes and audits nothing.
+   * new one. The role decides the member's scope; grants, groups and Property
+   * assignments stay (ADR-0052 Decision 10, ADR-0058). Given `seenRole`, the
+   * role the page showed, the change applies only while the member holds it.
+   * A change to the role the member holds writes and audits nothing.
    *
    * @throws AppError FORBIDDEN for a non-member, or for a member without
    *   `permission.manage` or past its ceiling (audited); NOT_FOUND for a
-   *   member who is not one; VALIDATION_FAILED with a
-   *   {@link MembershipChangeRefusal} as `details.reason`.
+   *   target who is not a member of this organization; VALIDATION_FAILED with
+   *   a {@link MembershipChangeRefusal} as `details.reason`, `STALE` too when
+   *   the member no longer holds `seenRole`.
    */
   async changeRole(
     actorUserId: string,
     organizationId: string,
     targetUserId: string,
     role: Role,
+    seenRole?: Role,
   ): Promise<Membership> {
     const refused = (currentRole: Role | null): RefusedChange => ({
       operation: "change_role",
@@ -439,6 +442,8 @@ export class MembershipService {
     if (!mayAssignRole(actor.role, target.role) || !mayAssignRole(actor.role, role)) {
       await this.refuse(actor, refused(target.role));
     }
+    // Asked after the ceiling, so a wrong role seen never spares a refusal its entry.
+    if (seenRole !== undefined && seenRole !== target.role) assertApplied("STALE");
     if (target.role === role) return target;
     // The ceiling was asked of the role just read: the change applies only while
     // the member still holds it, and never takes the last OWNER away.

@@ -148,14 +148,15 @@ async function joined(name: string, role: Role): Promise<string> {
   return userId;
 }
 
-/** Each role form: the member it names, the roles it offers, and where it posts. */
+/** Each role form: the member it names, the roles it offers, the role it shows, and where it posts. */
 function roleForms(): string[] {
   return screen.queryAllByRole("combobox", { name: /^New role for / }).map((select) => {
     const offered = [...select.querySelectorAll("option:not([disabled])")].map((option) => option.textContent);
-    const button = select.closest("form")?.querySelector("button")?.getAttribute("aria-label");
-    return `${select.getAttribute("aria-label")}: ${offered.join(", ")} (${button}) -> ${select
-      .closest("form")
-      ?.getAttribute("action")}`;
+    const form = select.closest("form");
+    const button = form?.querySelector("button")?.getAttribute("aria-label");
+    const from = form?.querySelector<HTMLInputElement>('input[type="hidden"][name="from"]')?.value;
+    const action = form?.getAttribute("action");
+    return `${select.getAttribute("aria-label")}: ${offered.join(", ")} from ${from} (${button}) -> ${action}`;
   });
 }
 
@@ -330,17 +331,17 @@ describe("changing a role on the members page", () => {
     const text = await renderMembers("OWNER");
     expect(text).toContain(
       "A member's role decides what they can do and which Properties they reach. Changing it keeps their " +
-        "individual permissions and Property assignments. An Owner, Admin or Billing member must use two-step " +
-        "sign-in. You cannot change your own role here.",
+        "individual permissions, groups and Property assignments. Owners, Admins and Billing members, and anyone " +
+        "allowed to manage permissions or billing, must use two-step sign-in. You cannot change your own role here.",
     );
     const members = `/api/organizations/${orgId}/members`;
     expect(roleForms()).toEqual([
-      `New role for owner@example.com: Admin, Manager, Creator, Viewer, Billing (Change the role of ` +
-        `owner@example.com) -> ${members}/${ownerId}/role`,
-      `New role for mika.admin@example.com: Owner, Manager, Creator, Viewer, Billing (Change the role of ` +
-        `mika.admin@example.com) -> ${members}/${adminId}/role`,
-      `New role for sora.creator@example.com: Owner, Admin, Manager, Viewer, Billing (Change the role of ` +
-        `sora.creator@example.com) -> ${members}/${creatorId}/role`,
+      `New role for owner@example.com: Admin, Manager, Creator, Viewer, Billing from OWNER ` +
+        `(Change the role of owner@example.com) -> ${members}/${ownerId}/role`,
+      `New role for mika.admin@example.com: Owner, Manager, Creator, Viewer, Billing from ADMIN ` +
+        `(Change the role of mika.admin@example.com) -> ${members}/${adminId}/role`,
+      `New role for sora.creator@example.com: Owner, Admin, Manager, Viewer, Billing from CREATOR ` +
+        `(Change the role of sora.creator@example.com) -> ${members}/${creatorId}/role`,
     ]);
     const select = screen.getByRole("combobox", { name: "New role for sora.creator@example.com" });
     expect((select as HTMLSelectElement).value).toBe("");
@@ -357,10 +358,10 @@ describe("changing a role on the members page", () => {
     await renderMembers("ADMIN");
     const members = `/api/organizations/${orgId}/members`;
     expect(roleForms()).toEqual([
-      `New role for ren.manager@example.com: Creator, Viewer (Change the role of ren.manager@example.com) -> ` +
-        `${members}/${managerId}/role`,
-      `New role for yui.viewer@example.com: Manager, Creator (Change the role of yui.viewer@example.com) -> ` +
-        `${members}/${viewerId}/role`,
+      `New role for ren.manager@example.com: Creator, Viewer from MANAGER ` +
+        `(Change the role of ren.manager@example.com) -> ${members}/${managerId}/role`,
+      `New role for yui.viewer@example.com: Manager, Creator from VIEWER ` +
+        `(Change the role of yui.viewer@example.com) -> ${members}/${viewerId}/role`,
     ]);
   });
 

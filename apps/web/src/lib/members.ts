@@ -229,23 +229,32 @@ function membershipChangeRefusalOf(error: AppError): MembersError | null {
     : null;
 }
 
+/** The longest account id a members page's address may name; an account's is 20 characters. */
+export const MEMBER_ID_MAX_LENGTH = 64;
+
 /**
- * Give a member another role, as the members page's form asks (ADR-0139). The
- * membership service decides (`permission.manage`, the ceiling of the role
- * held and of the new one, the last `OWNER`) and audits it. A failure that is
- * not a refusal is logged by its error code alone.
+ * Give a member another role, as the members page's form asks (ADR-0139):
+ * `role`, and `from`, the role the page showed. The membership service
+ * decides (`permission.manage`, the ceiling of the role held and of the new
+ * one, the role still the one shown, the last `OWNER`) and audits it. An id
+ * no account has is refused before the service is asked, so it never reaches
+ * the audit log. A failure that is not a refusal is logged by its error code
+ * alone.
  */
 export async function changeMemberRole(
   actorUserId: string,
   organizationId: string,
   memberUserId: string,
-  form: { readonly role: string },
+  form: { readonly role: string; readonly from: string },
   log: Pick<Logger, "error"> = getMembersLogger(),
 ): Promise<MembersOutcome> {
-  const { role } = form;
+  const { role, from } = form;
+  if (memberUserId.length === 0 || memberUserId.length > MEMBER_ID_MAX_LENGTH) return { error: "not-a-member" };
   if (!isRole(role)) return { error: "new-role" };
+  // A form without the role it showed cannot say the member still holds it.
+  if (!isRole(from)) return { error: "member-changed" };
   try {
-    await getMembershipService().changeRole(actorUserId, organizationId, memberUserId, role);
+    await getMembershipService().changeRole(actorUserId, organizationId, memberUserId, role, from);
     return { notice: "role-changed" };
   } catch (error) {
     const refusal = error instanceof AppError ? membershipChangeRefusalOf(error) : null;

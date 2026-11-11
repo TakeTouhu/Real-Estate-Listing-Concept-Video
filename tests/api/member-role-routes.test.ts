@@ -145,7 +145,7 @@ const audited = (action: string) => deps.repos.auditLogs.all().filter((entry) =>
 
 describe("changing a member's role", () => {
   it("gives the member the role, and audits it with the scope it brings", async () => {
-    expect(landing(await changing(ids.CREATOR!, { role: "MANAGER" }))).toBe("notice=role-changed");
+    expect(landing(await changing(ids.CREATOR!, { role: "MANAGER", from: "CREATOR" }))).toBe("notice=role-changed");
     expect(await roleOf(ids.CREATOR!)).toBe("MANAGER");
     expect(audited("member.role_changed").map(({ actorUserId, metadata }) => ({ actorUserId, metadata }))).toEqual([
       {
@@ -157,19 +157,25 @@ describe("changing a member's role", () => {
 
   it("lets an admin move a member below its ceiling, and an owner make another owner", async () => {
     await signIn("team.admin");
-    expect(landing(await changing(ids.VIEWER!, { role: "CREATOR" }))).toBe("notice=role-changed");
+    expect(landing(await changing(ids.VIEWER!, { role: "CREATOR", from: "VIEWER" }))).toBe("notice=role-changed");
     await signIn("owner");
-    expect(landing(await changing(ids.ADMIN!, { role: "OWNER" }))).toBe("notice=role-changed");
+    expect(landing(await changing(ids.ADMIN!, { role: "OWNER", from: "ADMIN" }))).toBe("notice=role-changed");
     expect([await roleOf(ids.ADMIN!), await roleOf(ids.VIEWER!)]).toEqual(["OWNER", "CREATOR"]);
   });
 
   it("writes and audits nothing for the role the member holds", async () => {
     const entries = deps.repos.auditLogs.all().length;
-    expect(landing(await changing(ids.VIEWER!, { role: "VIEWER" }))).toBe("notice=role-changed");
+    expect(landing(await changing(ids.VIEWER!, { role: "VIEWER", from: "VIEWER" }))).toBe("notice=role-changed");
     expect(deps.repos.auditLogs.all()).toHaveLength(entries);
   });
 
-  it.each([[{}], [{ role: "" }], [{ role: "REVIEWER" }], [{ role: "manager" }], [{ role: "constructor" }]])(
+  it.each([
+    [{ from: "VIEWER" }],
+    [{ role: "", from: "VIEWER" }],
+    [{ role: "REVIEWER", from: "VIEWER" }],
+    [{ role: "manager", from: "VIEWER" }],
+    [{ role: "constructor", from: "VIEWER" }],
+  ])(
     "refuses %o without asking the service",
     async (fields) => {
       const entries = deps.repos.auditLogs.all().length;
@@ -188,7 +194,7 @@ describe("changing a member's role", () => {
     await member(`acting.${actor}`, actor);
     await signIn(`acting.${actor}`);
     const targetId = target === "OWNER" ? ownerId : ids[target]!;
-    expect(landing(await changing(targetId, { role }))).toBe("error=may-not-change-role");
+    expect(landing(await changing(targetId, { role, from: target }))).toBe("error=may-not-change-role");
     expect(await roleOf(targetId)).toBe(target);
     expect(audited("member.role_change_refused").map(({ metadata }) => metadata["operation"])).toEqual([
       "change_role",
@@ -197,31 +203,74 @@ describe("changing a member's role", () => {
 
   it("finds no member who is unknown, an outsider, or of another organization", async () => {
     const outsider = await register("outsider");
-    expect(landing(await changing("usr_unknown", { role: "VIEWER" }))).toBe("error=not-a-member");
-    expect(landing(await changing(outsider, { role: "VIEWER" }))).toBe("error=not-a-member");
+    expect(landing(await changing("usr_unknown", { role: "VIEWER", from: "CREATOR" }))).toBe("error=not-a-member");
+    expect(landing(await changing(outsider, { role: "VIEWER", from: "CREATOR" }))).toBe("error=not-a-member");
     const { organization } = await new OrganizationService(deps).createOrganization(outsider, { name: "Elsewhere" });
     const theirs = await member("their.creator", "CREATOR", organization.id);
-    expect(landing(await changing(theirs, { role: "VIEWER" }))).toBe("error=not-a-member");
+    expect(landing(await changing(theirs, { role: "VIEWER", from: "CREATOR" }))).toBe("error=not-a-member");
     // Through the other organization's address, the owner is no member there at all.
-    expect(landing(await changing(theirs, { role: "VIEWER" }, organization.id), organization.id)).toBe(
+    expect(landing(await changing(theirs, { role: "VIEWER", from: "CREATOR" }, organization.id), organization.id)).toBe(
       "error=may-not-change-role",
     );
     expect(await roleOf(theirs, organization.id)).toBe("CREATOR");
   });
 
+  it("changes no member whose role is not the one the page showed", async () => {
+    // The page showed a Manager; the member is a Creator now.
+    expect(landing(await changing(ids.CREATOR!, { role: "VIEWER", from: "MANAGER" }))).toBe("error=member-changed");
+    expect(await roleOf(ids.CREATOR!)).toBe("CREATOR");
+    expect(audited("member.role_changed")).toEqual([]);
+  });
+
+  it.each([[{ role: "VIEWER" }], [{ role: "VIEWER", from: "" }], [{ role: "VIEWER", from: "creator" }]])(
+    "changes nothing for %o, which does not say the role it showed",
+    async (fields) => {
+      const entries = deps.repos.auditLogs.all().length;
+      expect(landing(await changing(ids.CREATOR!, fields))).toBe("error=member-changed");
+      expect(await roleOf(ids.CREATOR!)).toBe("CREATOR");
+      expect(deps.repos.auditLogs.all()).toHaveLength(entries);
+    },
+  );
+
+  it("asks the service nothing for a form without the role it showed, whoever posts it", async () => {
+    await member("acting.viewer", "VIEWER");
+    await signIn("acting.viewer");
+    const entries = deps.repos.auditLogs.all().length;
+    expect(landing(await changing(ids.CREATOR!, { role: "ADMIN", from: "" }))).toBe("error=member-changed");
+    expect(deps.repos.auditLogs.all()).toHaveLength(entries);
+  });
+
+  it("asks the ceiling before the role shown, so a wrong one is still audited", async () => {
+    await signIn("team.admin");
+    expect(landing(await changing(ownerId, { role: "VIEWER", from: "VIEWER" }))).toBe("error=may-not-change-role");
+    expect(audited("member.role_change_refused")).toHaveLength(1);
+  });
+
+  it("refuses unread an id longer than any account's, auditing nothing", async () => {
+    await member("acting.viewer", "VIEWER");
+    await signIn("acting.viewer");
+    // An id of the longest length still reaches the service, which audits a VIEWER's refusal.
+    expect(landing(await changing("u".repeat(64), { role: "ADMIN", from: "VIEWER" }))).toBe(
+      "error=may-not-change-role",
+    );
+    const entries = deps.repos.auditLogs.all().length;
+    expect(landing(await changing("u".repeat(65), { role: "ADMIN", from: "VIEWER" }))).toBe("error=not-a-member");
+    expect(deps.repos.auditLogs.all()).toHaveLength(entries);
+  });
+
   it("never takes the last owner away", async () => {
-    expect(landing(await changing(ownerId, { role: "ADMIN" }))).toBe("error=last-owner");
+    expect(landing(await changing(ownerId, { role: "ADMIN", from: "OWNER" }))).toBe("error=last-owner");
     expect(await roleOf(ownerId)).toBe("OWNER");
   });
 
   it("says when the member changed after the ceiling was asked", async () => {
     vi.spyOn(deps.repos.memberships, "changeRole").mockResolvedValue("STALE");
-    expect(landing(await changing(ids.CREATOR!, { role: "VIEWER" }))).toBe("error=member-changed");
+    expect(landing(await changing(ids.CREATOR!, { role: "VIEWER", from: "CREATOR" }))).toBe("error=member-changed");
   });
 
   it("answers a refusal it does not know as a failure, never by a name every object has", async () => {
     vi.spyOn(deps.repos.memberships, "changeRole").mockResolvedValue("constructor" as "STALE");
-    expect(landing(await changing(ids.CREATOR!, { role: "VIEWER" }))).toBe("error=role-change-failed");
+    expect(landing(await changing(ids.CREATOR!, { role: "VIEWER", from: "CREATOR" }))).toBe("error=role-change-failed");
   });
 
   it("logs a failure by its code alone, and says to check the list", async () => {
@@ -229,7 +278,7 @@ describe("changing a member's role", () => {
       new Error(`lost team.creator@example.com ${ids.CREATOR}`),
     );
     const logged: unknown[] = [];
-    const outcome = await changeMemberRole(ownerId, orgId, ids.CREATOR!, { role: "VIEWER" }, {
+    const outcome = await changeMemberRole(ownerId, orgId, ids.CREATOR!, { role: "VIEWER", from: "CREATOR" }, {
       error: (message, fields) => logged.push({ message, fields }),
     });
     expect(outcome).toEqual({ error: "role-change-failed" });
@@ -242,14 +291,14 @@ describe("changing a member's role", () => {
     ["another site", { origin: "https://evil.example.net" }],
     ["another origin of the same site", { origin: "https://files.vtavision.test" }],
   ])("refuses a post from %s before reading anything", async (_what, headers) => {
-    const response = await changing(ids.VIEWER!, { role: "ADMIN" }, orgId, headers);
+    const response = await changing(ids.VIEWER!, { role: "ADMIN", from: "VIEWER" }, orgId, headers);
     expect(response.status).toBe(403);
     expect(await roleOf(ids.VIEWER!)).toBe("VIEWER");
   });
 
   it("sends a signed-out visitor to sign in, changing nothing", async () => {
     cookie.value = undefined;
-    const response = await changing(ids.VIEWER!, { role: "ADMIN" });
+    const response = await changing(ids.VIEWER!, { role: "ADMIN", from: "VIEWER" });
     expect(response.status).toBe(303);
     expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
     expect(await roleOf(ids.VIEWER!)).toBe("VIEWER");

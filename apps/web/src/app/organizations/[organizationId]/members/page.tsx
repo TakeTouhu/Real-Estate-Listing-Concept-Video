@@ -92,8 +92,9 @@ export default async function MembersPage({
         {overview.assignableRoles.length > 0 ? (
           <p className="muted">
             A member&apos;s role decides what they can do and which Properties they reach. Changing it keeps their
-            individual permissions and Property assignments. An Owner, Admin or Billing member must use two-step
-            sign-in. You cannot change your own role here.
+            individual permissions, groups and Property assignments. Owners, Admins and Billing members, and anyone
+            allowed to manage permissions or billing, must use two-step sign-in. You cannot change your own role
+            here.
           </p>
         ) : null}
         <ul>
@@ -145,7 +146,8 @@ export default async function MembersPage({
 
 /**
  * The role form of a member other than the viewer whose role the viewer may
- * give: the other roles it may give, none chosen to begin with.
+ * give: the other roles it may give, none chosen to begin with, and the role
+ * shown, so a member changed since is not changed again unseen.
  */
 function ChangeRole({
   organizationId,
@@ -165,6 +167,7 @@ function ChangeRole({
         member.userId,
       )}/role`}
     >
+      <input type="hidden" name="from" value={member.role} />
       <select name="role" defaultValue="" required aria-label={`New role for ${member.email}`}>
         <option value="" disabled>
           New role
