@@ -3,7 +3,7 @@ import { AuthService } from "./auth-service";
 import { OrganizationService } from "./organization-service";
 import { MembershipService } from "./membership-service";
 import type { Role } from "./roles";
-import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, markEmailVerified, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 
 /**
  * Membership changes made concurrently (Phase 6E, ADR-0059). Each change checks
@@ -17,13 +17,15 @@ const CHANGED = "This member changed meanwhile; reload and try again";
 
 let deps: TestDeps;
 let members: MembershipService;
+let seats: number;
 let orgId: string;
 let ids: Record<"owner" | "coOwner" | "admin" | "creator" | "newcomer" | "other", string>;
 
 beforeEach(async () => {
   deps = createTestDeps();
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
-  members = new MembershipService(deps, membershipTestOptions());
+  seats = 30;
+  members = new MembershipService(deps, membershipTestOptions({ includedSeats: () => Promise.resolve(seats) }));
   const register = async (name: string) =>
     (await auth.register({ email: `${name}@example.com`, name, password: PASSWORD })).id;
   const owner = await register("owner");
@@ -111,35 +113,45 @@ describe("a change checked against a role the member no longer holds", () => {
 });
 
 describe("acceptance under concurrency", () => {
-  it("makes one membership of two acceptances of one invitation", async () => {
-    const { token } = await members.invite(ids.owner, { organizationId: orgId, email: "n@example.com", role: "CREATOR" });
+  async function inviteVerified(userId: string, name: string): Promise<string> {
+    markEmailVerified(deps, userId);
+    const invited = await members.invite(ids.owner, {
+      organizationId: orgId,
+      email: `${name}@example.com`,
+      role: "CREATOR",
+    });
+    return invited.token;
+  }
+
+  it("makes one membership of one invitation accepted twice at once", async () => {
+    const token = await inviteVerified(ids.newcomer, "newcomer");
     const results = await Promise.allSettled([
       members.acceptInvitation(ids.newcomer, token),
-      members.acceptInvitation(ids.other, token),
+      members.acceptInvitation(ids.newcomer, token),
     ]);
     expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected"]);
     expect((results[1] as PromiseRejectedResult).reason).toMatchObject({
       code: "NOT_FOUND",
       message: "Invitation is invalid or already used",
     });
-    expect([await roleOf(ids.newcomer), await roleOf(ids.other)]).toEqual(["CREATOR", undefined]);
+    expect(await roleOf(ids.newcomer)).toBe("CREATOR");
     expect(audited("invitation.accepted")).toHaveLength(1);
   });
 
-  it("accepts only one of two invitations a user accepts at once, leaving the other pending", async () => {
-    const first = await members.invite(ids.owner, { organizationId: orgId, email: "a@example.com", role: "CREATOR" });
-    const second = await members.invite(ids.owner, { organizationId: orgId, email: "b@example.com", role: "VIEWER" });
+  it("makes one member of two acceptances racing for the last seat, leaving the other pending", async () => {
+    const tokens = [await inviteVerified(ids.newcomer, "newcomer"), await inviteVerified(ids.other, "other")];
+    seats = 5;
     const results = await Promise.allSettled([
-      members.acceptInvitation(ids.newcomer, first.token),
-      members.acceptInvitation(ids.newcomer, second.token),
+      members.acceptInvitation(ids.newcomer, tokens[0]!),
+      members.acceptInvitation(ids.other, tokens[1]!),
     ]);
     expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected"]);
     expect((results[1] as PromiseRejectedResult).reason).toMatchObject({
       code: "VALIDATION_FAILED",
-      message: "User is already a member of this organization",
+      details: { reason: "NO_SEAT" },
     });
-    expect(await roleOf(ids.newcomer)).toBe("CREATOR");
-    const stored = await deps.repos.invitations.findByTokenHash(deps.tokens.hash(second.token));
+    expect([await roleOf(ids.newcomer), await roleOf(ids.other)]).toEqual(["CREATOR", undefined]);
+    const stored = await deps.repos.invitations.findByTokenHash(deps.tokens.hash(tokens[1]!));
     expect(stored?.status).toBe("PENDING");
     expect(audited("invitation.accepted")).toHaveLength(1);
   });

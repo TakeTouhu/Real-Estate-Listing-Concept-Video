@@ -5,7 +5,7 @@ import { MembershipService } from "./membership-service";
 import { authorizeOrganization } from "./authorization";
 import { ROLES, type Role } from "./roles";
 import type { AuditLog } from "./types";
-import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, markEmailVerified, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 
 /**
  * The role-assignment ceiling on every membership path (ADR-0052 Decision 10,
@@ -222,9 +222,16 @@ describe("acceptInvitation", () => {
     return { token, invitationId: invitation.id };
   }
 
+  /** The invited address's account, verified, as acceptance needs (ADR-0137). */
+  async function registerInvitee() {
+    const invitee = await fx.auth.register({ email: "invitee@example.com", name: "I", password: PASSWORD });
+    markEmailVerified(fx.deps, invitee.id);
+    return invitee;
+  }
+
   it("grants the role when the inviter may still assign it", async () => {
     const { token } = await inviteAs(fx.ids.ADMIN, "MANAGER");
-    const invitee = await fx.auth.register({ email: "invitee@example.com", name: "I", password: PASSWORD });
+    const invitee = await registerInvitee();
     const membership = await fx.members.acceptInvitation(invitee.id, token);
     expect(membership.role).toBe("MANAGER");
     const accepted = fx.deps.repos.auditLogs.all().find((entry) => entry.action === "invitation.accepted");
@@ -235,7 +242,7 @@ describe("acceptInvitation", () => {
     const { token, invitationId } = await inviteAs(fx.ownerId, "ADMIN");
     // A second OWNER demotes the inviter to VIEWER, who may assign nothing.
     await fx.members.changeRole(fx.ids.OWNER, fx.orgId, fx.ownerId, "VIEWER");
-    const invitee = await fx.auth.register({ email: "invitee@example.com", name: "I", password: PASSWORD });
+    const invitee = await registerInvitee();
 
     await expect(fx.members.acceptInvitation(invitee.id, token)).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await roleOf(invitee.id)).toBeUndefined();
@@ -257,7 +264,7 @@ describe("acceptInvitation", () => {
     const { token } = await inviteAs(fx.ownerId, "ADMIN");
     // The inviter keeps member.manage but may no longer assign ADMIN.
     await fx.members.changeRole(fx.ids.OWNER, fx.orgId, fx.ownerId, "ADMIN");
-    const invitee = await fx.auth.register({ email: "invitee@example.com", name: "I", password: PASSWORD });
+    const invitee = await registerInvitee();
 
     await expect(fx.members.acceptInvitation(invitee.id, token)).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await roleOf(invitee.id)).toBeUndefined();
@@ -267,7 +274,7 @@ describe("acceptInvitation", () => {
   it("refuses an invitation whose inviter is no longer a member", async () => {
     const { token } = await inviteAs(fx.ids.ADMIN, "VIEWER");
     await fx.members.removeMember(fx.ownerId, fx.orgId, fx.ids.ADMIN);
-    const invitee = await fx.auth.register({ email: "invitee@example.com", name: "I", password: PASSWORD });
+    const invitee = await registerInvitee();
 
     await expect(fx.members.acceptInvitation(invitee.id, token)).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await roleOf(invitee.id)).toBeUndefined();

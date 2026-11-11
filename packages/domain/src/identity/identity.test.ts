@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AuthService } from "./auth-service";
 import { OrganizationService } from "./organization-service";
 import { MembershipService } from "./membership-service";
-import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, markEmailVerified, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 
 const PASSWORD = "password-123456";
 
@@ -118,7 +118,7 @@ describe("tenant isolation", () => {
   });
 
   it("denies mutations across tenants and by insufficient roles", async () => {
-    const { auth, orgs, members } = setup();
+    const { auth, orgs, members, deps } = setup();
     const owner = await auth.register({ email: "o@example.com", name: "O", password: PASSWORD });
     const outsider = await auth.register({ email: "x@example.com", name: "X", password: PASSWORD });
     const { organization } = await orgs.createOrganization(owner.id, { name: "Org" });
@@ -135,6 +135,7 @@ describe("tenant isolation", () => {
       role: "CREATOR",
     });
     const creator = await auth.register({ email: "c@example.com", name: "C", password: PASSWORD });
+    markEmailVerified(deps, creator.id);
     await members.acceptInvitation(creator.id, token);
     await expect(
       members.invite(creator.id, { organizationId: organization.id, email: "d@example.com", role: "CREATOR" }),
@@ -153,6 +154,7 @@ describe("invitations and membership lifecycle", () => {
       role: "CREATOR",
     });
     const creator = await auth.register({ email: "c@example.com", name: "C", password: PASSWORD });
+    markEmailVerified(deps, creator.id);
     const membership = await members.acceptInvitation(creator.id, token);
     expect(membership.role).toBe("CREATOR");
 
@@ -183,6 +185,7 @@ describe("invitations and membership lifecycle", () => {
     const creator = await auth.register({ email: "c@example.com", name: "C", password: PASSWORD });
     await expect(members.acceptInvitation(creator.id, token)).rejects.toMatchObject({
       code: "VALIDATION_FAILED",
+      details: { reason: "EXPIRED" },
     });
     const stored = await deps.repos.invitations.findByTokenHash(deps.tokens.hash(token));
     expect(stored?.status).toBe("EXPIRED");

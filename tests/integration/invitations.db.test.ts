@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import type { InvitationCreation, NewInvitation } from "@app/domain";
+import type { Invitation, InvitationCreation, NewInvitation } from "@app/domain";
 import { createPrismaIdentityRepositories } from "@app/database";
 
 /**
@@ -10,14 +10,19 @@ import { createPrismaIdentityRepositories } from "@app/database";
  * expired are counted against the seats; two invitations racing for one seat
  * or one address make one; migration 34's index admits one pending invitation
  * per address, and an invitation it refuses is answered ALREADY_INVITED; a
- * cancellation commits with its audit entry, once.
+ * cancellation commits with its audit entry, once. Accepting (AT-7a,
+ * ADR-0137) counts the members only, under the organization's lock: two
+ * acceptances racing for the last seat make one member.
  */
 
 const ORG = "org_itest_invites";
 const OTHER_ORG = "org_itest_invites_other";
 const OWNER = "usr_itest_invites_owner";
 const MEMBER = "usr_itest_invites_member";
-const USERS = [OWNER, MEMBER];
+// Accounts that accept, members of no organization until they do.
+const ONE = "usr_itest_invites_one";
+const TWO = "usr_itest_invites_two";
+const USERS = [OWNER, MEMBER, ONE, TWO];
 // An audit entry naming an organization that does not exist breaks its foreign
 // key, so it cannot be written.
 const UNWRITABLE = "org_itest_invites_missing";
@@ -50,6 +55,9 @@ beforeEach(async () => {
   await cleanup();
   await prisma.user.create({ data: { id: OWNER, email: "owner@itest-invites.example", name: OWNER } });
   await prisma.user.create({ data: { id: MEMBER, email: "member@itest-invites.example", name: MEMBER } });
+  for (const id of [ONE, TWO]) {
+    await prisma.user.create({ data: { id, email: `${id}@itest-invites.example`, name: id } });
+  }
   for (const id of [ORG, OTHER_ORG]) await prisma.organization.create({ data: { id, name: id, slug: `slug-${id}` } });
   await prisma.membership.createMany({
     data: [
@@ -98,6 +106,9 @@ async function statuses(): Promise<string[]> {
   return rows.map(({ email, status }) => `${email} ${status}`);
 }
 
+/** A clock that stays at `instant`. */
+const at = (instant: Date) => ({ now: () => instant });
+
 const auditCount = (action: string) => prisma.auditLog.count({ where: { organizationId: ORG, action } });
 
 async function until(condition: () => Promise<boolean>): Promise<void> {
@@ -121,6 +132,7 @@ const holdOrganization = (tx: Prisma.TransactionClient) =>
 async function contend(
   contenders: (() => Promise<unknown>)[],
   hold: (tx: Prisma.TransactionClient) => Promise<unknown> = holdOrganization,
+  beforeRelease: () => void = () => undefined,
 ): Promise<PromiseSettledResult<unknown>[]> {
   let release = (): void => undefined;
   const released = new Promise<void>((resolve) => (release = resolve));
@@ -144,6 +156,7 @@ async function contend(
       return (row?.waiting ?? 0) >= contenders.length;
     });
   } finally {
+    beforeRelease();
     release();
   }
   await holder;
@@ -288,7 +301,7 @@ describe.skipIf(!HAS_DB)("cancelling an invitation", () => {
       const settled = await contend(
         [
           () => invitations.revoke(ORG, id, NOW, audit("invitation.revoked")),
-          () => invitations.accept(found, newcomer, NOW, audit("invitation.accepted")),
+          () => invitations.accept(found, newcomer, audit("invitation.accepted"), { includedSeats: 5, clock: at(NOW) }),
         ],
         (tx) => tx.$queryRaw`SELECT 1 FROM "invitations" WHERE "id" = ${id} FOR UPDATE`,
       );
@@ -300,5 +313,87 @@ describe.skipIf(!HAS_DB)("cancelling an invitation", () => {
     } finally {
       await prisma.user.delete({ where: { id: newcomer } });
     }
+  });
+});
+
+describe.skipIf(!HAS_DB)("accepting within the seats", () => {
+  async function pending(email: string): Promise<Invitation> {
+    const created = await invite(email);
+    if (created.outcome !== "CREATED") throw new Error(created.outcome);
+    return created.invitation;
+  }
+
+  const accept = (found: Invitation, userId: string, includedSeats = 5, now = NOW) =>
+    invitations.accept(found, userId, audit("invitation.accepted"), { includedSeats, clock: at(now) });
+
+  const membersOf = async () =>
+    (await prisma.membership.findMany({ where: { organizationId: ORG }, orderBy: { userId: "asc" } })).map(
+      ({ userId, role }) => `${userId} ${role}`,
+    );
+
+  it("writes the membership, the invitation accepted at now, and its audit entry", async () => {
+    const found = await pending("one@itest-invites.example");
+    expect(await accept(found, ONE)).toMatchObject({
+      outcome: "ACCEPTED",
+      membership: { organizationId: ORG, userId: ONE, role: "VIEWER" },
+    });
+    expect(await prisma.invitation.findUnique({ where: { id: found.id } })).toMatchObject({
+      status: "ACCEPTED",
+      acceptedAt: NOW,
+    });
+    expect(await membersOf()).toContain(`${ONE} VIEWER`);
+    expect(await auditCount("invitation.accepted")).toBe(1);
+  });
+
+  it("writes nothing for an invitation expired by now, or no longer pending, even with no seat free", async () => {
+    const found = await pending("one@itest-invites.example");
+    expect(await accept(found, ONE, 5, LATER)).toEqual({ outcome: "STALE" });
+    await invitations.revoke(ORG, found.id, NOW, audit("invitation.revoked"));
+    expect(await accept(found, ONE, 2)).toEqual({ outcome: "STALE" });
+    expect(await statuses()).toEqual(["one@itest-invites.example REVOKED"]);
+    expect(await membersOf()).toEqual([`${MEMBER} CREATOR`, `${OWNER} OWNER`]);
+    expect(await auditCount("invitation.accepted")).toBe(0);
+  });
+
+  it("counts the members only, and refuses at the seats, leaving the invitation pending", async () => {
+    const [one, two] = [await pending("one@itest-invites.example"), await pending("two@itest-invites.example")];
+    expect((await accept(one, ONE, 3)).outcome).toBe("ACCEPTED");
+    expect(await accept(two, TWO, 3)).toEqual({ outcome: "NO_SEAT" });
+    expect((await statuses()).sort()).toEqual([
+      "one@itest-invites.example ACCEPTED",
+      "two@itest-invites.example PENDING",
+    ]);
+    expect(await membersOf()).not.toContain(`${TWO} VIEWER`);
+    expect(await auditCount("invitation.accepted")).toBe(1);
+    expect(await accept(one, ONE, 3)).toEqual({ outcome: "STALE" });
+  });
+
+  it("makes one member of two acceptances racing for the last seat", async () => {
+    const [one, two] = [await pending("one@itest-invites.example"), await pending("two@itest-invites.example")];
+    const results = await contend([() => accept(one, ONE, 3), () => accept(two, TWO, 3)]);
+    expect(outcomes(results)).toEqual(["ACCEPTED", "NO_SEAT"]);
+    expect(await prisma.membership.count({ where: { organizationId: ORG } })).toBe(3);
+    expect((await statuses()).map((row) => row.split(" ")[1]).sort()).toEqual(["ACCEPTED", "PENDING"]);
+    expect(await auditCount("invitation.accepted")).toBe(1);
+  });
+
+  it("lets an acceptance and an invitation racing for the last seat each wait on the lock", async () => {
+    const one = await pending("one@itest-invites.example");
+    const results = await contend([() => accept(one, ONE, 3), () => invite("two@itest-invites.example", 3)]);
+    expect(outcomes(results)).toEqual(["ACCEPTED", "NO_SEAT"]);
+    expect(await statuses()).toEqual(["one@itest-invites.example ACCEPTED"]);
+  });
+
+  it("judges an acceptance that waited on the lock at the instant it holds it", async () => {
+    const one = await pending("one@itest-invites.example");
+    let released = false;
+    const clock = { now: () => (released ? LATER : NOW) };
+    const results = await contend(
+      [() => invitations.accept(one, ONE, audit("invitation.accepted"), { includedSeats: 5, clock })],
+      holdOrganization,
+      () => (released = true),
+    );
+    expect(outcomes(results)).toEqual(["STALE"]);
+    expect(await statuses()).toEqual(["one@itest-invites.example PENDING"]);
   });
 });

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { AuthService } from "../identity/auth-service";
 import { OrganizationService } from "../identity/organization-service";
 import { MembershipService } from "../identity/membership-service";
-import { createTestDeps, membershipTestOptions, type TestDeps } from "../testing/in-memory";
+import { createTestDeps, markEmailVerified, membershipTestOptions, type TestDeps } from "../testing/in-memory";
 import {
   InMemoryMediaAssetRepository,
   InMemoryPropertyRepository,
@@ -688,6 +688,7 @@ describe("tenant isolation for properties and assets", () => {
       role: "VIEWER",
     });
     const viewer = await auth.register({ email: "r@example.com", name: "R", password: PASSWORD });
+    markEmailVerified(ctx.deps, viewer.id);
     await members.acceptInvitation(viewer.id, token);
     // A VIEWER reaches only the Properties it is responsible for (Phase 6I).
     await ctx.properties.assign(ctx.ownerId, ctx.orgId, property.id, { responsibleUserId: viewer.id });
