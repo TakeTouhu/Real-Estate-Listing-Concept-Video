@@ -21,7 +21,8 @@ import { AppError, hotp } from "@app/shared";
  * dashboard links each organization to it. A holder of `member.manage` invites
  * with the roles it may assign and cancels those roles' invitations, and the
  * page says what a fixed code in its address names, and nothing else (AT-6b,
- * ADR-0136).
+ * ADR-0136). A holder of `permission.manage` gives other members the roles its
+ * ceiling allows (AT-8a, ADR-0139).
  */
 const PASSWORD = "password-123456";
 const KEY = "55".repeat(32);
@@ -137,6 +138,25 @@ function cancelButtons(): string[] {
   return screen
     .queryAllByRole("button", { name: /^Cancel the invitation of / })
     .map((button) => `${button.getAttribute("aria-label")} -> ${button.closest("form")?.getAttribute("action")}`);
+}
+
+/** A member of the organization, by name, holding `role`; returns its account's id. */
+async function joined(name: string, role: Role): Promise<string> {
+  const email = `${name.toLowerCase().replace(" ", ".")}@example.com`;
+  const userId = (await auth.register({ email, name, password: PASSWORD })).id;
+  await deps.repos.memberships.create({ organizationId: orgId, userId, role });
+  return userId;
+}
+
+/** Each role form: the member it names, the roles it offers, and where it posts. */
+function roleForms(): string[] {
+  return screen.queryAllByRole("combobox", { name: /^New role for / }).map((select) => {
+    const offered = [...select.querySelectorAll("option:not([disabled])")].map((option) => option.textContent);
+    const button = select.closest("form")?.querySelector("button")?.getAttribute("aria-label");
+    return `${select.getAttribute("aria-label")}: ${offered.join(", ")} (${button}) -> ${select
+      .closest("form")
+      ?.getAttribute("action")}`;
+  });
 }
 
 function subscribe(planKey: "standard" | "premium" | "enterprise"): void {
@@ -300,6 +320,76 @@ describe("inviting and cancelling on the members page", () => {
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(text).not.toContain("hello");
+  });
+});
+
+describe("changing a role on the members page", () => {
+  it("lets an owner give every other member any other role, but not change its own", async () => {
+    const adminId = await joined("Mika Admin", "ADMIN");
+    const creatorId = await joined("Sora Creator", "CREATOR");
+    const text = await renderMembers("OWNER");
+    expect(text).toContain(
+      "A member's role decides what they can do and which Properties they reach. Changing it keeps their " +
+        "individual permissions and Property assignments. An Owner, Admin or Billing member must use two-step " +
+        "sign-in. You cannot change your own role here.",
+    );
+    const members = `/api/organizations/${orgId}/members`;
+    expect(roleForms()).toEqual([
+      `New role for owner@example.com: Admin, Manager, Creator, Viewer, Billing (Change the role of ` +
+        `owner@example.com) -> ${members}/${ownerId}/role`,
+      `New role for mika.admin@example.com: Owner, Manager, Creator, Viewer, Billing (Change the role of ` +
+        `mika.admin@example.com) -> ${members}/${adminId}/role`,
+      `New role for sora.creator@example.com: Owner, Admin, Manager, Viewer, Billing (Change the role of ` +
+        `sora.creator@example.com) -> ${members}/${creatorId}/role`,
+    ]);
+    const select = screen.getByRole("combobox", { name: "New role for sora.creator@example.com" });
+    expect((select as HTMLSelectElement).value).toBe("");
+    expect((select as HTMLSelectElement).required).toBe(true);
+    expect(select.closest("form")?.getAttribute("method")).toBe("post");
+    expect(screen.queryByRole("combobox", { name: "New role for ken.owner@example.com" })).toBeNull();
+  });
+
+  it("lets an admin move only the members below its ceiling, among those roles", async () => {
+    await joined("Mika Admin", "ADMIN");
+    const managerId = await joined("Ren Manager", "MANAGER");
+    const viewerId = await joined("Yui Viewer", "VIEWER");
+    await joined("Kai Billing", "BILLING");
+    await renderMembers("ADMIN");
+    const members = `/api/organizations/${orgId}/members`;
+    expect(roleForms()).toEqual([
+      `New role for ren.manager@example.com: Creator, Viewer (Change the role of ren.manager@example.com) -> ` +
+        `${members}/${managerId}/role`,
+      `New role for yui.viewer@example.com: Manager, Creator (Change the role of yui.viewer@example.com) -> ` +
+        `${members}/${viewerId}/role`,
+    ]);
+  });
+
+  it.each([["MANAGER" as const], ["BILLING" as const]])("gives %s no role form, and no word of one", async (role) => {
+    await joined("Sora Creator", "CREATOR");
+    const text = await renderMembers(role);
+    expect(roleForms()).toEqual([]);
+    expect(text).not.toContain("Changing it keeps");
+  });
+
+  it.each([
+    [
+      { notice: "role-changed" },
+      "status",
+      "The member's role was changed. What they can do, and which Properties they reach, follow the new role now.",
+    ],
+    [{ error: "new-role" }, "alert", "Choose the member's new role."],
+    [{ error: "may-not-change-role" }, "alert", "You cannot give that member that role."],
+    [{ error: "not-a-member" }, "alert", "That person is not a member of this organization."],
+    [{ error: "last-owner" }, "alert", "The organization must keep an Owner. Make another member an Owner first."],
+    [
+      { error: "member-changed" },
+      "alert",
+      "That member's role changed meanwhile. Check it below, and change it again if you still need to.",
+    ],
+    [{ error: "role-change-failed" }, "alert", "Something went wrong. Check below whether the member's role changed."],
+  ] as const)("says what %o names", async (query, role, sentence) => {
+    await renderMembers("OWNER", query);
+    expect(screen.getByRole(role).textContent).toBe(sentence);
   });
 });
 

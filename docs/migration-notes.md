@@ -2442,3 +2442,15 @@ up to a day.
 **Rolling back.** To AT-7a's build: safe. Memberships made by accepting stay.
 The links of invitations still pending lead nowhere again, and a waiting
 `rev_invitation` cookie is ignored until it expires.
+
+## AT-8a — changing a member's role
+
+**No migration** (ADR-0139). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. One form post
+appears, and the members page shows an `OWNER` or `ADMIN` a role form on the
+other members whose role it may give. A change is audited as
+`member.role_changed`, as the service always did.
+
+**Rolling back.** To AT-7b's build: safe. Roles changed stay as they are; the
+page no longer offers to change them.

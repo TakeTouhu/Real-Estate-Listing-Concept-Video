@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import type { MembersOverview, Role } from "@app/domain";
+import type { MembersOverview, MembersOverviewMember, Role } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
@@ -31,7 +31,9 @@ type Query = { notice?: string | string[]; error?: string | string[] };
  * ADR-0134), for a holder of `member.view`. Viewing writes nothing. A holder
  * of `member.manage` invites with the roles it may assign, and cancels their
  * pending invitations (AT-6b, ADR-0136); the routes answer with a code this
- * page turns into a fixed sentence.
+ * page turns into a fixed sentence. A holder of `permission.manage` gives
+ * another member a role its ceiling allows, in place of one it allows (AT-8a,
+ * ADR-0139).
  */
 export default async function MembersPage({
   params,
@@ -87,12 +89,20 @@ export default async function MembersPage({
 
       <div className="card">
         <h2>Members ({overview.members.length})</h2>
+        {overview.assignableRoles.length > 0 ? (
+          <p className="muted">
+            A member&apos;s role decides what they can do and which Properties they reach. Changing it keeps their
+            individual permissions and Property assignments. An Owner, Admin or Billing member must use two-step
+            sign-in. You cannot change your own role here.
+          </p>
+        ) : null}
         <ul>
           {overview.members.map((member) => (
-            <li key={member.email}>
+            <li key={member.userId}>
               <strong>{member.name}</strong>
               {member.you ? " (you)" : null} · {member.email} · {ROLE_NAMES[member.role]} · joined{" "}
               {formatJst(member.joinedAt)}
+              <ChangeRole organizationId={organizationId} member={member} assignableRoles={overview.assignableRoles} />
             </li>
           ))}
         </ul>
@@ -130,6 +140,45 @@ export default async function MembersPage({
         <a href="/">Back to organizations</a>
       </p>
     </section>
+  );
+}
+
+/**
+ * The role form of a member other than the viewer whose role the viewer may
+ * give: the other roles it may give, none chosen to begin with.
+ */
+function ChangeRole({
+  organizationId,
+  member,
+  assignableRoles,
+}: {
+  organizationId: string;
+  member: MembersOverviewMember;
+  assignableRoles: readonly Role[];
+}) {
+  const roles = assignableRoles.filter((role) => role !== member.role);
+  if (member.you || !assignableRoles.includes(member.role) || roles.length === 0) return null;
+  return (
+    <form
+      method="post"
+      action={`/api/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(
+        member.userId,
+      )}/role`}
+    >
+      <select name="role" defaultValue="" required aria-label={`New role for ${member.email}`}>
+        <option value="" disabled>
+          New role
+        </option>
+        {roles.map((role) => (
+          <option key={role} value={role}>
+            {ROLE_NAMES[role]}
+          </option>
+        ))}
+      </select>{" "}
+      <button type="submit" aria-label={`Change the role of ${member.email}`}>
+        Change role
+      </button>
+    </form>
   );
 }
 

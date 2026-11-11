@@ -892,6 +892,14 @@ refusal is answered with a fixed sentence. A browser test follows an owner's
 invitation through a new colleague's sign-up and verification to the
 membership.
 
+**AT-8a — changing a member's role** (ADR-0139, no migration): the members
+page gives an `OWNER` or `ADMIN` a role form on each other member whose role
+it may give, offering the other roles within its ceiling. A same-origin form
+post calls the membership service, which asks the ceiling of both roles,
+keeps the last `OWNER` and audits the change; a change to the role held
+writes nothing. The browser test of joining by invitation ends with the owner
+making the new colleague a Viewer.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
