@@ -426,7 +426,8 @@ describe("removing a member on the members page", () => {
       "sora.creator@example.com will no longer be able to open this organization. Their account stays, and the " +
         "organization keeps its Properties, photos and videos. Properties they are responsible for are left with no " +
         "responsible user, and their individual permissions and group memberships here end. Invitations they sent " +
-        "can no longer be accepted, and stay listed until cancelled or expired. Their seat becomes free.",
+        "cannot be accepted while they are not a member, and stay listed until cancelled or expired. Their seat " +
+        "becomes free.",
     );
     expect(text).not.toContain("ken.owner@example.com will no longer");
   });

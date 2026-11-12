@@ -1383,7 +1383,16 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       their new role's ceiling. Cancelling them with the removal, or on the
       inviter's demotion (ADR-0139), would free the seats at once; it is a
       product decision, and it does not block the plan: the members page
-      lists them with a cancel button.
+      lists them with a cancel button. Either way, an acceptance reads the
+      inviter before its transaction, so one already past that check when a
+      removal commits still joins.
+- [ ] **Decide whether a role change or removal should lock the actor's own
+      membership.** `memberships.changeRole` and `memberships.remove` lock
+      the member they change, not the one acting (ADR-0059), so an `ADMIN`
+      demoted at the same moment can still finish a change it started as an
+      `ADMIN`. The organization's MFA setting already re-reads its actor
+      under a share lock (ADR-0065 Decision 19). The window is one request
+      wide; it does not block the plan.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

@@ -242,6 +242,13 @@ describe("removing a member", () => {
     expect(await roleOf(ownerId)).toBe("OWNER");
   });
 
+  it("leaves an owner's own removal to the service, which allows it while another owner remains", async () => {
+    // The page never offers it (ADR-0140); a crafted post is decided as any other.
+    const coOwner = await member("co.owner", "OWNER");
+    expect(landing(await removing(ownerId, { from: "OWNER" }))).toBe("notice=member-removed");
+    expect([await roleOf(ownerId), await roleOf(coOwner)]).toEqual([undefined, "OWNER"]);
+  });
+
   it("says when the member changed after the ceiling was asked", async () => {
     vi.spyOn(deps.repos.memberships, "remove").mockResolvedValue("STALE");
     expect(landing(await removing(ids.CREATOR!, { from: "CREATOR" }))).toBe("error=removal-member-changed");

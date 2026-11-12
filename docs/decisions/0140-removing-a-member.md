@@ -7,11 +7,12 @@ role, remove a member". AT-8a changed roles (ADR-0139); this part removes a
 member. The plan's default 6 applies: removing a member is not deleting their
 account. Builds on: ADR-0052 Decision 10 (the ceiling, Property-rooted
 access), ADR-0057 (removal needs `member.manage` and the ceiling of the
-member's role), ADR-0059 (a removal applies only to the role it was checked
-against, and never takes the last `OWNER` away), ADR-0060 (group memberships
-go with the membership), ADR-0062 Decision 5 (a removed member's Properties
-are unassigned), ADR-0137 (an invitation is accepted only while its inviter
-may still give its role), ADR-0139 (the role the page showed).
+member's role), ADR-0058 (individual grants), ADR-0059 (a removal applies
+only to the role it was checked against, never takes the last `OWNER` away,
+and takes the member's grants with it), ADR-0060 (group memberships go with
+it), ADR-0062 Decision 5 (a removed member's Properties are unassigned),
+ADR-0137 (an invitation is accepted only while its inviter may still give
+its role), ADR-0139 (the role the page showed).
 
 ## Context
 
@@ -37,23 +38,29 @@ remove a member of any role and an `ADMIN` a `MANAGER`, `CREATOR` or
 
 The page shows the form on each such member, **never on the viewer's own
 row**, for the reason ADR-0139 gives for roles: leaving an organization is a
-product decision recorded in `TODO.md`. The form is closed at first
-(`<details>`). Opening it says what removing does, then offers the
-**Remove member** button. What it says is what the service and the database
-do:
+product decision recorded in `TODO.md`. The service still lets an `OWNER`
+remove itself while another `OWNER` remains (ADR-0057, ADR-0059), so a
+crafted post can; the page does not offer it, and the other `OWNER` can make
+the removal instead. An `ADMIN` could not remove itself anyway.
+
+The form is closed at first (`<details>`). Opening it says what removing
+does, then offers the **Remove member** button. What it says is what the
+service and the database do:
 
 - the member can no longer open the organization: every request reads the
   memberships, so their next one is refused; their account stays, and their
-  sessions and other organizations are untouched;
+  sessions and other organizations are untouched. A short-lived signed
+  download link handed out before the removal names one file, not a member,
+  and works until it expires;
 - the organization keeps its Properties, photos and videos, whose access is
   Property-rooted, never by who made them (ADR-0052 Decision 10);
 - the Properties they are responsible for are left with no responsible user
   (ADR-0062 Decision 5), and their individual permissions and group
-  memberships in the organization go with the membership (ADR-0059,
-  ADR-0060);
-- invitations they sent can no longer be accepted, since acceptance asks the
-  inviter's membership again (ADR-0137); they stay listed, holding their
-  seats, until cancelled or expired;
+  memberships in the organization go with the membership (ADR-0058,
+  ADR-0059, ADR-0060);
+- invitations they sent cannot be accepted while they are not a member,
+  since acceptance asks the inviter's membership again (ADR-0137); they stay
+  listed, holding their seats, until cancelled or expired;
 - their seat becomes free. The plan, its seats and its charges do not change.
 
 **The form carries the role it shows** (`from`), as ADR-0139's role form
@@ -62,8 +69,8 @@ has since made an `OWNER` would remove that `OWNER`, a removal it never saw.
 With it, the removal applies only while the member holds the role the page
 showed (Decision 3).
 
-Hiding a form only spares a refusal. The service decides every post, and a
-post the page did not offer is refused and audited as before.
+Hiding a form only spares a refusal. The service decides every post: a post
+past the poster's permission or ceiling is refused and audited as before.
 
 ## Decision 2 — One form post, answered with the page and a fixed code
 
@@ -87,8 +94,8 @@ a removal as they are. The page shows a known code's fixed sentence and
 nothing for any other value or a repeated parameter. A member of another
 organization is answered as an unknown one. Anything else is logged with the
 error's code alone. The bound on the path's id is AT-8a's
-(`MEMBER_ID_MAX_LENGTH`, 64), for the same reason: a crafted id never reaches
-the refusal's audit entry.
+(`MEMBER_ID_MAX_LENGTH`, 64, where an account's id is 20 characters): an id
+longer than any account's never reaches the refusal's audit entry.
 
 ## Decision 3 — `removeMember` takes the role the page showed
 
@@ -107,9 +114,11 @@ change landing between the read and the write is still `STALE`.
   with `operation: "remove_member"`, as before.
 - A removed person can be invited again, and joins with the invited role and
   none of their earlier grants, groups or Property assignments.
-- The pending invitations a removed member sent hold seats until an `OWNER`
-  or `ADMIN` cancels them or they expire. Whether a removal should cancel
-  them is recorded in `TODO.md`.
+- The pending invitations a removed member sent hold seats until a member
+  who may cancel them does (an `ADMIN` only those for a `MANAGER`,
+  `CREATOR` or `VIEWER`) or they expire. Whether a removal should cancel
+  them is recorded in `TODO.md`, with an acceptance already past its check
+  of the inviter when the removal commits.
 - The dormancy test now allows `.removeMember(` in `lib/members.ts` only,
   called from this route through `removeOrganizationMember`.
 - The browser test of joining by invitation goes on: the owner removes the

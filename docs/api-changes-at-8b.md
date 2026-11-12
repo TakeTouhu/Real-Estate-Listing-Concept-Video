@@ -46,11 +46,12 @@ viewer's own row. It shows the sentence of each new code.
 sequenceDiagram
     participant B as Browser (OWNER or ADMIN)
     participant P as Members page
+    participant O as MembersOverviewService
     participant R as POST .../members/{userId}/remove
     participant S as MembershipService
     participant D as Database
     B->>P: GET /organizations/{id}/members
-    P->>S: overview: invitableRoles, members with userId
+    P->>O: overview: invitableRoles, members with userId
     P-->>B: a closed removal form on each member the viewer may remove
     B->>R: from (same-origin form post, after opening the form)
     R->>S: removeMember(actor, org, member, from)

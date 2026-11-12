@@ -257,9 +257,9 @@ export const MEMBER_ID_MAX_LENGTH = 64;
  * `role`, and `from`, the role the page showed. The membership service
  * decides (`permission.manage`, the ceiling of the role held and of the new
  * one, the role still the one shown, the last `OWNER`) and audits it. An id
- * no account has is refused before the service is asked, so it never reaches
- * the audit log. A failure that is not a refusal is logged by its error code
- * alone.
+ * longer than any account's is refused before the service is asked, so it
+ * never reaches the audit log. A failure that is not a refusal is logged by
+ * its error code alone.
  */
 export async function changeMemberRole(
   actorUserId: string,
@@ -288,9 +288,9 @@ export async function changeMemberRole(
  * Remove a member from the organization, as the members page's form asks
  * (ADR-0140): `from`, the role the page showed. The membership service
  * decides (`member.manage`, the ceiling of the role held, the role still the
- * one shown, the last `OWNER`) and audits it. An id no account has is refused
- * before the service is asked, so it never reaches the audit log. A failure
- * that is not a refusal is logged by its error code alone.
+ * one shown, the last `OWNER`) and audits it. An id longer than any account's
+ * is refused before the service is asked, so it never reaches the audit log.
+ * A failure that is not a refusal is logged by its error code alone.
  */
 export async function removeOrganizationMember(
   actorUserId: string,

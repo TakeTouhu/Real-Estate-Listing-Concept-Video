@@ -84,6 +84,7 @@ test("a colleague opens an emailed invitation, signs up, verifies, joins, gets a
   await expect(page.getByRole("heading", { name: "Members (1)" })).toBeVisible();
   await expect(page.getByText(colleague)).toHaveCount(0);
   await invitee.goto("/");
+  await expect(invitee.getByText("You are not a member of any organization yet.")).toBeVisible();
   await expect(invitee.getByRole("heading", { name: new RegExp(organizationName) })).toHaveCount(0);
   await invitee.close();
 });
