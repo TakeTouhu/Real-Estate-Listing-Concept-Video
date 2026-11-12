@@ -121,7 +121,12 @@ describe("dormancy", () => {
     ]);
   });
 
-  it("adds no caller that removes a member", () => {
-    expect(callersOf(/\.removeMember\(/)).toEqual([]);
+  it("removes a member only from the members page's route, through the web app's members module", () => {
+    // AT-8b (ADR-0140): the route calls `removeOrganizationMember` there.
+    expect(callersOf(/\.removeMember\(/)).toEqual(["apps/web/src/lib/members.ts"]);
+    expect(callersOf(/\bremoveOrganizationMember\(/)).toEqual([
+      "apps/web/src/app/api/organizations/[organizationId]/members/[userId]/remove/route.ts",
+      "apps/web/src/lib/members.ts",
+    ]);
   });
 });

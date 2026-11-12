@@ -901,6 +901,16 @@ the role shown, keeps the last `OWNER` and audits the change; a change to
 the role held writes nothing. The browser test of joining by invitation
 ends with the owner making the new colleague a Viewer.
 
+**AT-8b — removing a member** (ADR-0140, no migration): the members page
+gives an `OWNER` or `ADMIN` a closed removal form on each other member whose
+role it may give, which says what removing does before its button. A
+same-origin form post carries the role the page showed and calls the
+membership service, which asks the ceiling of the member's role, removes
+only a member still holding the role shown, keeps the last `OWNER`, leaves
+the member's Properties with no responsible user and audits the removal; the
+member's account stays. The browser test of joining by invitation ends with
+the owner removing the colleague.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

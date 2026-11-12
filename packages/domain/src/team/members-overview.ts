@@ -7,7 +7,8 @@ import { holdsSeat, includedSeats } from "./seats";
 /**
  * Who belongs to an organization, who is invited to it, and its seats, as a
  * holder of `member.view` sees them (AT-5, ADR-0134), and which roles the
- * viewer may invite (AT-6b, ADR-0136) and give a member (AT-8a, ADR-0139).
+ * viewer may invite with (AT-6b, ADR-0136), remove the members of (AT-8b,
+ * ADR-0140) and give a member (AT-8a, ADR-0139).
  *
  * **Read only.** Viewing writes nothing and audits nothing, as a `member.view`
  * listing never has: an invitation past its expiry is left as it is and simply
@@ -47,8 +48,9 @@ export interface MembersOverview {
   readonly seats: { readonly included: number; readonly taken: number } | null;
   /**
    * The roles the viewer may invite with, and so whose invitations it may
-   * cancel: with `member.manage`, those its role may assign (ADR-0052
-   * Decision 10); without it, none. In the order of `ROLES`.
+   * cancel and whose members it may remove (AT-8b, ADR-0140): with
+   * `member.manage`, those its role may assign (ADR-0052 Decision 10);
+   * without it, none. In the order of `ROLES`.
    */
   readonly invitableRoles: readonly Role[];
   /**

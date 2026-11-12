@@ -2454,3 +2454,15 @@ other members whose role it may give. A change is audited as
 
 **Rolling back.** To AT-7b's build: safe. Roles changed stay as they are; the
 page no longer offers to change them.
+
+## AT-8b — removing a member
+
+**No migration** (ADR-0140). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. One form post
+appears, and the members page shows an `OWNER` or `ADMIN` a removal form on
+the other members whose role it may give. A removal is audited as
+`member.removed`, as the service always did.
+
+**Rolling back.** To AT-8a's build: safe. Removed members stay removed, and
+their Properties stay unassigned; the page no longer offers to remove anyone.

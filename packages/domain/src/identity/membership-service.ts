@@ -460,10 +460,25 @@ export class MembershipService {
     return { ...target, role };
   }
 
+  /**
+   * Remove a member from the organization (ADR-0057, ADR-0059), as the
+   * members page asks (ADR-0140). The ceiling is asked of the role the member
+   * holds. The Properties it is responsible for are left with none
+   * (ADR-0062), and its grants and group memberships here go with it; its
+   * account stays. Given `seenRole`, the role the page showed, the removal
+   * applies only while the member holds it.
+   *
+   * @throws AppError FORBIDDEN for a non-member, or for a member without
+   *   `member.manage` or past its ceiling (audited); NOT_FOUND for a target
+   *   who is not a member of this organization; VALIDATION_FAILED with a
+   *   {@link MembershipChangeRefusal} as `details.reason`, `STALE` too when
+   *   the member no longer holds `seenRole`.
+   */
   async removeMember(
     actorUserId: string,
     organizationId: string,
     targetUserId: string,
+    seenRole?: Role,
   ): Promise<void> {
     const refused = (currentRole: Role | null): RefusedChange => ({
       operation: "remove_member",
@@ -476,6 +491,8 @@ export class MembershipService {
     if (!target) throw new AppError("NOT_FOUND", "Membership not found");
     // Removing a member takes its role away, so the ceiling is asked of it.
     if (!mayAssignRole(actor.role, target.role)) await this.refuse(actor, refused(target.role));
+    // Asked after the ceiling, so a wrong role seen never spares a refusal its entry.
+    if (seenRole !== undefined && seenRole !== target.role) assertApplied("STALE");
     assertApplied(
       // Its Properties become unassigned, and the entry counts them (ADR-0062).
       await this.deps.repos.memberships.remove(organizationId, targetUserId, target.role, (unassignedPropertyCount) => ({

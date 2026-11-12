@@ -33,7 +33,8 @@ type Query = { notice?: string | string[]; error?: string | string[] };
  * pending invitations (AT-6b, ADR-0136); the routes answer with a code this
  * page turns into a fixed sentence. A holder of `permission.manage` gives
  * another member a role its ceiling allows, in place of one it allows (AT-8a,
- * ADR-0139).
+ * ADR-0139), and a holder of `member.manage` removes another member whose role
+ * its ceiling allows (AT-8b, ADR-0140).
  */
 export default async function MembersPage({
   params,
@@ -104,6 +105,7 @@ export default async function MembersPage({
               {member.you ? " (you)" : null} · {member.email} · {ROLE_NAMES[member.role]} · joined{" "}
               {formatJst(member.joinedAt)}
               <ChangeRole organizationId={organizationId} member={member} assignableRoles={overview.assignableRoles} />
+              <RemoveMember organizationId={organizationId} member={member} removableRoles={overview.invitableRoles} />
             </li>
           ))}
         </ul>
@@ -182,6 +184,48 @@ function ChangeRole({
         Change role
       </button>
     </form>
+  );
+}
+
+/**
+ * The removal form of a member other than the viewer whose role the viewer
+ * may give. Removing needs what inviting with that role needs, `member.manage`
+ * and the ceiling, so the roles the viewer may invite with are the ones whose
+ * members it may remove. It opens first, saying what removing does, and
+ * carries the role shown, so a member changed since is not removed unseen.
+ */
+function RemoveMember({
+  organizationId,
+  member,
+  removableRoles,
+}: {
+  organizationId: string;
+  member: MembersOverviewMember;
+  removableRoles: readonly Role[];
+}) {
+  if (member.you || !removableRoles.includes(member.role)) return null;
+  return (
+    <details>
+      <summary aria-label={`Remove ${member.email}…`}>Remove…</summary>
+      <form
+        method="post"
+        action={`/api/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(
+          member.userId,
+        )}/remove`}
+      >
+        <input type="hidden" name="from" value={member.role} />
+        <p className="muted">
+          {member.email} will no longer be able to open this organization. Their account stays, and the
+          organization keeps its Properties, photos and videos. Properties they are responsible for are left with no
+          responsible user, and their individual permissions and group memberships here end. Invitations they sent
+          cannot be accepted while they are not a member, and stay listed until cancelled or expired. Their seat
+          becomes free.
+        </p>
+        <button type="submit" aria-label={`Remove member ${member.email}`}>
+          Remove member
+        </button>
+      </form>
+    </details>
   );
 }
 
