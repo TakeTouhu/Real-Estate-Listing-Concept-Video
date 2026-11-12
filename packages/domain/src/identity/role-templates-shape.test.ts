@@ -112,7 +112,16 @@ describe("dormancy", () => {
     ]);
   });
 
-  it("adds no caller that changes a role or removes a member", () => {
-    expect(callersOf(/\.(changeRole|removeMember)\(/)).toEqual([]);
+  it("changes a role only from the members page's route, through the web app's members module", () => {
+    // AT-8a (ADR-0139): the route calls `changeMemberRole` there.
+    expect(callersOf(/\.changeRole\(/)).toEqual(["apps/web/src/lib/members.ts"]);
+    expect(callersOf(/\bchangeMemberRole\(/)).toEqual([
+      "apps/web/src/app/api/organizations/[organizationId]/members/[userId]/role/route.ts",
+      "apps/web/src/lib/members.ts",
+    ]);
+  });
+
+  it("adds no caller that removes a member", () => {
+    expect(callersOf(/\.removeMember\(/)).toEqual([]);
   });
 });

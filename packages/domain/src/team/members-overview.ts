@@ -7,7 +7,7 @@ import { holdsSeat, includedSeats } from "./seats";
 /**
  * Who belongs to an organization, who is invited to it, and its seats, as a
  * holder of `member.view` sees them (AT-5, ADR-0134), and which roles the
- * viewer may invite (AT-6b, ADR-0136).
+ * viewer may invite (AT-6b, ADR-0136) and give a member (AT-8a, ADR-0139).
  *
  * **Read only.** Viewing writes nothing and audits nothing, as a `member.view`
  * listing never has: an invitation past its expiry is left as it is and simply
@@ -15,6 +15,8 @@ import { holdsSeat, includedSeats } from "./seats";
  */
 
 export interface MembersOverviewMember {
+  /** What changing the member's role names: the account's id, which accepts nothing. */
+  readonly userId: string;
   readonly name: string;
   readonly email: string;
   readonly role: Role;
@@ -49,6 +51,13 @@ export interface MembersOverview {
    * Decision 10); without it, none. In the order of `ROLES`.
    */
   readonly invitableRoles: readonly Role[];
+  /**
+   * The roles the viewer may give a member, and so the members whose role it
+   * may change, from one of these to another (AT-8a, ADR-0139): with
+   * `permission.manage`, those its role may assign (ADR-0052 Decision 10);
+   * without it, none. In the order of `ROLES`.
+   */
+  readonly assignableRoles: readonly Role[];
 }
 
 export interface MembersOverviewDeps {
@@ -94,6 +103,7 @@ export class MembersOverviewService {
           ? []
           : [
               {
+                userId: membership.userId,
                 name: user.name,
                 email: user.email,
                 role: membership.role,
@@ -107,13 +117,13 @@ export class MembersOverviewService {
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || compareIds(a.id, b.id))
       .map(({ id, email, role, createdAt, expiresAt }) => ({ id, email, role, invitedAt: createdAt, expiresAt }));
     const included = includedSeats(subscription);
+    const assignable = ROLES.filter((role) => mayAssignRole(actor.role, role));
     return {
       members,
       invitations: pending,
       seats: included === null ? null : { included, taken: members.length + pending.length },
-      invitableRoles: actor.permissions.includes("member.manage")
-        ? ROLES.filter((role) => mayAssignRole(actor.role, role))
-        : [],
+      invitableRoles: actor.permissions.includes("member.manage") ? assignable : [],
+      assignableRoles: actor.permissions.includes("permission.manage") ? assignable : [],
     };
   }
 }

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { AppError } from "@app/shared";
 import { AuthService } from "./auth-service";
 import { OrganizationService } from "./organization-service";
 import { MembershipService } from "./membership-service";
@@ -54,14 +55,15 @@ function audited(action: string) {
   return deps.repos.auditLogs.all().filter((entry) => entry.action === action);
 }
 
-/** The one fulfilled result and the one refusal's message, in that order. */
-function oneEach(results: PromiseSettledResult<unknown>[]): [number, string] {
+/** The one fulfilled result, and the one refusal's message and reason (ADR-0139), in that order. */
+function oneEach(results: PromiseSettledResult<unknown>[]): [number, string, unknown] {
   const fulfilled = results.findIndex((r) => r.status === "fulfilled");
   const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
   expect(fulfilled).toBeGreaterThanOrEqual(0);
   expect(rejected).toHaveLength(1);
-  expect(rejected[0]!.reason).toMatchObject({ code: "VALIDATION_FAILED" });
-  return [fulfilled, (rejected[0]!.reason as Error).message];
+  const refusal = rejected[0]!.reason as AppError;
+  expect(refusal).toMatchObject({ code: "VALIDATION_FAILED" });
+  return [fulfilled, refusal.message, refusal.details?.["reason"]];
 }
 
 describe("the last OWNER under concurrency", () => {
@@ -70,8 +72,8 @@ describe("the last OWNER under concurrency", () => {
       members.changeRole(ids.owner, orgId, ids.coOwner, "ADMIN"),
       members.changeRole(ids.coOwner, orgId, ids.owner, "ADMIN"),
     ]);
-    const [, message] = oneEach(results);
-    expect(message).toBe(LAST_OWNER);
+    const [, message, reason] = oneEach(results);
+    expect([message, reason]).toEqual([LAST_OWNER, "LAST_OWNER"]);
     expect([await roleOf(ids.owner), await roleOf(ids.coOwner)].sort()).toEqual(["ADMIN", "OWNER"]);
     expect(audited("member.role_changed")).toHaveLength(1);
   });
@@ -81,8 +83,8 @@ describe("the last OWNER under concurrency", () => {
       members.removeMember(ids.owner, orgId, ids.coOwner),
       members.removeMember(ids.coOwner, orgId, ids.owner),
     ]);
-    const [, message] = oneEach(results);
-    expect(message).toBe(LAST_OWNER);
+    const [, message, reason] = oneEach(results);
+    expect([message, reason]).toEqual([LAST_OWNER, "LAST_OWNER"]);
     expect([await roleOf(ids.owner), await roleOf(ids.coOwner)].filter(Boolean)).toEqual(["OWNER"]);
     expect(audited("member.removed")).toHaveLength(1);
   });
@@ -94,7 +96,7 @@ describe("a change checked against a role the member no longer holds", () => {
       members.changeRole(ids.owner, orgId, ids.creator, "ADMIN"),
       members.changeRole(ids.admin, orgId, ids.creator, "VIEWER"),
     ]);
-    expect(oneEach(results)).toEqual([0, CHANGED]);
+    expect(oneEach(results)).toEqual([0, CHANGED, "STALE"]);
     expect(await roleOf(ids.creator)).toBe("ADMIN");
     expect(audited("member.role_changed").map((entry) => entry.metadata)).toEqual([
       expect.objectContaining({ previousRole: "CREATOR", role: "ADMIN" }),
@@ -106,9 +108,54 @@ describe("a change checked against a role the member no longer holds", () => {
       members.changeRole(ids.owner, orgId, ids.creator, "ADMIN"),
       members.removeMember(ids.admin, orgId, ids.creator),
     ]);
-    expect(oneEach(results)).toEqual([0, CHANGED]);
+    expect(oneEach(results)).toEqual([0, CHANGED, "STALE"]);
     expect(await roleOf(ids.creator)).toBe("ADMIN");
     expect(audited("member.removed")).toHaveLength(0);
+  });
+});
+
+describe("a change from the role a page showed (ADR-0139)", () => {
+  it("applies while the member holds that role", async () => {
+    await members.changeRole(ids.owner, orgId, ids.creator, "VIEWER", "CREATOR");
+    expect(await roleOf(ids.creator)).toBe("VIEWER");
+  });
+
+  it("writes nothing once the member holds another, and says it changed", async () => {
+    await expect(members.changeRole(ids.owner, orgId, ids.creator, "VIEWER", "MANAGER")).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: CHANGED,
+      details: { reason: "STALE" },
+    });
+    expect(await roleOf(ids.creator)).toBe("CREATOR");
+    expect(audited("member.role_changed")).toEqual([]);
+  });
+
+  it("asks the ceiling first, so a wrong role shown never spares a refusal its audit entry", async () => {
+    await expect(members.changeRole(ids.admin, orgId, ids.coOwner, "VIEWER", "VIEWER")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(audited("member.role_change_refused")).toHaveLength(1);
+  });
+});
+
+describe("a change to the role the member holds (ADR-0139)", () => {
+  it("writes and audits nothing, once the ceiling allows it", async () => {
+    const entries = deps.repos.auditLogs.all().length;
+    await expect(members.changeRole(ids.admin, orgId, ids.creator, "CREATOR")).resolves.toMatchObject({
+      userId: ids.creator,
+      role: "CREATOR",
+    });
+    await expect(members.changeRole(ids.owner, orgId, ids.coOwner, "OWNER")).resolves.toMatchObject({
+      role: "OWNER",
+    });
+    expect(deps.repos.auditLogs.all()).toHaveLength(entries);
+  });
+
+  it("is still refused, and audited, past the ceiling", async () => {
+    await expect(members.changeRole(ids.admin, orgId, ids.coOwner, "OWNER")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(audited("member.role_change_refused").map(({ metadata }) => metadata["requestedRole"])).toEqual(["OWNER"]);
   });
 });
 

@@ -1358,6 +1358,19 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       the delivered version is watched while a new one is made and after one
       fails, since a failed one rolls back to it.
 
+## Open in AT-8a — stepping down and leaving an organization
+
+- [ ] **Decide whether a member can change their own role or leave an
+      organization from the product.** The membership service lets an `OWNER`
+      demote or remove itself while another `OWNER` remains (ADR-0057,
+      ADR-0059), and no other member can leave by themselves. The members
+      page offers neither: it changes only other members' roles (ADR-0139),
+      since one press would take away the authority to undo it. Whether a member
+      may leave, whether an `OWNER` may step down there, and what leaving
+      does to a member's Properties and pending invitations is a product
+      decision. It does not block the accounts-and-team plan: a member whose
+      ceiling covers theirs can make the change for them.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of

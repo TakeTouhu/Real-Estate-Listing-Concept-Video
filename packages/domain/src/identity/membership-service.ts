@@ -409,11 +409,26 @@ export class MembershipService {
     return this.deps.repos.memberships.listByOrganization(organizationId);
   }
 
+  /**
+   * Give a member another role (ADR-0057, ADR-0059), as the members page asks
+   * (ADR-0139). The ceiling is asked of the role the member holds and of the
+   * new one. The role decides the member's scope; grants, groups and Property
+   * assignments stay (ADR-0052 Decision 10, ADR-0058). Given `seenRole`, the
+   * role the page showed, the change applies only while the member holds it.
+   * A change to the role the member holds writes and audits nothing.
+   *
+   * @throws AppError FORBIDDEN for a non-member, or for a member without
+   *   `permission.manage` or past its ceiling (audited); NOT_FOUND for a
+   *   target who is not a member of this organization; VALIDATION_FAILED with
+   *   a {@link MembershipChangeRefusal} as `details.reason`, `STALE` too when
+   *   the member no longer holds `seenRole`.
+   */
   async changeRole(
     actorUserId: string,
     organizationId: string,
     targetUserId: string,
     role: Role,
+    seenRole?: Role,
   ): Promise<Membership> {
     const refused = (currentRole: Role | null): RefusedChange => ({
       operation: "change_role",
@@ -427,6 +442,9 @@ export class MembershipService {
     if (!mayAssignRole(actor.role, target.role) || !mayAssignRole(actor.role, role)) {
       await this.refuse(actor, refused(target.role));
     }
+    // Asked after the ceiling, so a wrong role seen never spares a refusal its entry.
+    if (seenRole !== undefined && seenRole !== target.role) assertApplied("STALE");
+    if (target.role === role) return target;
     // The ceiling was asked of the role just read: the change applies only while
     // the member still holds it, and never takes the last OWNER away.
     assertApplied(
@@ -500,8 +518,22 @@ export class MembershipService {
   }
 }
 
+/**
+ * Why a role change or removal wrote nothing (ADR-0059), as `details.reason`
+ * of the `VALIDATION_FAILED` it is refused with: it would leave no `OWNER`, or
+ * the member's role changed after its ceiling was asked.
+ */
+export type MembershipChangeRefusal = Exclude<MembershipChangeOutcome, "APPLIED">;
+
+const MEMBERSHIP_CHANGE_REFUSAL_MESSAGES: Record<MembershipChangeRefusal, string> = {
+  LAST_OWNER: "Cannot remove or demote the last owner",
+  STALE: "This member changed meanwhile; reload and try again",
+};
+
 /** A role change or removal that wrote nothing is refused, saying why. */
 function assertApplied(outcome: MembershipChangeOutcome): void {
-  if (outcome === "LAST_OWNER") throw new AppError("VALIDATION_FAILED", "Cannot remove or demote the last owner");
-  if (outcome === "STALE") throw new AppError("VALIDATION_FAILED", "This member changed meanwhile; reload and try again");
+  if (outcome === "APPLIED") return;
+  throw new AppError("VALIDATION_FAILED", MEMBERSHIP_CHANGE_REFUSAL_MESSAGES[outcome], {
+    details: { reason: outcome },
+  });
 }

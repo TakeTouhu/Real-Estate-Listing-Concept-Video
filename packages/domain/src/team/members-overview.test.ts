@@ -106,6 +106,7 @@ describe("the members overview", () => {
       expect(members.map(({ role }) => role)).toEqual(["OWNER", "ADMIN", "MANAGER", "CREATOR", "VIEWER", "BILLING"]);
       expect(members.filter(({ you }) => you).map(({ role }) => role)).toEqual([who]);
       expect(members[1]).toEqual({
+        userId: ids.ADMIN,
         name: "admin san",
         email: "admin@example.com",
         role: "ADMIN",
@@ -211,6 +212,20 @@ describe("the members overview", () => {
   it("offers a MANAGER granted member.manage no role, since the ceiling goes by role", async () => {
     await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "member.manage");
     expect((await service.overview(ids.MANAGER, orgId)).invitableRoles).toEqual([]);
+  });
+
+  it.each([
+    ["OWNER", ["OWNER", "ADMIN", "MANAGER", "CREATOR", "VIEWER", "BILLING"]],
+    ["ADMIN", ["MANAGER", "CREATOR", "VIEWER"]],
+    ["MANAGER", []],
+    ["BILLING", []],
+  ] as const)("lets a %s give a member the roles its ceiling allows (ADR-0139)", async (who, roles) => {
+    expect((await service.overview(ids[who], orgId)).assignableRoles).toEqual(roles);
+  });
+
+  it("offers a MANAGER granted permission.manage no role to give, since the ceiling goes by role", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "permission.manage");
+    expect((await service.overview(ids.MANAGER, orgId)).assignableRoles).toEqual([]);
   });
 
   it("has no seats while the organization has no plan", async () => {

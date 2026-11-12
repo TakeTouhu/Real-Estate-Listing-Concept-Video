@@ -9,9 +9,10 @@ import { newEmail, newPassword, provisionPremiumPlan, signUpOwner } from "./supp
  * emailed link in their own browser, creates an account with the invited
  * address and verifies it, the invitation waiting all along, then accepts and
  * joins with the invited role. The link works once, and the owner's page
- * shows the new member in a seat.
+ * shows the new member in a seat. The owner then gives the colleague another
+ * role, which the colleague's page follows (AT-8a, ADR-0139).
  */
-test("a colleague opens an emailed invitation, creates an account, verifies it and joins", async ({
+test("a colleague opens an emailed invitation, creates an account, verifies it, joins, and gets another role", async ({
   page,
   browser,
 }) => {
@@ -58,11 +59,19 @@ test("a colleague opens an emailed invitation, creates an account, verifies it a
   // The link worked once.
   await invitee.goto(link);
   await expect(invitee.getByRole("heading", { name: "Link not valid" })).toBeVisible();
-  await invitee.close();
 
   // The owner's page shows the colleague as a member in a seat, and no invitation pending.
   await page.goto(`/organizations/${owner.organizationId}/members`);
   await expect(page.getByRole("heading", { name: "Members (2)" })).toBeVisible();
   await expect(page.getByText(`New Colleague · ${colleague} · Creator`)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Pending invitations (0)" })).toBeVisible();
+
+  // The owner makes the colleague a Viewer, and the colleague's own page follows.
+  await page.getByRole("combobox", { name: `New role for ${colleague}` }).selectOption("VIEWER");
+  await page.getByRole("button", { name: `Change the role of ${colleague}` }).click();
+  await expect(page.getByRole("status")).toContainText("The member's role was changed.");
+  await expect(page.getByText(`New Colleague · ${colleague} · Viewer`)).toBeVisible();
+  await invitee.goto("/");
+  await expect(invitee.getByRole("heading", { name: `${organizationName} (VIEWER)` })).toBeVisible();
+  await invitee.close();
 });

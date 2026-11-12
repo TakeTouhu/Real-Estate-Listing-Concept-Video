@@ -6,6 +6,7 @@ import {
   isRole,
   linkLifetime,
   type InvitationRefusal,
+  type MembershipChangeRefusal,
 } from "@app/domain";
 import { createSubscriptionRepository, getPrismaClient } from "@app/database";
 import { createLogger, type Logger } from "@app/observability";
@@ -73,13 +74,15 @@ export function getMembershipService(): MembershipService {
 }
 
 /**
- * What the members page says after inviting or cancelling, by the code a route
- * sends it back with (`?notice=` or `?error=`). The page shows only these:
- * never text the address carries, nor the invited address.
+ * What the members page says after inviting, cancelling or changing a role, by
+ * the code a route sends it back with (`?notice=` or `?error=`). The page shows
+ * only these: never text the address carries, nor the invited address.
  */
 export const MEMBERS_NOTICES = {
   invited: `The invitation was sent. Its link works for ${INVITATION_LIFETIME}.`,
   cancelled: "The invitation was cancelled. Its link no longer works, and its seat is free.",
+  "role-changed":
+    "The member's role was changed. What they can do, and which Properties they reach, follow the new role now.",
 } as const;
 
 export const MEMBERS_ERRORS = {
@@ -99,6 +102,12 @@ export const MEMBERS_ERRORS = {
     "Something went wrong. If the invitation is listed below, its email may not have been sent: cancel it and " +
     "invite again.",
   "cancel-failed": "Something went wrong. Check below whether the invitation is still pending.",
+  "new-role": "Choose the member's new role.",
+  "may-not-change-role": "You cannot give that member that role.",
+  "not-a-member": "That person is not a member of this organization.",
+  "last-owner": "The organization must keep an Owner. Make another member an Owner first.",
+  "member-changed": "That member's role changed meanwhile. Check it below, and change it again if you still need to.",
+  "role-change-failed": "Something went wrong. Check below whether the member's role changed.",
 } as const;
 
 export type MembersNotice = keyof typeof MEMBERS_NOTICES;
@@ -118,7 +127,7 @@ export function membersError(param: string | readonly string[] | undefined): Mem
   return codeOf(MEMBERS_ERRORS, param);
 }
 
-/** What inviting or cancelling ended with, for the members page. */
+/** What inviting, cancelling or changing a role ended with, for the members page. */
 export type MembersOutcome = { readonly notice: MembersNotice } | { readonly error: MembersError };
 
 /** The members page with a notice or an error, on the address the request came to. */
@@ -201,5 +210,56 @@ export async function cancelMemberInvitation(
     if (error instanceof AppError && error.code === "NOT_FOUND") return { error: "gone" };
     log.error("An invitation could not be cancelled", { code: errorCode(error) });
     return { error: "cancel-failed" };
+  }
+}
+
+const MEMBERSHIP_CHANGE_REFUSALS: Record<MembershipChangeRefusal, MembersError> = {
+  LAST_OWNER: "last-owner",
+  STALE: "member-changed",
+};
+
+/** The refusal a role change's error names, or `null` for one that is not a refusal. */
+function membershipChangeRefusalOf(error: AppError): MembersError | null {
+  if (error.code === "FORBIDDEN") return "may-not-change-role";
+  if (error.code === "NOT_FOUND") return "not-a-member";
+  const reason = error.details?.["reason"];
+  if (error.code !== "VALIDATION_FAILED" || typeof reason !== "string") return null;
+  return Object.hasOwn(MEMBERSHIP_CHANGE_REFUSALS, reason)
+    ? MEMBERSHIP_CHANGE_REFUSALS[reason as MembershipChangeRefusal]
+    : null;
+}
+
+/** The longest account id a members page's address may name; an account's is 20 characters. */
+export const MEMBER_ID_MAX_LENGTH = 64;
+
+/**
+ * Give a member another role, as the members page's form asks (ADR-0139):
+ * `role`, and `from`, the role the page showed. The membership service
+ * decides (`permission.manage`, the ceiling of the role held and of the new
+ * one, the role still the one shown, the last `OWNER`) and audits it. An id
+ * no account has is refused before the service is asked, so it never reaches
+ * the audit log. A failure that is not a refusal is logged by its error code
+ * alone.
+ */
+export async function changeMemberRole(
+  actorUserId: string,
+  organizationId: string,
+  memberUserId: string,
+  form: { readonly role: string; readonly from: string },
+  log: Pick<Logger, "error"> = getMembersLogger(),
+): Promise<MembersOutcome> {
+  const { role, from } = form;
+  if (memberUserId.length === 0 || memberUserId.length > MEMBER_ID_MAX_LENGTH) return { error: "not-a-member" };
+  if (!isRole(role)) return { error: "new-role" };
+  // A form without the role it showed cannot say the member still holds it.
+  if (!isRole(from)) return { error: "member-changed" };
+  try {
+    await getMembershipService().changeRole(actorUserId, organizationId, memberUserId, role, from);
+    return { notice: "role-changed" };
+  } catch (error) {
+    const refusal = error instanceof AppError ? membershipChangeRefusalOf(error) : null;
+    if (refusal !== null) return { error: refusal };
+    log.error("A member's role could not be changed", { code: errorCode(error) });
+    return { error: "role-change-failed" };
   }
 }
