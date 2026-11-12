@@ -10,9 +10,11 @@ import { newEmail, newPassword, provisionPremiumPlan, signUpOwner } from "./supp
  * address and verifies it, the invitation waiting all along, then accepts and
  * joins with the invited role. The link works once, and the owner's page
  * shows the new member in a seat. The owner then gives the colleague another
- * role, which the colleague's page follows (AT-8a, ADR-0139).
+ * role, which the colleague's page follows (AT-8a, ADR-0139), and finally
+ * removes the colleague, whose page no longer lists the organization (AT-8b,
+ * ADR-0140).
  */
-test("a colleague opens an emailed invitation, creates an account, verifies it, joins, and gets another role", async ({
+test("a colleague opens an emailed invitation, signs up, verifies, joins, gets another role and is removed", async ({
   page,
   browser,
 }) => {
@@ -73,5 +75,15 @@ test("a colleague opens an emailed invitation, creates an account, verifies it, 
   await expect(page.getByText(`New Colleague · ${colleague} · Viewer`)).toBeVisible();
   await invitee.goto("/");
   await expect(invitee.getByRole("heading", { name: `${organizationName} (VIEWER)` })).toBeVisible();
+
+  // The owner removes the colleague, after reading what removing does; the colleague's page no longer lists it.
+  await page.getByLabel(`Remove ${colleague}…`).click();
+  await expect(page.getByText(`${colleague} will no longer be able to open this organization.`)).toBeVisible();
+  await page.getByRole("button", { name: `Remove member ${colleague}` }).click();
+  await expect(page.getByRole("status")).toContainText("The member was removed.");
+  await expect(page.getByRole("heading", { name: "Members (1)" })).toBeVisible();
+  await expect(page.getByText(colleague)).toHaveCount(0);
+  await invitee.goto("/");
+  await expect(invitee.getByRole("heading", { name: new RegExp(organizationName) })).toHaveCount(0);
   await invitee.close();
 });

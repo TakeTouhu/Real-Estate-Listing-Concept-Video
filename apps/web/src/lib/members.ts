@@ -74,15 +74,19 @@ export function getMembershipService(): MembershipService {
 }
 
 /**
- * What the members page says after inviting, cancelling or changing a role, by
- * the code a route sends it back with (`?notice=` or `?error=`). The page shows
- * only these: never text the address carries, nor the invited address.
+ * What the members page says after inviting, cancelling, changing a role or
+ * removing a member, by the code a route sends it back with (`?notice=` or
+ * `?error=`). The page shows only these: never text the address carries, nor
+ * the invited address.
  */
 export const MEMBERS_NOTICES = {
   invited: `The invitation was sent. Its link works for ${INVITATION_LIFETIME}.`,
   cancelled: "The invitation was cancelled. Its link no longer works, and its seat is free.",
   "role-changed":
     "The member's role was changed. What they can do, and which Properties they reach, follow the new role now.",
+  "member-removed":
+    "The member was removed. They can no longer open this organization, and Properties they were responsible " +
+    "for have no responsible user now.",
 } as const;
 
 export const MEMBERS_ERRORS = {
@@ -108,6 +112,11 @@ export const MEMBERS_ERRORS = {
   "last-owner": "The organization must keep an Owner. Make another member an Owner first.",
   "member-changed": "That member's role changed meanwhile. Check it below, and change it again if you still need to.",
   "role-change-failed": "Something went wrong. Check below whether the member's role changed.",
+  "may-not-remove": "You cannot remove that member.",
+  "removal-member-changed":
+    "That member's role changed, or they were removed, meanwhile. Check below, and remove them again if you still " +
+    "need to.",
+  "removal-failed": "Something went wrong. Check below whether that person is still a member.",
 } as const;
 
 export type MembersNotice = keyof typeof MEMBERS_NOTICES;
@@ -127,7 +136,7 @@ export function membersError(param: string | readonly string[] | undefined): Mem
   return codeOf(MEMBERS_ERRORS, param);
 }
 
-/** What inviting, cancelling or changing a role ended with, for the members page. */
+/** What inviting, cancelling, changing a role or removing a member ended with, for the members page. */
 export type MembersOutcome = { readonly notice: MembersNotice } | { readonly error: MembersError };
 
 /** The members page with a notice or an error, on the address the request came to. */
@@ -213,20 +222,31 @@ export async function cancelMemberInvitation(
   }
 }
 
-const MEMBERSHIP_CHANGE_REFUSALS: Record<MembershipChangeRefusal, MembersError> = {
-  LAST_OWNER: "last-owner",
-  STALE: "member-changed",
+/** What a role change, or a removal, answers each of its refusals with. */
+interface MembershipChangeAnswers {
+  /** The poster may not make this change. */
+  readonly forbidden: MembersError;
+  /** The change wrote nothing, by `details.reason`. */
+  readonly refusals: Record<MembershipChangeRefusal, MembersError>;
+}
+
+const ROLE_CHANGE_ANSWERS: MembershipChangeAnswers = {
+  forbidden: "may-not-change-role",
+  refusals: { LAST_OWNER: "last-owner", STALE: "member-changed" },
 };
 
-/** The refusal a role change's error names, or `null` for one that is not a refusal. */
-function membershipChangeRefusalOf(error: AppError): MembersError | null {
-  if (error.code === "FORBIDDEN") return "may-not-change-role";
+const REMOVAL_ANSWERS: MembershipChangeAnswers = {
+  forbidden: "may-not-remove",
+  refusals: { LAST_OWNER: "last-owner", STALE: "removal-member-changed" },
+};
+
+/** The refusal a role change's or a removal's error names, or `null` for one that is not a refusal. */
+function membershipChangeRefusalOf(error: AppError, answers: MembershipChangeAnswers): MembersError | null {
+  if (error.code === "FORBIDDEN") return answers.forbidden;
   if (error.code === "NOT_FOUND") return "not-a-member";
   const reason = error.details?.["reason"];
   if (error.code !== "VALIDATION_FAILED" || typeof reason !== "string") return null;
-  return Object.hasOwn(MEMBERSHIP_CHANGE_REFUSALS, reason)
-    ? MEMBERSHIP_CHANGE_REFUSALS[reason as MembershipChangeRefusal]
-    : null;
+  return Object.hasOwn(answers.refusals, reason) ? answers.refusals[reason as MembershipChangeRefusal] : null;
 }
 
 /** The longest account id a members page's address may name; an account's is 20 characters. */
@@ -257,9 +277,38 @@ export async function changeMemberRole(
     await getMembershipService().changeRole(actorUserId, organizationId, memberUserId, role, from);
     return { notice: "role-changed" };
   } catch (error) {
-    const refusal = error instanceof AppError ? membershipChangeRefusalOf(error) : null;
+    const refusal = error instanceof AppError ? membershipChangeRefusalOf(error, ROLE_CHANGE_ANSWERS) : null;
     if (refusal !== null) return { error: refusal };
     log.error("A member's role could not be changed", { code: errorCode(error) });
     return { error: "role-change-failed" };
+  }
+}
+
+/**
+ * Remove a member from the organization, as the members page's form asks
+ * (ADR-0140): `from`, the role the page showed. The membership service
+ * decides (`member.manage`, the ceiling of the role held, the role still the
+ * one shown, the last `OWNER`) and audits it. An id no account has is refused
+ * before the service is asked, so it never reaches the audit log. A failure
+ * that is not a refusal is logged by its error code alone.
+ */
+export async function removeOrganizationMember(
+  actorUserId: string,
+  organizationId: string,
+  memberUserId: string,
+  form: { readonly from: string },
+  log: Pick<Logger, "error"> = getMembersLogger(),
+): Promise<MembersOutcome> {
+  if (memberUserId.length === 0 || memberUserId.length > MEMBER_ID_MAX_LENGTH) return { error: "not-a-member" };
+  // A form without the role it showed cannot say the member still holds it.
+  if (!isRole(form.from)) return { error: "removal-member-changed" };
+  try {
+    await getMembershipService().removeMember(actorUserId, organizationId, memberUserId, form.from);
+    return { notice: "member-removed" };
+  } catch (error) {
+    const refusal = error instanceof AppError ? membershipChangeRefusalOf(error, REMOVAL_ANSWERS) : null;
+    if (refusal !== null) return { error: refusal };
+    log.error("A member could not be removed", { code: errorCode(error) });
+    return { error: "removal-failed" };
   }
 }

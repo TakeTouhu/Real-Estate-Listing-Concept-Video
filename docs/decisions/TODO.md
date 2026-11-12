@@ -1371,6 +1371,20 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       decision. It does not block the accounts-and-team plan: a member whose
       ceiling covers theirs can make the change for them.
 
+## Open in AT-8b — a removed member's pending invitations
+
+- [ ] **Decide whether removing a member also cancels the invitations they
+      sent.** Since ADR-0137 an invitation is accepted only while its inviter
+      is a member who may still give its role, so a removed member's pending
+      invitations can no longer be accepted, yet they stay pending and hold
+      their seats until an `OWNER` or `ADMIN` cancels them or they expire
+      after 7 days (ADR-0140). If the person is invited again and rejoins
+      within that time, those invitations become acceptable again, within
+      their new role's ceiling. Cancelling them with the removal, or on the
+      inviter's demotion (ADR-0139), would free the seats at once; it is a
+      product decision, and it does not block the plan: the members page
+      lists them with a cancel button.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of

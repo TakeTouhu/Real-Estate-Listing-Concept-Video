@@ -160,6 +160,20 @@ function roleForms(): string[] {
   });
 }
 
+/** Each removal form: the member it names, the role it shows, its button, where it posts, and whether it is open. */
+function removeForms(): string[] {
+  return [...document.querySelectorAll("details")].flatMap((details) => {
+    const form = details.querySelector("form");
+    if (!form?.getAttribute("action")?.endsWith("/remove")) return [];
+    const summary = details.querySelector("summary")?.getAttribute("aria-label");
+    const from = form.querySelector<HTMLInputElement>('input[type="hidden"][name="from"]')?.value;
+    const button = form.querySelector("button")?.getAttribute("aria-label");
+    const state = details.open ? "open" : "closed";
+    const posts = `(${button}, ${form.getAttribute("method")}) -> ${form.getAttribute("action")}`;
+    return [`${summary} from ${from} ${posts} ${state}`];
+  });
+}
+
 function subscribe(planKey: "standard" | "premium" | "enterprise"): void {
   reader.subscriptions.set(orgId, {
     id: `sub_${orgId}`,
@@ -388,6 +402,72 @@ describe("changing a role on the members page", () => {
       "That member's role changed meanwhile. Check it below, and change it again if you still need to.",
     ],
     [{ error: "role-change-failed" }, "alert", "Something went wrong. Check below whether the member's role changed."],
+  ] as const)("says what %o names", async (query, role, sentence) => {
+    await renderMembers("OWNER", query);
+    expect(screen.getByRole(role).textContent).toBe(sentence);
+  });
+});
+
+describe("removing a member on the members page", () => {
+  it("lets an owner remove every other member, but not itself, saying first what removing does", async () => {
+    const adminId = await joined("Mika Admin", "ADMIN");
+    const creatorId = await joined("Sora Creator", "CREATOR");
+    const text = await renderMembers("OWNER");
+    const members = `/api/organizations/${orgId}/members`;
+    expect(removeForms()).toEqual([
+      `Remove owner@example.com… from OWNER (Remove member owner@example.com, post) -> ` +
+        `${members}/${ownerId}/remove closed`,
+      `Remove mika.admin@example.com… from ADMIN (Remove member mika.admin@example.com, post) -> ` +
+        `${members}/${adminId}/remove closed`,
+      `Remove sora.creator@example.com… from CREATOR (Remove member sora.creator@example.com, post) -> ` +
+        `${members}/${creatorId}/remove closed`,
+    ]);
+    expect(text).toContain(
+      "sora.creator@example.com will no longer be able to open this organization. Their account stays, and the " +
+        "organization keeps its Properties, photos and videos. Properties they are responsible for are left with no " +
+        "responsible user, and their individual permissions and group memberships here end. Invitations they sent " +
+        "can no longer be accepted, and stay listed until cancelled or expired. Their seat becomes free.",
+    );
+    expect(text).not.toContain("ken.owner@example.com will no longer");
+  });
+
+  it("lets an admin remove only the members below its ceiling", async () => {
+    await joined("Mika Admin", "ADMIN");
+    const managerId = await joined("Ren Manager", "MANAGER");
+    const viewerId = await joined("Yui Viewer", "VIEWER");
+    await joined("Kai Billing", "BILLING");
+    await renderMembers("ADMIN");
+    const members = `/api/organizations/${orgId}/members`;
+    expect(removeForms()).toEqual([
+      `Remove ren.manager@example.com… from MANAGER (Remove member ren.manager@example.com, post) -> ` +
+        `${members}/${managerId}/remove closed`,
+      `Remove yui.viewer@example.com… from VIEWER (Remove member yui.viewer@example.com, post) -> ` +
+        `${members}/${viewerId}/remove closed`,
+    ]);
+  });
+
+  it.each([["MANAGER" as const], ["BILLING" as const]])("gives %s no removal form", async (role) => {
+    await joined("Sora Creator", "CREATOR");
+    const text = await renderMembers(role);
+    expect(removeForms()).toEqual([]);
+    expect(text).not.toContain("will no longer be able to open");
+  });
+
+  it.each([
+    [
+      { notice: "member-removed" },
+      "status",
+      "The member was removed. They can no longer open this organization, and Properties they were responsible " +
+        "for have no responsible user now.",
+    ],
+    [{ error: "may-not-remove" }, "alert", "You cannot remove that member."],
+    [
+      { error: "removal-member-changed" },
+      "alert",
+      "That member's role changed, or they were removed, meanwhile. Check below, and remove them again if you " +
+        "still need to.",
+    ],
+    [{ error: "removal-failed" }, "alert", "Something went wrong. Check below whether that person is still a member."],
   ] as const)("says what %o names", async (query, role, sentence) => {
     await renderMembers("OWNER", query);
     expect(screen.getByRole(role).textContent).toBe(sentence);

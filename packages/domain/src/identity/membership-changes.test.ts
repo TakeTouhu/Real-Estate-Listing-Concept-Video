@@ -138,6 +138,34 @@ describe("a change from the role a page showed (ADR-0139)", () => {
   });
 });
 
+describe("a removal from the role a page showed (ADR-0140)", () => {
+  it("applies while the member holds that role", async () => {
+    await members.removeMember(ids.owner, orgId, ids.creator, "CREATOR");
+    expect(await roleOf(ids.creator)).toBeUndefined();
+    expect(audited("member.removed")).toHaveLength(1);
+  });
+
+  it("removes nothing once the member holds another, and says it changed", async () => {
+    await expect(members.removeMember(ids.owner, orgId, ids.creator, "MANAGER")).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: CHANGED,
+      details: { reason: "STALE" },
+    });
+    expect(await roleOf(ids.creator)).toBe("CREATOR");
+    expect(audited("member.removed")).toEqual([]);
+  });
+
+  it("asks the ceiling first, so a wrong role shown never spares a refusal its audit entry", async () => {
+    await expect(members.removeMember(ids.admin, orgId, ids.coOwner, "VIEWER")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(audited("member.role_change_refused").map(({ metadata }) => metadata)).toEqual([
+      expect.objectContaining({ operation: "remove_member", currentRole: "OWNER" }),
+    ]);
+    expect(await roleOf(ids.coOwner)).toBe("OWNER");
+  });
+});
+
 describe("a change to the role the member holds (ADR-0139)", () => {
   it("writes and audits nothing, once the ceiling allows it", async () => {
     const entries = deps.repos.auditLogs.all().length;
