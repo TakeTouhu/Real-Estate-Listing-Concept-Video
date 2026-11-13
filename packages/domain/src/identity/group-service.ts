@@ -329,10 +329,13 @@ export class GroupService {
   }
 }
 
-/** A group name as stored: trimmed, 1 to 100 characters. */
+/**
+ * A group name as stored: trimmed, 1 to 100 characters. A NUL character,
+ * which PostgreSQL cannot store in text, makes it invalid too (ADR-0141).
+ */
 function normalizeGroupName(name: string): string {
   const trimmed = name.trim();
-  if (trimmed.length === 0 || trimmed.length > GROUP_NAME_MAX_LENGTH) {
+  if (trimmed.length === 0 || trimmed.length > GROUP_NAME_MAX_LENGTH || trimmed.includes("\u0000")) {
     throw nameRefused(`A group name must be 1 to ${GROUP_NAME_MAX_LENGTH} characters`, "INVALID_NAME");
   }
   return trimmed;

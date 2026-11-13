@@ -2,6 +2,7 @@ import type { SubscriptionRepository } from "../entitlement/subscription";
 import { authorizeOrganization } from "../identity/authorization";
 import type { IdentityServiceDeps } from "../identity/ports";
 import { ROLES, mayAssignRole, type Role } from "../identity/roles";
+import { compareMembers } from "./member-order";
 import { holdsSeat, includedSeats } from "./seats";
 
 /**
@@ -93,12 +94,7 @@ export class MembersOverviewService {
 
     const members = memberships
       .map((membership, index) => ({ membership, user: users[index] ?? null }))
-      .sort(
-        (a, b) =>
-          ROLES.indexOf(a.membership.role) - ROLES.indexOf(b.membership.role) ||
-          a.membership.createdAt.getTime() - b.membership.createdAt.getTime() ||
-          compareIds(a.membership.userId, b.membership.userId),
-      )
+      .sort((a, b) => compareMembers(a.membership, b.membership))
       // An account removed between the two reads is no longer a member.
       .flatMap(({ membership, user }) =>
         user === null

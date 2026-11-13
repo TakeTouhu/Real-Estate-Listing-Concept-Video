@@ -1,6 +1,7 @@
 import { authorizeOrganization } from "../identity/authorization";
 import type { IdentityServiceDeps } from "../identity/ports";
-import { ROLES, type Role } from "../identity/roles";
+import type { Role } from "../identity/roles";
+import { compareMembers } from "./member-order";
 
 /**
  * An organization's groups and who belongs to each, as a holder of
@@ -15,7 +16,8 @@ import { ROLES, type Role } from "../identity/roles";
 export interface GroupsOverviewMember {
   readonly userId: string;
   readonly name: string;
-  readonly email: string;
+  /** The member's address, for a viewer who also holds `member.view`; `null` for anyone else. */
+  readonly email: string | null;
   readonly role: Role;
 }
 
@@ -38,45 +40,39 @@ export interface GroupsOverview {
   readonly mayDelete: boolean;
 }
 
-const compareIds = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-
 export class GroupsOverviewService {
   constructor(private readonly deps: IdentityServiceDeps) {}
 
   /**
-   * The organization's groups with their members.
+   * The organization's groups with their members, in three reads and one
+   * read of the grouped members' accounts, however many groups there are.
    *
    * @throws AppError FORBIDDEN for a non-member, or a member without `group.view`.
    */
   async overview(actorUserId: string, organizationId: string): Promise<GroupsOverview> {
     const actor = await authorizeOrganization(this.deps, actorUserId, organizationId, "group.view");
     const { repos } = this.deps;
-    const [groups, memberships] = await Promise.all([
+    const [groups, rows, memberships] = await Promise.all([
       repos.groups.listByOrganization(organizationId),
+      repos.groups.listMembersByOrganization(organizationId),
       repos.memberships.listByOrganization(organizationId),
     ]);
-    // Asked for together, so the database client reads them in as few queries as it can.
-    const [groupMembers, users] = await Promise.all([
-      Promise.all(groups.map(({ id }) => repos.groups.listMembers(organizationId, id))),
-      Promise.all(memberships.map(({ userId }) => repos.users.findById(userId))),
-    ]);
-    // In the members page's order (ADR-0134); an account removed between the reads is no longer a member.
-    const members = memberships
-      .map((membership, index) => ({ membership, user: users[index] ?? null }))
-      .sort(
-        (a, b) =>
-          ROLES.indexOf(a.membership.role) - ROLES.indexOf(b.membership.role) ||
-          a.membership.createdAt.getTime() - b.membership.createdAt.getTime() ||
-          compareIds(a.membership.userId, b.membership.userId),
-      )
-      .flatMap(({ membership: { userId, role }, user }): GroupsOverviewMember[] =>
-        user === null ? [] : [{ userId, name: user.name, email: user.email, role }],
-      );
+    const grouped = new Set(rows.map(({ userId }) => userId));
+    // A member who left the organization between the reads is in no group.
+    const inGroups = memberships.filter(({ userId }) => grouped.has(userId)).sort(compareMembers);
+    // Asked for together, so the database client reads the accounts in one query.
+    const users = await Promise.all(inGroups.map(({ userId }) => repos.users.findById(userId)));
+    // The members page's own question: whose addresses the viewer may see (ADR-0134).
+    const addresses = actor.permissions.includes("member.view");
+    // An account removed between the reads is no longer a member.
+    const members = inGroups.flatMap(({ userId, role }, index): GroupsOverviewMember[] => {
+      const user = users[index];
+      return user ? [{ userId, name: user.name, email: addresses ? user.email : null, role }] : [];
+    });
     const manages = actor.permissions.includes("group.manage");
     return {
-      groups: groups.map(({ id, name }, index) => {
-        const ids = new Set((groupMembers[index] ?? []).map(({ userId }) => userId));
-        // A member who left the organization between the reads is in no group.
+      groups: groups.map(({ id, name }) => {
+        const ids = new Set(rows.filter(({ groupId }) => groupId === id).map(({ userId }) => userId));
         return { id, name, members: members.filter(({ userId }) => ids.has(userId)) };
       }),
       mayManage: manages,

@@ -204,6 +204,7 @@ describe.skipIf(!HAS_DB)("every read and write is scoped by organization", () =>
     await seat(CREATOR);
     expect(await deps.repos.groups.find(OTHER_ORG, GROUP)).toBeNull();
     expect(await deps.repos.groups.listMembers(OTHER_ORG, GROUP)).toEqual([]);
+    expect(await deps.repos.groups.listMembersByOrganization(OTHER_ORG)).toEqual([]);
     expect((await deps.repos.groups.listByOrganization(ORG)).map((g) => g.id)).toEqual([GROUP]);
     expect(await deps.repos.groups.rename(OTHER_ORG, GROUP, "Sales", "Taken", audit("x", OTHER_ORG))).toEqual({
       outcome: "STALE",
@@ -222,6 +223,29 @@ describe.skipIf(!HAS_DB)("every read and write is scoped by organization", () =>
     await expect(groups.addMember(OWNER, ORG, OTHER_GROUP, CREATOR)).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(groups.delete(OWNER, ORG, OTHER_GROUP)).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(await nameOf(OTHER_GROUP)).toBe("Sales");
+  });
+});
+
+describe.skipIf(!HAS_DB)("listing every group's members at once", () => {
+  it("lists the organization's member rows by group and then by user, in one read (ADR-0141)", async () => {
+    const support = "grp_itest_groups_support";
+    await prisma.group.create({ data: { id: support, organizationId: ORG, name: "Support", createdByUserId: OWNER } });
+    await seat(VIEWER);
+    await seat(CREATOR, support);
+    await seat(ADMIN);
+    const rows = await deps.repos.groups.listMembersByOrganization(ORG);
+    expect(rows.map(({ groupId, userId }) => `${groupId} ${userId}`)).toEqual([
+      `${GROUP} ${ADMIN}`,
+      `${GROUP} ${VIEWER}`,
+      `${support} ${CREATOR}`,
+    ]);
+    expect(rows[0]).toEqual({
+      groupId: GROUP,
+      organizationId: ORG,
+      userId: ADMIN,
+      addedByUserId: OWNER,
+      addedAt: expect.any(Date),
+    });
   });
 });
 

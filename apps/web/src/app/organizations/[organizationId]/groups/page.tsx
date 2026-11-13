@@ -4,7 +4,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { GROUPS_ERRORS, GROUPS_NOTICES, getGroupsOverviewService, groupsError, groupsNotice } from "@/lib/groups";
 import { getIdentityServices } from "@/lib/identity";
-import { ROLE_NAMES } from "@/lib/members";
+import { ROLE_NAMES } from "@/lib/role-names";
 
 export const dynamic = "force-dynamic";
 
@@ -82,7 +82,8 @@ export default async function GroupsPage({
                   <ul>
                     {group.members.map((member) => (
                       <li key={member.userId}>
-                        {member.name} · {member.email} · {ROLE_NAMES[member.role]}
+                        {member.name}
+                        {member.email === null ? null : ` · ${member.email}`} · {ROLE_NAMES[member.role]}
                       </li>
                     ))}
                   </ul>

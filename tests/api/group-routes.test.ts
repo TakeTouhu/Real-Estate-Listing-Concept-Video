@@ -167,7 +167,7 @@ describe("creating a group", () => {
     expect(audited("group.change_refused")).toEqual([]);
   });
 
-  it.each([[{}], [{ name: "" }], [{ name: "   " }], [{ name: "x".repeat(101) }]])(
+  it.each([[{}], [{ name: "" }], [{ name: "   " }], [{ name: "x".repeat(101) }], [{ name: "East\u0000office" }]])(
     "creates nothing for %o, and asks for a name",
     async (fields) => {
       expect(landing(await creating(fields))).toBe("error=group-name");
@@ -196,6 +196,13 @@ describe("creating a group", () => {
   it("answers a refusal it does not know as a failure, never by a name every object has", async () => {
     vi.spyOn(deps.repos.groups, "create").mockRejectedValue(
       new AppError("VALIDATION_FAILED", "Refused", { details: { reason: "constructor" } }),
+    );
+    expect(landing(await creating({ name: "East" }))).toBe("error=create-group-failed");
+  });
+
+  it("answers a name reason on an error that is no refusal of a name as a failure", async () => {
+    vi.spyOn(deps.repos.groups, "create").mockRejectedValue(
+      new AppError("INTERNAL_ERROR", "Lost", { details: { reason: "NAME_TAKEN" } }),
     );
     expect(landing(await creating({ name: "East" }))).toBe("error=create-group-failed");
   });

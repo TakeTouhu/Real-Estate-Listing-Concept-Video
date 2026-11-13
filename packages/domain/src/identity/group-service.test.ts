@@ -155,13 +155,16 @@ describe("creating and renaming a group", () => {
 });
 
 describe("group names", () => {
-  it.each(["", "   ", "x".repeat(GROUP_NAME_MAX_LENGTH + 1)])("refuses the name %j", async (name) => {
-    await expect(newGroup(name)).rejects.toMatchObject({
-      code: "VALIDATION_FAILED",
-      details: { reason: "INVALID_NAME" },
-    });
-    expect(audits("group.created")).toEqual([]);
-  });
+  it.each(["", "   ", "x".repeat(GROUP_NAME_MAX_LENGTH + 1), "East\u0000office"])(
+    "refuses the name %j",
+    async (name) => {
+      await expect(newGroup(name)).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        details: { reason: "INVALID_NAME" },
+      });
+      expect(audits("group.created")).toEqual([]);
+    },
+  );
 
   it("refuses an invalid rename with the same reason, writing nothing", async () => {
     const group = await newGroup("Sales");

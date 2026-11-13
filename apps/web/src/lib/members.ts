@@ -7,13 +7,13 @@ import {
   linkLifetime,
   type InvitationRefusal,
   type MembershipChangeRefusal,
-  type Role,
 } from "@app/domain";
 import { createSubscriptionRepository, getPrismaClient } from "@app/database";
 import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
 import { getMailer } from "./mailer";
+import { codeOf } from "./page-codes";
 
 let overview: MembersOverviewService | undefined;
 
@@ -30,16 +30,6 @@ export function getMembersOverviewService(): MembersOverviewService {
   });
   return overview;
 }
-
-/** Each role as the members and groups pages name it. */
-export const ROLE_NAMES: Record<Role, string> = {
-  OWNER: "Owner",
-  ADMIN: "Admin",
-  MANAGER: "Manager",
-  CREATOR: "Creator",
-  VIEWER: "Viewer",
-  BILLING: "Billing",
-};
 
 /** The page an invitation's link opens, with its token (ADR-0138). */
 export const ACCEPT_INVITATION_PATH = "/accept-invitation";
@@ -132,10 +122,6 @@ export const MEMBERS_ERRORS = {
 
 export type MembersNotice = keyof typeof MEMBERS_NOTICES;
 export type MembersError = keyof typeof MEMBERS_ERRORS;
-
-function codeOf<T extends object>(table: T, param: string | readonly string[] | undefined): keyof T | null {
-  return typeof param === "string" && Object.hasOwn(table, param) ? (param as keyof T) : null;
-}
 
 /** The notice a `?notice=` code names, or `null` for anything else. */
 export function membersNotice(param: string | readonly string[] | undefined): MembersNotice | null {

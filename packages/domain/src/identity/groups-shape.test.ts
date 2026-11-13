@@ -93,4 +93,14 @@ describe("dormancy", () => {
       "apps/web/src/lib/groups.ts",
     ]);
   });
+
+  it("asks the group service only to create a group", () => {
+    // Renaming, deleting and changing members follow in AT-9b and AT-9c, each widening this list.
+    const lib = code(readFileSync(join(REPO_ROOT, "apps", "web", "src", "lib", "groups.ts"), "utf8"));
+    expect([...lib.matchAll(/getGroupService\(\)\.(\w+)\(/g)].map(([, method]) => method)).toEqual(["create"]);
+    expect(lib).not.toMatch(/export function getGroupService/);
+    expect(lib.match(/new GroupService\(/g)).toHaveLength(1);
+    // Its definition and that one call: the service is never kept and asked something else later.
+    expect(lib.match(/getGroupService\(/g)).toHaveLength(2);
+  });
 });

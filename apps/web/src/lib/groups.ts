@@ -2,6 +2,7 @@ import { GROUP_NAME_MAX_LENGTH, GroupService, GroupsOverviewService, type GroupN
 import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
+import { codeOf } from "./page-codes";
 
 let overview: GroupsOverviewService | undefined;
 
@@ -15,7 +16,7 @@ export function getGroupsOverviewService(): GroupsOverviewService {
 }
 
 /** Groups and their changes (ADR-0060), each audited with what it changed or why it was refused. */
-export function getGroupService(): GroupService {
+function getGroupService(): GroupService {
   return new GroupService(getIdentityServices().deps);
 }
 
@@ -37,10 +38,6 @@ export const GROUPS_ERRORS = {
 
 export type GroupsNotice = keyof typeof GROUPS_NOTICES;
 export type GroupsError = keyof typeof GROUPS_ERRORS;
-
-function codeOf<T extends object>(table: T, param: string | readonly string[] | undefined): keyof T | null {
-  return typeof param === "string" && Object.hasOwn(table, param) ? (param as keyof T) : null;
-}
 
 /** The notice a `?notice=` code names, or `null` for anything else. */
 export function groupsNotice(param: string | readonly string[] | undefined): GroupsNotice | null {

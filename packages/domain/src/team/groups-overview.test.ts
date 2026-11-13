@@ -65,6 +65,28 @@ describe("the groups overview", () => {
     await expect(service.overview(ids.CREATOR, orgId)).resolves.toMatchObject({ groups: [] });
   });
 
+  it("shows members' addresses only to a viewer who also holds member.view", async () => {
+    await group("East", ["ADMIN"]);
+    const grants = new PermissionGrantService(deps);
+    await grants.grant(ids.OWNER, orgId, ids.CREATOR, "group.view");
+    const [listed] = (await service.overview(ids.CREATOR, orgId)).groups;
+    expect(listed?.members).toEqual([{ userId: ids.ADMIN, name: "admin san", email: null, role: "ADMIN" }]);
+    await grants.grant(ids.OWNER, orgId, ids.CREATOR, "member.view");
+    const [again] = (await service.overview(ids.CREATOR, orgId)).groups;
+    expect(again?.members[0]?.email).toBe("admin@example.com");
+  });
+
+  it("reads the grouped members in one listing, and only their accounts", async () => {
+    await group("East", ["ADMIN"]);
+    await group("West", ["ADMIN", "CREATOR"]);
+    await group("North");
+    const perGroup = vi.spyOn(deps.repos.groups, "listMembers");
+    const accounts = vi.spyOn(deps.repos.users, "findById");
+    await service.overview(ids.OWNER, orgId);
+    expect(perGroup).not.toHaveBeenCalled();
+    expect(accounts.mock.calls.map(([userId]) => userId).sort()).toEqual([ids.ADMIN, ids.CREATOR].sort());
+  });
+
   it("lists the groups by name, each member by role and then the longest-standing first", async () => {
     await group("West", ["CREATOR", "VIEWER", "MANAGER", "OWNER"]);
     await group("East", ["ADMIN"]);
@@ -80,19 +102,21 @@ describe("the groups overview", () => {
     });
   });
 
-  it("orders members of one role by when they joined", async () => {
+  it("orders members of one role by when they joined, not by their ids", async () => {
     const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
-    const later: string[] = [];
-    for (const name of ["zed", "amy"]) {
-      deps.clock.set(iso(name === "zed" ? "2026-11-08T00:00:00.000Z" : "2026-11-09T00:00:00.000Z"));
-      const userId = (await auth.register({ email: `${name}@example.com`, name, password: "password-123456" })).id;
+    const register = async (name: string) =>
+      (await auth.register({ email: `${name}@example.com`, name, password: "password-123456" })).id;
+    // Amy's account is older, so its id sorts first, but Zed joined first.
+    const amy = await register("amy");
+    const zed = await register("zed");
+    for (const [userId, day] of [[zed, "08"], [amy, "09"]] as const) {
+      deps.clock.set(iso(`2026-11-${day}T00:00:00.000Z`));
       await deps.repos.memberships.create({ organizationId: orgId, userId, role: "VIEWER" });
-      later.push(userId);
     }
     const created = await group("Viewers", ["VIEWER"]);
-    for (const userId of [...later].reverse()) await groups.addMember(ids.OWNER, orgId, created.id, userId);
+    for (const userId of [amy, zed]) await groups.addMember(ids.OWNER, orgId, created.id, userId);
     const [listed] = (await service.overview(ids.OWNER, orgId)).groups;
-    expect(listed?.members.map(({ userId }) => userId)).toEqual([ids.VIEWER, ...later]);
+    expect(listed?.members.map(({ userId }) => userId)).toEqual([ids.VIEWER, zed, amy]);
   });
 
   it("shows only this organization's groups", async () => {

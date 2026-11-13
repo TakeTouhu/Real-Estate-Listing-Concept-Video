@@ -182,6 +182,17 @@ describe("the groups page", () => {
     expect(createForm()).toBeNull();
   });
 
+  it("names a member without an address when the overview gives none", async () => {
+    // The overview's own tests hold when it gives one: to a viewer holding member.view too.
+    await signInAs("MANAGER");
+    const member = { userId: ownerId, name: "Aiko Owner", email: null, role: "OWNER" as const };
+    const groupsShown = [{ id: "grp_1", name: "East", members: [member] }];
+    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: false, mayDelete: false }) };
+    const text = await renderGroups();
+    expect(text).toContain("East · 1 memberAiko Owner · Owner");
+    expect(text).not.toContain("owner@example.com");
+  });
+
   it("says so when there are no groups, and says one member in the singular", async () => {
     await signInAs("ADMIN");
     await renderGroups();

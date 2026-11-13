@@ -7,11 +7,11 @@ import {
   INVITATION_LIFETIME,
   MEMBERS_ERRORS,
   MEMBERS_NOTICES,
-  ROLE_NAMES,
   getMembersOverviewService,
   membersError,
   membersNotice,
 } from "@/lib/members";
+import { ROLE_NAMES } from "@/lib/role-names";
 import { formatJst } from "@/lib/units-view";
 
 export const dynamic = "force-dynamic";

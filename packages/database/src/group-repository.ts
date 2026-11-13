@@ -203,6 +203,15 @@ export function createPrismaGroupRepository(prisma: PrismaClient): GroupReposito
       ).map(toGroupMember);
     },
 
+    async listMembersByOrganization(organizationId) {
+      return (
+        await prisma.groupMember.findMany({
+          where: { organizationId },
+          orderBy: [{ groupId: "asc" }, { userId: "asc" }],
+        })
+      ).map(toGroupMember);
+    },
+
     async listGroupIdsForMember(organizationId, userId) {
       return (
         await prisma.groupMember.findMany({ where: { organizationId, userId }, select: { groupId: true }, orderBy: { groupId: "asc" } })
