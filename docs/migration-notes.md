@@ -2466,3 +2466,14 @@ the other members whose role it may give. A removal is audited as
 
 **Rolling back.** To AT-8a's build: safe. Removed members stay removed, and
 their Properties stay unassigned; the page no longer offers to remove anyone.
+
+## AT-9a — the groups page
+
+**No migration** (ADR-0141). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. One page and
+one form post appear, and the dashboard links the page. A creation is
+audited as `group.created`, as the service always did.
+
+**Rolling back.** To AT-8b's build: safe. Groups created stay, with their
+audit entries; no page shows them until AT-9a returns.

@@ -45,7 +45,7 @@ is split further where it would exceed about 500 changed lines.
 | AT-6 | Invite and cancel, the seat limit, one pending invitation per email (*split: AT-6a the rules and migration 34, ADR-0135; AT-6b the page and routes, ADR-0136*) | 1 |
 | AT-7 | Accept an invitation with the invited email (*split: AT-7a the rules, ADR-0137; AT-7b the page and the route, ADR-0138*) | none |
 | AT-8 | Change a member's role, remove a member (*split: AT-8a the role change, ADR-0139; AT-8b removal, ADR-0140*) | none |
-| AT-9 | Groups page | none |
+| AT-9 | Groups page (*split: AT-9a list and create, ADR-0141; AT-9b rename and delete; AT-9c members*) | none |
 | AT-10 | Property assignment on the Property page | none |
 | AT-11 | Individual and group permissions | none |
 | AT-12 | Browser test and completion report | none |

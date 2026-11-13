@@ -7,8 +7,9 @@ import { describe, expect, it } from "vitest";
  *
  * 1. **One migration**, this phase's, adding two tables and touching nothing
  *    else. Both foreign keys of a group member carry the organization.
- * 2. **No group surface.** Groups are a service no route or page reaches yet,
- *    and a group confers nothing: no permission vocabulary on any group table.
+ * 2. **No group surface** then. Since AT-9a (ADR-0141) the groups page and
+ *    its route reach groups through the web app's groups module only. No
+ *    permission vocabulary on any group table.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -77,10 +78,19 @@ describe("durable shape", () => {
 });
 
 describe("dormancy", () => {
-  it("adds no group caller to either application", () => {
-    const callers = ["apps/web", "apps/worker"]
-      .flatMap((app) => sourceFiles(join(REPO_ROOT, app)))
-      .filter((file) => /GroupService|\.groups\.\w+\(/.test(code(readFileSync(file, "utf8"))));
-    expect(callers).toEqual([]);
+  it("reaches groups from the web app's groups module only, and creates them from the groups page's route", () => {
+    // AT-9a (ADR-0141): the page reads the groups there, and the route calls `createGroup` there. The
+    // application's own tests are not callers.
+    const callersOf = (pattern: RegExp) =>
+      ["apps/web", "apps/worker", "apps/ops"]
+        .flatMap((app) => sourceFiles(join(REPO_ROOT, app)))
+        .filter((file) => !/\.test\.tsx?$/.test(file) && pattern.test(code(readFileSync(file, "utf8"))))
+        .map((file) => file.slice(REPO_ROOT.length + 1))
+        .sort();
+    expect(callersOf(/GroupService|repos\.groups\.\w+\(/)).toEqual(["apps/web/src/lib/groups.ts"]);
+    expect(callersOf(/\bcreateGroup\(/)).toEqual([
+      "apps/web/src/app/api/organizations/[organizationId]/groups/route.ts",
+      "apps/web/src/lib/groups.ts",
+    ]);
   });
 });

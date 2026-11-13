@@ -7,6 +7,7 @@ import {
   linkLifetime,
   type InvitationRefusal,
   type MembershipChangeRefusal,
+  type Role,
 } from "@app/domain";
 import { createSubscriptionRepository, getPrismaClient } from "@app/database";
 import { createLogger, type Logger } from "@app/observability";
@@ -29,6 +30,16 @@ export function getMembersOverviewService(): MembersOverviewService {
   });
   return overview;
 }
+
+/** Each role as the members and groups pages name it. */
+export const ROLE_NAMES: Record<Role, string> = {
+  OWNER: "Owner",
+  ADMIN: "Admin",
+  MANAGER: "Manager",
+  CREATOR: "Creator",
+  VIEWER: "Viewer",
+  BILLING: "Billing",
+};
 
 /** The page an invitation's link opens, with its token (ADR-0138). */
 export const ACCEPT_INVITATION_PATH = "/accept-invitation";

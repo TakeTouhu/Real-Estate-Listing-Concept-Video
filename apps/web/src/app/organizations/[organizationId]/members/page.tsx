@@ -7,6 +7,7 @@ import {
   INVITATION_LIFETIME,
   MEMBERS_ERRORS,
   MEMBERS_NOTICES,
+  ROLE_NAMES,
   getMembersOverviewService,
   membersError,
   membersNotice,
@@ -14,15 +15,6 @@ import {
 import { formatJst } from "@/lib/units-view";
 
 export const dynamic = "force-dynamic";
-
-const ROLE_NAMES: Record<Role, string> = {
-  OWNER: "Owner",
-  ADMIN: "Admin",
-  MANAGER: "Manager",
-  CREATOR: "Creator",
-  VIEWER: "Viewer",
-  BILLING: "Billing",
-};
 
 type Query = { notice?: string | string[]; error?: string | string[] };
 

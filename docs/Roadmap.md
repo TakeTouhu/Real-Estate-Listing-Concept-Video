@@ -911,6 +911,14 @@ the member's Properties with no responsible user and audits the removal; the
 member's account stays. The browser test of joining by invitation ends with
 the owner removing the colleague.
 
+**AT-9a — the groups page** (ADR-0141, no migration): a holder of
+`group.view` sees the organization's groups by name, each with its members,
+on a page the dashboard links; a holder of `group.manage` creates a group
+with a same-origin form post, answered with the page and a fixed code. A
+refused name now says why (`INVALID_NAME`, `NAME_TAKEN`). Renaming and
+deleting a group (AT-9b) and changing its members (AT-9c) follow. A browser
+test creates a group.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
