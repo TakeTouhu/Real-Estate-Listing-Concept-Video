@@ -919,6 +919,15 @@ refused name now says why (`INVALID_NAME`, `NAME_TAKEN`). Renaming and
 deleting a group (AT-9b) and changing its members (AT-9c) follow. A browser
 test creates a group.
 
+**AT-9b — renaming and deleting a group** (ADR-0142, no migration): a holder
+of `group.manage` renames a group from a closed form that carries the name
+the page showed, so a group renamed meanwhile is not renamed again unseen
+(`STALE`, now a `details.reason`). An `OWNER` or `ADMIN` holding it deletes a
+group from a closed form that says what deleting does; its members stay and
+its Properties are left with no group. Both are same-origin form posts
+answered with the page and a fixed code. The browser test renames and
+deletes the group it created.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

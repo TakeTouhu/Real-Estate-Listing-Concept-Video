@@ -19,10 +19,13 @@ import { AppError, hotp } from "@app/shared";
 /**
  * The groups page (AT-9a, ADR-0141): a holder of `group.view` sees the groups
  * and who belongs to each; anyone else is refused alike. A holder of
- * `group.manage` creates a group, and the page says what a fixed code in its
- * address names, and nothing else. The dashboard links each organization to it.
+ * `group.manage` creates and renames a group, and one who is also an `OWNER`
+ * or `ADMIN` deletes one (AT-9b, ADR-0142). The page says what a fixed code in
+ * its address names, and nothing else. The dashboard links each organization
+ * to it.
  */
 const PASSWORD = "password-123456";
+const WENT_WRONG = "Something went wrong.";
 const KEY = "56".repeat(32);
 
 const cookie = vi.hoisted(() => ({ value: undefined as string | undefined }));
@@ -130,6 +133,29 @@ function createForm(): string | null {
   return `${form?.getAttribute("method")} ${form?.getAttribute("action")} (${attributes})`;
 }
 
+/** A group's rename form: where it posts, the name it carries as shown, and its name field. */
+function renameForm(name: string): string | null {
+  const button = screen.queryByRole("button", { name: `Rename group ${name}` });
+  if (button === null) return null;
+  const form = button.closest("form")!;
+  const shown = form.querySelector<HTMLInputElement>('input[type="hidden"]');
+  const field = form.querySelector<HTMLInputElement>('input[type="text"]')!;
+  const label = form.querySelector(`label[for="${field.id}"]`)?.textContent;
+  const attributes = `name=${field.name} value=${field.value} maxLength=${field.maxLength} required=${field.required}`;
+  const carried = `${shown?.name}=${shown?.value}`;
+  return `${form.getAttribute("method")} ${form.getAttribute("action")} (${carried}; ${label}: ${attributes})`;
+}
+
+/** A group's delete form: where it posts, what it says, and that it carries no field. */
+function deleteForm(name: string): string | null {
+  const button = screen.queryByRole("button", { name: `Delete group ${name}` });
+  if (button === null) return null;
+  const form = button.closest("form")!;
+  const said = form.querySelector("p")?.textContent?.replace(/\s+/g, " ");
+  const fields = form.querySelectorAll("input").length;
+  return `${form.getAttribute("method")} ${form.getAttribute("action")} (${fields}) ${said}`;
+}
+
 describe("the groups page", () => {
   it("sends a signed-out visitor to sign in", async () => {
     await expect(GroupsPage({ params: Promise.resolve({ organizationId: orgId }) })).rejects.toThrow(
@@ -180,6 +206,8 @@ describe("the groups page", () => {
       "Sora Creator · sora.creator@example.com · Creator",
     ]);
     expect(createForm()).toBeNull();
+    expect(renameForm("East")).toBeNull();
+    expect(deleteForm("East")).toBeNull();
   });
 
   it("names a member without an address when the overview gives none", async () => {
@@ -218,6 +246,47 @@ describe("the groups page", () => {
     expect(createForm()).toBe(`post /api/organizations/${orgId}/groups (name=name maxLength=100 required=true)`);
   });
 
+  it.each(["OWNER", "ADMIN"] as const)("lets a %s rename and delete each group", async (role) => {
+    await group("East");
+    await group("West", [ownerId]);
+    await signInAs(role);
+    await renderGroups();
+    const [east, west] = (await deps.repos.groups.listByOrganization(orgId)).map(({ id }) => id);
+    const path = `/api/organizations/${orgId}/groups`;
+    const field = (name: string) => `New name: name=name value=${name} maxLength=100 required=true`;
+    expect(renameForm("East")).toBe(`post ${path}/${east}/rename (from=East; ${field("East")})`);
+    expect(renameForm("West")).toBe(`post ${path}/${west}/rename (from=West; ${field("West")})`);
+    expect(deleteForm("West")).toBe(
+      `post ${path}/${west}/delete (0) West will be deleted. Its members stay in the organization with their roles, ` +
+        "and lose only what this group gave them. Properties assigned to it are left with no group, so no Manager " +
+        "reaches them through it. Nothing else is deleted, and this cannot be undone.",
+    );
+    expect(deleteForm("East")).toMatch(`post ${path}/${east}/delete (0) East will be deleted.`);
+    // Both closed until opened, each named for its group.
+    expect(screen.getByText("Rename…", { selector: `summary[aria-label="Rename East…"]` })).toBeTruthy();
+    expect(screen.getByText("Delete…", { selector: `summary[aria-label="Delete East…"]` })).toBeTruthy();
+    expect(document.querySelectorAll("details[open]")).toHaveLength(0);
+  });
+
+  it("offers renaming to whoever may manage groups, and deleting only to whoever the overview says may", async () => {
+    // A manager granted group.manage: the overview's own tests hold it may not delete (ADR-0052 Decision 11).
+    await signInAs("MANAGER");
+    const groupsShown = [{ id: "grp_1", name: "East", members: [] }];
+    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true, mayDelete: false }) };
+    await renderGroups();
+    expect(renameForm("East")).toMatch(`post /api/organizations/${orgId}/groups/grp_1/rename (from=East;`);
+    expect(deleteForm("East")).toBeNull();
+  });
+
+  it("names a group's forms by its id in the address, encoded", async () => {
+    await signInAs("OWNER");
+    const groupsShown = [{ id: "grp/1?x", name: "East", members: [] }];
+    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true, mayDelete: true }) };
+    await renderGroups();
+    expect(renameForm("East")).toMatch(`/groups/grp%2F1%3Fx/rename (`);
+    expect(deleteForm("East")).toMatch(`/groups/grp%2F1%3Fx/delete (`);
+  });
+
   it("links to the members page", async () => {
     await signInAs("OWNER");
     await renderGroups();
@@ -232,6 +301,14 @@ describe("the groups page", () => {
     [{ error: "group-name-taken" }, "alert", "Another group of this organization already has that name."],
     [{ error: "may-not-create-group" }, "alert", "You cannot create groups in this organization."],
     [{ error: "create-group-failed" }, "alert", "Something went wrong. Check below whether the group was created."],
+    [{ notice: "group-renamed" }, "status", "The group's name was saved."],
+    [{ notice: "group-deleted" }, "status", "The group was deleted."],
+    [{ error: "group-gone" }, "alert", "That group no longer exists."],
+    [{ error: "group-changed" }, "alert", "That group was renamed or deleted meanwhile. Check below and try again."],
+    [{ error: "may-not-rename-group" }, "alert", "You cannot rename groups in this organization."],
+    [{ error: "rename-group-failed" }, "alert", `${WENT_WRONG} Check below whether the group was renamed.`],
+    [{ error: "may-not-delete-group" }, "alert", "You cannot delete this group."],
+    [{ error: "delete-group-failed" }, "alert", `${WENT_WRONG} Check below whether the group was deleted.`],
   ] as const)("says what %o names", async (query, role, sentence) => {
     await signInAs("OWNER");
     await renderGroups(query);
