@@ -42,7 +42,7 @@ A form post from the groups page. No field.
 
 | Export | Shape |
 | --- | --- |
-| `GroupService.rename(actor, organizationId, groupId, name, seenName?)` | given `seenName`, renames only a group still named so; a stale rename's `VALIDATION_FAILED` now carries `details.reason` `STALE` |
+| `GroupService.rename(actor, organizationId, groupId, name, seenName?)` | given `seenName`, renames only a group still named so (line breaks compared alike); a stale rename's `VALIDATION_FAILED` now carries `details.reason` `STALE` |
 | `GroupRenameRefusal` | new: `GroupNameRefusal \| "STALE"` |
 
 ### Added: `apps/web` (`lib/groups.ts`)

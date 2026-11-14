@@ -41,15 +41,22 @@ asks, in this order:
 1. `group.manage` (a refusal is audited, as before);
 2. the new name (`INVALID_NAME`);
 3. the group, of this organization (`NOT_FOUND`);
-4. the group still named as the page showed it (`STALE`);
+4. the group still named as the page showed it (`STALE`), with line breaks
+   compared alike, since a browser posts each as CRLF;
 5. then it renames only while the group still has that name, as ADR-0060
    built (`STALE`, or `NAME_TAKEN`).
 
 Without the shown name, a rename posted from a page that showed an older
 name would silently replace a rename someone else had made since. A form
 without `from` carries an empty name, which no group has, so it is stale.
-It is still asked after the permission, as ADR-0139 asks the role shown, so
-a refusal keeps its audit entry.
+Unlike the members page's routes (ADR-0139, ADR-0140), which answer a
+missing `from` before asking the service, this route still asks the
+permission first, so a refusal keeps its audit entry.
+
+Only a name posted from outside the page holds a line break: the create
+form's field is one line. A browser posts the hidden `from` back with each
+line break as CRLF, so a stored name holding a bare LF or CR would otherwise
+never match it, and the group could never be renamed from the page.
 
 A stale rename's `VALIDATION_FAILED` now carries `details.reason` `STALE`,
 beside the name reasons of ADR-0141. The type is `GroupRenameRefusal`. Its
@@ -65,7 +72,7 @@ Opened, it says what deleting does before its one button:
 - the group's members stay in the organization with their roles, and lose
   only what this group gave them;
 - Properties assigned to it are left with no group, so no Manager reaches
-  them through it (ADR-0062, ADR-0064);
+  them (ADR-0062, ADR-0064);
 - nothing else is deleted, and it cannot be undone.
 
 Its post is `POST /api/organizations/{id}/groups/{groupId}/delete`, with no

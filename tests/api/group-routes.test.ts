@@ -5,12 +5,19 @@ import {
   MfaService,
   OrganizationService,
   PermissionGrantService,
+  PropertyService,
   createMfaSecretCipher,
   systemMfaRandom,
   totpStep,
   type Role,
 } from "@app/domain";
-import { createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
+import {
+  InMemoryMediaAssetRepository,
+  InMemoryPropertyRepository,
+  createTestDeps,
+  markEmailVerified,
+  type TestDeps,
+} from "@app/domain/testing";
 import { AppError, hotp } from "@app/shared";
 
 /**
@@ -47,7 +54,7 @@ vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }))
 const { POST: create } = await import("@/app/api/organizations/[organizationId]/groups/route");
 const { POST: rename } = await import("@/app/api/organizations/[organizationId]/groups/[groupId]/rename/route");
 const { POST: remove } = await import("@/app/api/organizations/[organizationId]/groups/[groupId]/delete/route");
-const { createGroup, deleteGroup, renameGroup } = await import("@/lib/groups");
+const { GROUP_ID_MAX_LENGTH, createGroup, deleteGroup, renameGroup } = await import("@/lib/groups");
 
 let deps: TestDeps;
 let auth: AuthService;
@@ -112,6 +119,8 @@ const creating = (
     { params: Promise.resolve({ organizationId }) },
   );
 
+type HeaderFields = Record<string, string>;
+
 /** A post of `fields` to one group's change. */
 const changing = (
   route: typeof rename,
@@ -119,7 +128,7 @@ const changing = (
   groupId: string,
   fields: Record<string, string>,
   organizationId = orgId,
-  headers: Record<string, string> = { origin: SITE },
+  headers: HeaderFields = { origin: SITE },
 ) =>
   route(
     new Request(`${SITE}/api/organizations/${organizationId}/groups/${encodeURIComponent(groupId)}/${change}`, {
@@ -130,12 +139,10 @@ const changing = (
     { params: Promise.resolve({ organizationId, groupId }) },
   );
 
-type Headers = Record<string, string>;
-
-const renaming = (groupId: string, fields: Record<string, string>, organizationId = orgId, headers?: Headers) =>
+const renaming = (groupId: string, fields: Record<string, string>, organizationId = orgId, headers?: HeaderFields) =>
   changing(rename, "rename", groupId, fields, organizationId, headers);
 
-const deleting = (groupId: string, organizationId = orgId, headers?: Headers) =>
+const deleting = (groupId: string, organizationId = orgId, headers?: HeaderFields) =>
   changing(remove, "delete", groupId, {}, organizationId, headers);
 
 /** A group of the organization, made by its owner; returns its id. */
@@ -335,6 +342,12 @@ describe("renaming a group", () => {
     },
   );
 
+  it("asks for a name before the group or the name it showed", async () => {
+    const east = await newGroup("East");
+    expect(landing(await renaming(east, { name: "", from: "Old East" }))).toBe("error=group-name");
+    expect(landing(await renaming("grp_missing", { name: "", from: "East" }))).toBe("error=group-name");
+  });
+
   it("says when another group has the name, renaming nothing", async () => {
     await newGroup("East");
     const west = await newGroup("West");
@@ -351,6 +364,12 @@ describe("renaming a group", () => {
       expect(audited("group.renamed")).toEqual([]);
     },
   );
+
+  it("says the group changed when another rename commits first", async () => {
+    const east = await newGroup("East");
+    vi.spyOn(deps.repos.groups, "rename").mockResolvedValue({ outcome: "STALE" });
+    expect(landing(await renaming(east, { name: "North", from: "East" }))).toBe("error=group-changed");
+  });
 
   it("asks a form without the name shown for the permission first, so its refusal is audited", async () => {
     const east = await newGroup("East");
@@ -382,9 +401,10 @@ describe("renaming a group", () => {
   it("refuses an id longer than any group's unread, so it never reaches the audit log", async () => {
     await member("acting.viewer", "VIEWER");
     await signIn("acting.viewer");
-    expect(landing(await renaming("g".repeat(65), { name: "North", from: "East" }))).toBe("error=group-gone");
-    expect(landing(await renaming("g".repeat(64), { name: "North", from: "East" }))).toBe("error=may-not-rename-group");
-    expect(audited("group.change_refused").map(({ resourceId }) => resourceId)).toEqual(["g".repeat(64)]);
+    const longest = "g".repeat(GROUP_ID_MAX_LENGTH);
+    expect(landing(await renaming(`${longest}g`, { name: "North", from: "East" }))).toBe("error=group-gone");
+    expect(landing(await renaming(longest, { name: "North", from: "East" }))).toBe("error=may-not-rename-group");
+    expect(audited("group.change_refused").map(({ resourceId }) => resourceId)).toEqual([longest]);
   });
 
   it("asks nothing for an empty id, so it never reaches the audit log", async () => {
@@ -450,6 +470,23 @@ describe("deleting a group", () => {
     ]);
   });
 
+  it("leaves the group's Properties with no group, counting them", async () => {
+    const east = await newGroup("East");
+    const properties = new InMemoryPropertyRepository(deps.clock, deps.repos);
+    const assets = new InMemoryMediaAssetRepository(deps.clock);
+    const service = new PropertyService({ identity: deps, properties, assets, clock: deps.clock, ids: deps.ids });
+    const property = await service.create(ownerId, {
+      organizationId: orgId,
+      name: "Harbor View",
+      propertyType: "APARTMENT",
+      rightsConfirmed: true,
+      groupId: east,
+    });
+    expect(landing(await deleting(east))).toBe("notice=group-deleted");
+    expect((await properties.findById(orgId, property.id))?.groupId).toBeNull();
+    expect(audited("group.deleted")[0]?.metadata).toMatchObject({ ungroupedPropertyCount: 1 });
+  });
+
   it("lets an admin delete one", async () => {
     const east = await newGroup("East");
     await member("team.admin", "ADMIN");
@@ -502,10 +539,19 @@ describe("deleting a group", () => {
     expect(audited("group.deleted")).toHaveLength(1);
   });
 
+  it("refuses an organization the poster is no member of, deleting nothing there", async () => {
+    const outsider = await register("outsider");
+    const { organization } = await new OrganizationService(deps).createOrganization(outsider, { name: "Elsewhere" });
+    const theirs = await newGroup("Theirs", organization.id, outsider);
+    expect(landing(await deleting(theirs, organization.id), organization.id)).toBe("error=may-not-delete-group");
+    expect(await names(organization.id)).toEqual(["Theirs"]);
+    expect(audited("group.change_refused")).toEqual([]);
+  });
+
   it("refuses an id longer than any group's unread, so it never reaches the audit log", async () => {
     await member("acting.viewer", "VIEWER");
     await signIn("acting.viewer");
-    expect(landing(await deleting("g".repeat(65)))).toBe("error=group-gone");
+    expect(landing(await deleting("g".repeat(GROUP_ID_MAX_LENGTH + 1)))).toBe("error=group-gone");
     expect(audited("group.change_refused")).toEqual([]);
   });
 

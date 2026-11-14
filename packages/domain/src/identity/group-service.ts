@@ -67,7 +67,8 @@ interface RefusedTarget {
  * through a group reaches past the ceiling.
  *
  * Every refusal of a member is audited, and every change commits together with
- * its audit entry. A group confers no row access yet.
+ * its audit entry. A `MANAGER` reaches the Properties assigned to the groups
+ * it is in (ADR-0064).
  */
 export class GroupService {
   constructor(private readonly deps: IdentityServiceDeps) {}
@@ -104,7 +105,7 @@ export class GroupService {
     const actor = await this.requireGroupManage(actorUserId, organizationId, "rename", { groupId });
     const groupName = normalizeGroupName(name);
     const group = await this.requireGroup(organizationId, groupId);
-    if (seenName !== undefined && seenName !== group.name) throw renameStale();
+    if (seenName !== undefined && !isShownName(seenName, group.name)) throw renameStale();
     if (group.name === groupName) return group;
     const renamed = await this.deps.repos.groups.rename(
       organizationId,
@@ -349,6 +350,16 @@ export class GroupService {
     });
     throw new AppError("FORBIDDEN", `Role ${actor.role} may not ${operation.replace("_", " ")} here`);
   }
+}
+
+/**
+ * Whether `seenName`, as a page posted it back, is the group's name `name`. A
+ * browser posts each line break of a form field as CRLF, so line breaks are
+ * compared alike; a name holds one only if it was posted from outside the page.
+ */
+function isShownName(seenName: string, name: string): boolean {
+  const lines = (text: string) => text.replace(/\r\n?/g, "\n");
+  return lines(seenName) === lines(name);
 }
 
 /**

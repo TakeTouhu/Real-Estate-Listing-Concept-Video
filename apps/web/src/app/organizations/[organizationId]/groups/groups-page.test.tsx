@@ -133,25 +133,26 @@ function createForm(): string | null {
   return `${form?.getAttribute("method")} ${form?.getAttribute("action")} (${attributes})`;
 }
 
-/** A group's rename form: where it posts, the name it carries as shown, and its name field. */
+/** A group's rename form: where it posts, the name it carries as shown, and its name field, labelled and named. */
 function renameForm(name: string): string | null {
   const button = screen.queryByRole("button", { name: `Rename group ${name}` });
   if (button === null) return null;
   const form = button.closest("form")!;
   const shown = form.querySelector<HTMLInputElement>('input[type="hidden"]');
   const field = form.querySelector<HTMLInputElement>('input[type="text"]')!;
-  const label = form.querySelector(`label[for="${field.id}"]`)?.textContent;
+  const label = `${form.querySelector(`label[for="${field.id}"]`)?.textContent} (${field.getAttribute("aria-label")})`;
   const attributes = `name=${field.name} value=${field.value} maxLength=${field.maxLength} required=${field.required}`;
   const carried = `${shown?.name}=${shown?.value}`;
   return `${form.getAttribute("method")} ${form.getAttribute("action")} (${carried}; ${label}: ${attributes})`;
 }
 
-/** A group's delete form: where it posts, what it says, and that it carries no field. */
+/** A group's delete form: where it posts, that it carries no field, and what its button is described by. */
 function deleteForm(name: string): string | null {
   const button = screen.queryByRole("button", { name: `Delete group ${name}` });
   if (button === null) return null;
   const form = button.closest("form")!;
-  const said = form.querySelector("p")?.textContent?.replace(/\s+/g, " ");
+  const description = document.getElementById(button.getAttribute("aria-describedby") ?? "");
+  const said = description?.textContent?.replace(/\s+/g, " ");
   const fields = form.querySelectorAll("input").length;
   return `${form.getAttribute("method")} ${form.getAttribute("action")} (${fields}) ${said}`;
 }
@@ -253,13 +254,14 @@ describe("the groups page", () => {
     await renderGroups();
     const [east, west] = (await deps.repos.groups.listByOrganization(orgId)).map(({ id }) => id);
     const path = `/api/organizations/${orgId}/groups`;
-    const field = (name: string) => `New name: name=name value=${name} maxLength=100 required=true`;
+    const field = (name: string) =>
+      `New name (New name for ${name}): name=name value=${name} maxLength=100 required=true`;
     expect(renameForm("East")).toBe(`post ${path}/${east}/rename (from=East; ${field("East")})`);
     expect(renameForm("West")).toBe(`post ${path}/${west}/rename (from=West; ${field("West")})`);
     expect(deleteForm("West")).toBe(
       `post ${path}/${west}/delete (0) West will be deleted. Its members stay in the organization with their roles, ` +
         "and lose only what this group gave them. Properties assigned to it are left with no group, so no Manager " +
-        "reaches them through it. Nothing else is deleted, and this cannot be undone.",
+        "reaches them. Nothing else is deleted, and this cannot be undone.",
     );
     expect(deleteForm("East")).toMatch(`post ${path}/${east}/delete (0) East will be deleted.`);
     // Both closed until opened, each named for its group.

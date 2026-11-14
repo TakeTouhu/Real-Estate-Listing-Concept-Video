@@ -144,6 +144,7 @@ function RenameGroup({ organizationId, group }: { organizationId: string; group:
         </label>
         <input
           id={`rename-${group.id}`}
+          aria-label={`New name for ${group.name}`}
           name="name"
           type="text"
           defaultValue={group.name}
@@ -171,12 +172,12 @@ function DeleteGroup({ organizationId, group }: { organizationId: string; group:
     <details>
       <summary aria-label={`Delete ${group.name}…`}>Delete…</summary>
       <form method="post" action={groupAction(organizationId, group.id, "delete")}>
-        <p className="muted">
+        <p className="muted" id={`delete-${group.id}-effects`}>
           {group.name} will be deleted. Its members stay in the organization with their roles, and lose only what
-          this group gave them. Properties assigned to it are left with no group, so no Manager reaches them through
-          it. Nothing else is deleted, and this cannot be undone.
+          this group gave them. Properties assigned to it are left with no group, so no Manager reaches them.
+          Nothing else is deleted, and this cannot be undone.
         </p>
-        <button type="submit" aria-label={`Delete group ${group.name}`}>
+        <button type="submit" aria-label={`Delete group ${group.name}`} aria-describedby={`delete-${group.id}-effects`}>
           Delete group
         </button>
       </form>
