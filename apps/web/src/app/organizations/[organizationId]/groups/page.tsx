@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { GROUP_NAME_MAX_LENGTH, type GroupsOverview } from "@app/domain";
+import { GROUP_NAME_MAX_LENGTH, type GroupsOverview, type GroupsOverviewGroup } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { GROUPS_ERRORS, GROUPS_NOTICES, getGroupsOverviewService, groupsError, groupsNotice } from "@/lib/groups";
@@ -13,8 +13,9 @@ type Query = { notice?: string | string[]; error?: string | string[] };
 /**
  * An organization's groups and who belongs to each (AT-9a, ADR-0141), for a
  * holder of `group.view`. Viewing writes nothing. A holder of `group.manage`
- * creates a group; the route answers with a code this page turns into a fixed
- * sentence.
+ * creates and renames a group, and one who is also an `OWNER` or `ADMIN`
+ * deletes one (AT-9b, ADR-0142); each route answers with a code this page
+ * turns into a fixed sentence.
  */
 export default async function GroupsPage({
   params,
@@ -88,6 +89,8 @@ export default async function GroupsPage({
                     ))}
                   </ul>
                 ) : null}
+                {overview.mayManage ? <RenameGroup organizationId={organizationId} group={group} /> : null}
+                {overview.mayDelete ? <DeleteGroup organizationId={organizationId} group={group} /> : null}
               </li>
             ))}
           </ul>
@@ -117,5 +120,67 @@ function CreateGroup({ organizationId }: { organizationId: string }) {
         </p>
       </form>
     </div>
+  );
+}
+
+/** Where a group's changes are posted. */
+function groupAction(organizationId: string, groupId: string, change: "rename" | "delete"): string {
+  return `/api/organizations/${encodeURIComponent(organizationId)}/groups/${encodeURIComponent(groupId)}/${change}`;
+}
+
+/**
+ * The closed form that renames a group, for a holder of `group.manage`. It
+ * carries the name it shows, so a group renamed meanwhile is not renamed again
+ * unseen.
+ */
+function RenameGroup({ organizationId, group }: { organizationId: string; group: GroupsOverviewGroup }) {
+  return (
+    <details>
+      <summary aria-label={`Rename ${group.name}…`}>Rename…</summary>
+      <form method="post" action={groupAction(organizationId, group.id, "rename")}>
+        <input type="hidden" name="from" value={group.name} />
+        <label className="field" htmlFor={`rename-${group.id}`}>
+          New name
+        </label>
+        <input
+          id={`rename-${group.id}`}
+          aria-label={`New name for ${group.name}`}
+          name="name"
+          type="text"
+          defaultValue={group.name}
+          maxLength={GROUP_NAME_MAX_LENGTH}
+          autoComplete="off"
+          required
+        />
+        <p className="field">
+          <button type="submit" aria-label={`Rename group ${group.name}`}>
+            Rename group
+          </button>
+        </p>
+      </form>
+    </details>
+  );
+}
+
+/**
+ * The closed form that deletes a group, for a holder of `group.manage` who is
+ * an `OWNER` or `ADMIN` (ADR-0052 Decision 11). Opened, it says what deleting
+ * does before its button.
+ */
+function DeleteGroup({ organizationId, group }: { organizationId: string; group: GroupsOverviewGroup }) {
+  return (
+    <details>
+      <summary aria-label={`Delete ${group.name}…`}>Delete…</summary>
+      <form method="post" action={groupAction(organizationId, group.id, "delete")}>
+        <p className="muted" id={`delete-${group.id}-effects`}>
+          {group.name} will be deleted. Its members stay in the organization with their roles, and lose only what
+          this group gave them. Properties assigned to it are left with no group, so no Manager reaches them.
+          Nothing else is deleted, and this cannot be undone.
+        </p>
+        <button type="submit" aria-label={`Delete group ${group.name}`} aria-describedby={`delete-${group.id}-effects`}>
+          Delete group
+        </button>
+      </form>
+    </details>
   );
 }

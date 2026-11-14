@@ -1,4 +1,10 @@
-import { GROUP_NAME_MAX_LENGTH, GroupService, GroupsOverviewService, type GroupNameRefusal } from "@app/domain";
+import {
+  GROUP_NAME_MAX_LENGTH,
+  GroupService,
+  GroupsOverviewService,
+  type GroupNameRefusal,
+  type GroupRenameRefusal,
+} from "@app/domain";
 import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
@@ -27,6 +33,8 @@ function getGroupService(): GroupService {
  */
 export const GROUPS_NOTICES = {
   "group-created": "The group was created.",
+  "group-renamed": "The group's name was saved.",
+  "group-deleted": "The group was deleted.",
 } as const;
 
 export const GROUPS_ERRORS = {
@@ -34,6 +42,12 @@ export const GROUPS_ERRORS = {
   "group-name-taken": "Another group of this organization already has that name.",
   "may-not-create-group": "You cannot create groups in this organization.",
   "create-group-failed": "Something went wrong. Check below whether the group was created.",
+  "group-gone": "That group no longer exists.",
+  "group-changed": "That group was renamed or deleted meanwhile. Check below and try again.",
+  "may-not-rename-group": "You cannot rename groups in this organization.",
+  "rename-group-failed": "Something went wrong. Check below whether the group was renamed.",
+  "may-not-delete-group": "You cannot delete this group.",
+  "delete-group-failed": "Something went wrong. Check below whether the group was deleted.",
 } as const;
 
 export type GroupsNotice = keyof typeof GROUPS_NOTICES;
@@ -74,13 +88,26 @@ const NAME_REFUSALS: Record<GroupNameRefusal, GroupsError> = {
   NAME_TAKEN: "group-name-taken",
 };
 
-/** The refusal of a name a group change's error names, or `null` for one that is not such a refusal. */
-function nameRefusalOf(error: AppError): GroupsError | null {
+const RENAME_REFUSALS: Record<GroupRenameRefusal, GroupsError> = { ...NAME_REFUSALS, STALE: "group-changed" };
+
+/** The refusal in `refusals` a group change's error names, or `null` for one that is not such a refusal. */
+function refusalOf<R extends string>(error: unknown, refusals: Record<R, GroupsError>): GroupsError | null {
+  if (!(error instanceof AppError) || error.code !== "VALIDATION_FAILED") return null;
   const reason = error.details?.["reason"];
-  return error.code === "VALIDATION_FAILED" && typeof reason === "string" && Object.hasOwn(NAME_REFUSALS, reason)
-    ? NAME_REFUSALS[reason as GroupNameRefusal]
-    : null;
+  return typeof reason === "string" && Object.hasOwn(refusals, reason) ? refusals[reason as R] : null;
 }
+
+/** Whether an error is the given code's. */
+const isCode = (error: unknown, code: string) => error instanceof AppError && error.code === code;
+
+/** The longest group id a groups page's address may name; a group's is 20 characters. */
+export const GROUP_ID_MAX_LENGTH = 64;
+
+/**
+ * Whether `groupId` could be a group's id. One longer than any is refused
+ * before the service is asked, so it never reaches the audit log.
+ */
+const isGroupId = (groupId: string) => groupId.length > 0 && groupId.length <= GROUP_ID_MAX_LENGTH;
 
 /**
  * Create a group named `name`, as the groups page's form asks (ADR-0141). The
@@ -98,10 +125,64 @@ export async function createGroup(
     await getGroupService().create(actorUserId, organizationId, form.name);
     return { notice: "group-created" };
   } catch (error) {
-    if (error instanceof AppError && error.code === "FORBIDDEN") return { error: "may-not-create-group" };
-    const refusal = error instanceof AppError ? nameRefusalOf(error) : null;
+    if (isCode(error, "FORBIDDEN")) return { error: "may-not-create-group" };
+    const refusal = refusalOf(error, NAME_REFUSALS);
     if (refusal !== null) return { error: refusal };
     log.error("A group could not be created", { code: errorCode(error) });
     return { error: "create-group-failed" };
+  }
+}
+
+/**
+ * Rename a group, as the groups page's form asks (AT-9b, ADR-0142): `name`,
+ * and `from`, the name the page showed. The group service decides
+ * (`group.manage`, then the name, then the group still of this organization
+ * and still named as shown) and audits it. A failure that is not a refusal is
+ * logged by its error code alone: never a name.
+ */
+export async function renameGroup(
+  actorUserId: string,
+  organizationId: string,
+  groupId: string,
+  form: { readonly name: string; readonly from: string },
+  log: Pick<Logger, "error"> = getGroupsLogger(),
+): Promise<GroupsOutcome> {
+  if (!isGroupId(groupId)) return { error: "group-gone" };
+  try {
+    // A form without the name it showed carries an empty one, which no group has: stale, once the
+    // permission is asked, so a refusal is still audited.
+    await getGroupService().rename(actorUserId, organizationId, groupId, form.name, form.from);
+    return { notice: "group-renamed" };
+  } catch (error) {
+    if (isCode(error, "FORBIDDEN")) return { error: "may-not-rename-group" };
+    if (isCode(error, "NOT_FOUND")) return { error: "group-gone" };
+    const refusal = refusalOf(error, RENAME_REFUSALS);
+    if (refusal !== null) return { error: refusal };
+    log.error("A group could not be renamed", { code: errorCode(error) });
+    return { error: "rename-group-failed" };
+  }
+}
+
+/**
+ * Delete a group, as the groups page's form asks (AT-9b, ADR-0142). The group
+ * service decides (`group.manage` and the `OWNER` or `ADMIN` role, then the
+ * ceiling of what the group gave its members), ungroups its Properties and
+ * audits it. A failure that is not a refusal is logged by its error code alone.
+ */
+export async function deleteGroup(
+  actorUserId: string,
+  organizationId: string,
+  groupId: string,
+  log: Pick<Logger, "error"> = getGroupsLogger(),
+): Promise<GroupsOutcome> {
+  if (!isGroupId(groupId)) return { error: "group-gone" };
+  try {
+    await getGroupService().delete(actorUserId, organizationId, groupId);
+    return { notice: "group-deleted" };
+  } catch (error) {
+    if (isCode(error, "FORBIDDEN")) return { error: "may-not-delete-group" };
+    if (isCode(error, "NOT_FOUND")) return { error: "group-gone" };
+    log.error("A group could not be deleted", { code: errorCode(error) });
+    return { error: "delete-group-failed" };
   }
 }

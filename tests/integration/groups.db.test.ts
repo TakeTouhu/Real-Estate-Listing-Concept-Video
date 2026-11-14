@@ -378,13 +378,17 @@ describe.skipIf(!HAS_DB)("group changes racing each other", () => {
     expect(await auditRows("group.created")).toHaveLength(1);
   });
 
-  it("applies one of two renames checked against the same name", async () => {
+  it("applies one of two renames checked against the same name, each from a page showing it", async () => {
     const results = await contend(lockGroup, [
-      () => groups.rename(OWNER, ORG, GROUP, "East"),
-      () => groups.rename(ADMIN, ORG, GROUP, "West"),
+      () => groups.rename(OWNER, ORG, GROUP, "East", "Sales"),
+      () => groups.rename(ADMIN, ORG, GROUP, "West", "Sales"),
     ]);
     expect(refusals(results)).toEqual([
-      expect.objectContaining({ code: "VALIDATION_FAILED", message: "This group changed meanwhile; reload and try again" }),
+      expect.objectContaining({
+        code: "VALIDATION_FAILED",
+        message: "This group changed meanwhile; reload and try again",
+        details: { reason: "STALE" },
+      }),
     ]);
     const renamed = await auditRows("group.renamed");
     expect(renamed).toHaveLength(1);

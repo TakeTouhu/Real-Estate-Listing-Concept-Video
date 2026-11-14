@@ -1201,12 +1201,19 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       GS-3, which does not touch this code; the file then passed three runs
       out of three. The fix is test-only: signal from inside the gate's
       session once its facts are loaded, and start the write after that.
-- [ ] **Thirteen more waits of 100 ms for a transaction to take its locks**
-      (`breathe(4)` in `generation-concurrency`, `paid-submission-authorization`,
-      `reconciliation` and `submission-outcome` `.db.test.ts`). None has been
-      seen failing. Each can fail the same way under load, and each has the
-      same test-only fix: signal from inside the transaction once it holds its
-      locks.
+- [x] **The four such waits in `reconciliation.db.test.ts`.** Done in
+      AT-9b: one failed main's database job after AT-9a merged (the lock
+      holder had not yet taken its lock after 100 ms). Each holder now
+      signals once it holds its locks, and the test races that signal
+      against the holder itself, so a failing holder still fails the test.
+- [ ] **Eleven more waits of 100 ms for a transaction to take its locks**
+      (`breathe(4)` in `generation-concurrency`, `paid-submission-authorization`
+      and `submission-outcome` `.db.test.ts`). Each can fail the same way under
+      load, and each has the same test-only fix, best as one shared helper
+      with the reconciliation tests' `lockSignal`. In the same pass, the
+      reconciliation test that discovery takes no lock would report a
+      regression only as the holder's transaction timeout; asserting that
+      discovery finishes before the holder releases would name it.
 
 ## Found in GS-7d-2 — a Property rename can undo its deletion
 
@@ -1404,6 +1411,25 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       a `CREATOR`, `VIEWER` or `BILLING` member granted `group.view` alone.
       Showing them the addresses, or nothing about the members, would be a
       one-line change. It does not block the plan.
+
+## Open in AT-9b — renaming and deleting a group
+
+- [ ] **Audit a role change or removal posted without `from`.** The members
+      page's routes answer a missing or invalid `from` with `member-changed`
+      or `removal-member-changed` before asking the membership service
+      (ADR-0139, ADR-0140), so a member without `member.manage` who posts
+      such a form is refused without an audit entry. The groups page's
+      rename asks the permission first (ADR-0142). Only a crafted post
+      reaches this, and the page never sends one. Asking the service first
+      would audit it; it does not block the plan.
+- [ ] **Offer Delete only on groups the viewer may delete, once groups carry
+      permissions (AT-11).** The groups page's `mayDelete` is decided once
+      for the organization: `group.manage` and the `OWNER` or `ADMIN` role
+      (ADR-0141, ADR-0142). The grant ceiling can refuse an `ADMIN` one
+      group's deletion when the group carries a permission the `ADMIN` may
+      not take from a member (ADR-0061). Groups carry none until AT-11, so
+      today the page offers Delete exactly where it succeeds. AT-11 should
+      decide it per group, or say why the page offers it anyway.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
