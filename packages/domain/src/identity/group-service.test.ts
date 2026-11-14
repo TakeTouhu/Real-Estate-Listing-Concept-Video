@@ -155,9 +155,23 @@ describe("creating and renaming a group", () => {
 });
 
 describe("group names", () => {
-  it.each(["", "   ", "x".repeat(GROUP_NAME_MAX_LENGTH + 1)])("refuses the name %j", async (name) => {
-    await expect(newGroup(name)).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
-    expect(audits("group.created")).toEqual([]);
+  it.each(["", "   ", "x".repeat(GROUP_NAME_MAX_LENGTH + 1), "East\u0000office"])(
+    "refuses the name %j",
+    async (name) => {
+      await expect(newGroup(name)).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        details: { reason: "INVALID_NAME" },
+      });
+      expect(audits("group.created")).toEqual([]);
+    },
+  );
+
+  it("refuses an invalid rename with the same reason, writing nothing", async () => {
+    const group = await newGroup("Sales");
+    await expect(fx.groups.rename(fx.ownerId, fx.orgId, group.id, " ")).rejects.toMatchObject({
+      details: { reason: "INVALID_NAME" },
+    });
+    expect(audits("group.renamed")).toEqual([]);
   });
 
   it("accepts a name of the maximum length", async () => {
@@ -170,6 +184,7 @@ describe("group names", () => {
     await expect(newGroup(" Sales")).rejects.toMatchObject({
       code: "VALIDATION_FAILED",
       message: "A group with this name already exists",
+      details: { reason: "NAME_TAKEN" },
     });
     await expect(fx.groups.create(fx.ownerId, fx.otherOrgId, "Sales")).resolves.toMatchObject({ name: "Sales" });
     expect(audits("group.created")).toHaveLength(2);
@@ -181,6 +196,7 @@ describe("group names", () => {
     await expect(fx.groups.rename(fx.ownerId, fx.orgId, support.id, "Sales")).rejects.toMatchObject({
       code: "VALIDATION_FAILED",
       message: "A group with this name already exists",
+      details: { reason: "NAME_TAKEN" },
     });
     expect((await fx.deps.repos.groups.find(fx.orgId, support.id))?.name).toBe("Support");
     expect(audits("group.renamed")).toEqual([]);

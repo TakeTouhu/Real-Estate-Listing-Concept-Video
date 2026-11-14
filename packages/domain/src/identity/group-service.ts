@@ -24,6 +24,13 @@ export type GroupChangeRefusal =
   | "target_role"
   | GroupGrantRefusal;
 
+/**
+ * Why a group name was refused, as `details.reason` on its `VALIDATION_FAILED`
+ * error (AT-9a, ADR-0141): not 1 to 100 characters once trimmed, or another
+ * group of the organization has it.
+ */
+export type GroupNameRefusal = "INVALID_NAME" | "NAME_TAKEN";
+
 /** What a refused group change was aimed at, for its audit entry. */
 interface RefusedTarget {
   readonly groupId: string | null;
@@ -322,11 +329,14 @@ export class GroupService {
   }
 }
 
-/** A group name as stored: trimmed, 1 to 100 characters. */
+/**
+ * A group name as stored: trimmed, 1 to 100 characters. A NUL character,
+ * which PostgreSQL cannot store in text, makes it invalid too (ADR-0141).
+ */
 function normalizeGroupName(name: string): string {
   const trimmed = name.trim();
-  if (trimmed.length === 0 || trimmed.length > GROUP_NAME_MAX_LENGTH) {
-    throw new AppError("VALIDATION_FAILED", `A group name must be 1 to ${GROUP_NAME_MAX_LENGTH} characters`);
+  if (trimmed.length === 0 || trimmed.length > GROUP_NAME_MAX_LENGTH || trimmed.includes("\u0000")) {
+    throw nameRefused(`A group name must be 1 to ${GROUP_NAME_MAX_LENGTH} characters`, "INVALID_NAME");
   }
   return trimmed;
 }
@@ -360,7 +370,11 @@ function memberCeiling(
 }
 
 function nameTaken(): AppError {
-  return new AppError("VALIDATION_FAILED", "A group with this name already exists");
+  return nameRefused("A group with this name already exists", "NAME_TAKEN");
+}
+
+function nameRefused(message: string, reason: GroupNameRefusal): AppError {
+  return new AppError("VALIDATION_FAILED", message, { details: { reason } });
 }
 
 function groupNotFound(): AppError {

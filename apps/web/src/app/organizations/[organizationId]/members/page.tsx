@@ -11,18 +11,10 @@ import {
   membersError,
   membersNotice,
 } from "@/lib/members";
+import { ROLE_NAMES } from "@/lib/role-names";
 import { formatJst } from "@/lib/units-view";
 
 export const dynamic = "force-dynamic";
-
-const ROLE_NAMES: Record<Role, string> = {
-  OWNER: "Owner",
-  ADMIN: "Admin",
-  MANAGER: "Manager",
-  CREATOR: "Creator",
-  VIEWER: "Viewer",
-  BILLING: "Billing",
-};
 
 type Query = { notice?: string | string[]; error?: string | string[] };
 

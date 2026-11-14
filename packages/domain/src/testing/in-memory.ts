@@ -555,6 +555,14 @@ class InMemoryGroupRepository implements GroupRepository {
         .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0)),
     );
   }
+  listMembersByOrganization(organizationId: string): Promise<GroupMember[]> {
+    const order = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
+    return Promise.resolve(
+      [...this.members.values()]
+        .filter((m) => m.organizationId === organizationId)
+        .sort((a, b) => order(a.groupId, b.groupId) || order(a.userId, b.userId)),
+    );
+  }
   listGroupIdsForMember(organizationId: string, userId: string): Promise<string[]> {
     return Promise.resolve(
       [...this.members.values()]

@@ -365,6 +365,8 @@ export interface GroupRepository {
   ): Promise<GroupDeletion>;
   /** A group's members, by user id. */
   listMembers(organizationId: string, groupId: string): Promise<GroupMember[]>;
+  /** Every member of every group of the organization, by group id and then user id, in one read. */
+  listMembersByOrganization(organizationId: string): Promise<GroupMember[]>;
   /** The ids of the groups a member belongs to, in id order. */
   listGroupIdsForMember(organizationId: string, userId: string): Promise<string[]>;
   /**

@@ -13,6 +13,7 @@ import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
 import { getMailer } from "./mailer";
+import { codeOf } from "./page-codes";
 
 let overview: MembersOverviewService | undefined;
 
@@ -121,10 +122,6 @@ export const MEMBERS_ERRORS = {
 
 export type MembersNotice = keyof typeof MEMBERS_NOTICES;
 export type MembersError = keyof typeof MEMBERS_ERRORS;
-
-function codeOf<T extends object>(table: T, param: string | readonly string[] | undefined): keyof T | null {
-  return typeof param === "string" && Object.hasOwn(table, param) ? (param as keyof T) : null;
-}
 
 /** The notice a `?notice=` code names, or `null` for anything else. */
 export function membersNotice(param: string | readonly string[] | undefined): MembersNotice | null {

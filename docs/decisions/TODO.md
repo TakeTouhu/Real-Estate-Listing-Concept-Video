@@ -1394,6 +1394,17 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       under a share lock (ADR-0065 Decision 19). The window is one request
       wide; it does not block the plan.
 
+## Open in AT-9a — who sees a group's members
+
+- [ ] **Confirm that `group.view` alone shows a group's members without
+      their addresses.** ADR-0060 lets `group.view` list a group's members.
+      The groups page shows their names and roles, and their addresses only
+      to a viewer who also holds `member.view` (ADR-0141). Every template
+      holding `group.view` also holds `member.view`, so this matters only for
+      a `CREATOR`, `VIEWER` or `BILLING` member granted `group.view` alone.
+      Showing them the addresses, or nothing about the members, would be a
+      one-line change. It does not block the plan.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of
