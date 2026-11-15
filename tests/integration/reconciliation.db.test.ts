@@ -405,6 +405,20 @@ async function breathe(times = 20): Promise<void> {
   }
 }
 
+/**
+ * A signal a lock holder gives once it holds its locks. A test starts the
+ * contender only then: a fixed head start was not enough when the holder's
+ * client still had to open its connection, and the contender took the locks
+ * first (CI run 43591380068).
+ */
+function lockSignal(): { readonly hold: () => void; readonly held: Promise<void> } {
+  let hold!: () => void;
+  const held = new Promise<void>((resolve) => {
+    hold = resolve;
+  });
+  return { hold, held };
+}
+
 const RESOLVE = { organizationId: ORG_A, context: ctx() };
 
 describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", () => {
@@ -1353,10 +1367,12 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
         release = resolve;
       });
       // A Phase 2F-1 cost admission holds the very locks this phase takes.
+      const locked = lockSignal();
       const holder = createPaidSubmissionAuthorizationRepository(blocker).withCostAdmission(
         { organizationId: ORG_A, attemptId },
         async (session) => {
           await session.loadFacts();
+          locked.hold();
           await held;
           return null;
         },
@@ -1364,7 +1380,7 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
 
       let stillBlocked: boolean;
       try {
-        await breathe(4);
+        await Promise.race([locked.held, holder]);
         // Starts while the window is open: a pre-lock read would say INSIDE.
         expect(waitingClock.now()).toBe(INSIDE);
         const blocked = settled(
@@ -1461,17 +1477,19 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
+      const locked = lockSignal();
       const authorization = createPaidSubmissionAuthorizationRepository(
         blocker,
       ).withCostAdmission({ organizationId: ORG_A, attemptId }, async (session) => {
         await session.loadFacts();
+        locked.hold();
         await held;
         return null;
       });
 
       let stillBlocked: boolean;
       try {
-        await breathe(4);
+        await Promise.race([locked.held, authorization]);
         const blocked = settled(
           reconciliation(prisma).resolveReconciliation({
             ...RESOLVE,
@@ -1498,6 +1516,7 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
+      const locked = lockSignal();
       const writer = other.$transaction(
         async (tx) => {
           await tx.$executeRaw`
@@ -1507,6 +1526,7 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
                    "releasedAt" = NOW()
              WHERE "generationJobId" = ${job.id}
           `;
+          locked.hold();
           await held;
         },
         { timeout: 8_000 },
@@ -1514,7 +1534,7 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
 
       let stillBlocked: boolean;
       try {
-        await breathe(4);
+        await Promise.race([locked.held, writer]);
         const blocked = settled(
           reconciliation(prisma).resolveReconciliation({
             ...RESOLVE,
@@ -1857,16 +1877,18 @@ describe.skipIf(!HAS_DB)("reconciliation resolution and deadline exhaustion", ()
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
+      const locked = lockSignal();
       const holder = createPaidSubmissionAuthorizationRepository(blocker).withCostAdmission(
         { organizationId: ORG_A, attemptId },
         async (session) => {
           await session.loadFacts();
+          locked.hold();
           await held;
           return null;
         },
       );
       try {
-        await breathe(4);
+        await Promise.race([locked.held, holder]);
         const found = await createReconciliationRepository(
           prisma,
         ).findDueReconciliationCandidates({ cutoff: AFTER, limit: 10 });

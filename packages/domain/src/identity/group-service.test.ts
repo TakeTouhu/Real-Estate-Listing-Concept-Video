@@ -152,6 +152,39 @@ describe("creating and renaming a group", () => {
       }),
     ]);
   });
+
+  it("renames a group only while it has the name the page showed", async () => {
+    const group = await newGroup("Sales");
+    await fx.groups.rename(fx.ownerId, fx.orgId, group.id, "Field", "Sales");
+    for (const name of ["East", "Field"]) {
+      // Renamed meanwhile: the page showed "Sales", even for a name the group has now.
+      await expect(fx.groups.rename(fx.ids.ADMIN, fx.orgId, group.id, name, "Sales")).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        message: "This group changed meanwhile; reload and try again",
+        details: { reason: "STALE" },
+      });
+    }
+    expect((await fx.deps.repos.groups.find(fx.orgId, group.id))?.name).toBe("Field");
+    expect(audits("group.renamed")).toHaveLength(1);
+  });
+
+  it("takes the name the page showed as a browser posts it back, with each line break as CRLF", async () => {
+    // Only a name posted from outside the page holds a line break.
+    const group = await newGroup("Sales\nEast\rWest");
+    await expect(fx.groups.rename(fx.ownerId, fx.orgId, group.id, "North", "Sales\nEast West")).rejects.toMatchObject(
+      { details: { reason: "STALE" } },
+    );
+    await fx.groups.rename(fx.ownerId, fx.orgId, group.id, "North", "Sales\r\nEast\r\nWest");
+    expect((await fx.deps.repos.groups.find(fx.orgId, group.id))?.name).toBe("North");
+  });
+
+  it("asks the name the page showed only once the actor may rename groups", async () => {
+    const group = await newGroup("Sales");
+    await expect(fx.groups.rename(fx.ids.CREATOR, fx.orgId, group.id, "East", "Field")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(audits("group.change_refused")).toHaveLength(1);
+  });
 });
 
 describe("group names", () => {
@@ -498,7 +531,10 @@ describe("group changes made concurrently", () => {
     ]);
     expect(results.filter((r) => r.status === "rejected")).toEqual([
       expect.objectContaining({
-        reason: expect.objectContaining({ message: "This group changed meanwhile; reload and try again" }),
+        reason: expect.objectContaining({
+          message: "This group changed meanwhile; reload and try again",
+          details: { reason: "STALE" },
+        }),
       }),
     ]);
     const [renamed] = audits("group.renamed");

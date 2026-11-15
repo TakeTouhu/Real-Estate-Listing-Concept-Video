@@ -31,6 +31,14 @@ export type GroupChangeRefusal =
  */
 export type GroupNameRefusal = "INVALID_NAME" | "NAME_TAKEN";
 
+/**
+ * Why a rename wrote nothing, as `details.reason` on its `VALIDATION_FAILED`
+ * error: a refused name, or `STALE` when the group no longer has the name the
+ * rename was checked against, the name the page showed included (AT-9b,
+ * ADR-0142).
+ */
+export type GroupRenameRefusal = GroupNameRefusal | "STALE";
+
 /** What a refused group change was aimed at, for its audit entry. */
 interface RefusedTarget {
   readonly groupId: string | null;
@@ -59,7 +67,8 @@ interface RefusedTarget {
  * through a group reaches past the ceiling.
  *
  * Every refusal of a member is audited, and every change commits together with
- * its audit entry. A group confers no row access yet.
+ * its audit entry. A `MANAGER` reaches the Properties assigned to the groups
+ * it is in (ADR-0064).
  */
 export class GroupService {
   constructor(private readonly deps: IdentityServiceDeps) {}
@@ -76,11 +85,27 @@ export class GroupService {
     return created.group;
   }
 
-  /** Rename a group. Renaming to its current name changes nothing. */
-  async rename(actorUserId: string, organizationId: string, groupId: string, name: string): Promise<Group> {
+  /**
+   * Rename a group. Renaming to its current name changes nothing. Given
+   * `seenName`, the name the page showed, the rename applies only while the
+   * group still has it (AT-9b, ADR-0142).
+   *
+   * @throws AppError FORBIDDEN for a non-member, or for a member without
+   *   `group.manage` (audited); NOT_FOUND for a group not of this
+   *   organization; VALIDATION_FAILED with a {@link GroupRenameRefusal} as
+   *   `details.reason`.
+   */
+  async rename(
+    actorUserId: string,
+    organizationId: string,
+    groupId: string,
+    name: string,
+    seenName?: string,
+  ): Promise<Group> {
     const actor = await this.requireGroupManage(actorUserId, organizationId, "rename", { groupId });
     const groupName = normalizeGroupName(name);
     const group = await this.requireGroup(organizationId, groupId);
+    if (seenName !== undefined && !isShownName(seenName, group.name)) throw renameStale();
     if (group.name === groupName) return group;
     const renamed = await this.deps.repos.groups.rename(
       organizationId,
@@ -90,9 +115,7 @@ export class GroupService {
       changeAudit(actor, AuditAction.GroupRenamed, groupId, { name: groupName, previousName: group.name }),
     );
     if (renamed.outcome === "NAME_TAKEN") throw nameTaken();
-    if (renamed.outcome === "STALE") {
-      throw new AppError("VALIDATION_FAILED", "This group changed meanwhile; reload and try again");
-    }
+    if (renamed.outcome === "STALE") throw renameStale();
     return renamed.group;
   }
 
@@ -330,6 +353,16 @@ export class GroupService {
 }
 
 /**
+ * Whether `seenName`, as a page posted it back, is the group's name `name`. A
+ * browser posts each line break of a form field as CRLF, so line breaks are
+ * compared alike; a name holds one only if it was posted from outside the page.
+ */
+function isShownName(seenName: string, name: string): boolean {
+  const lines = (text: string) => text.replace(/\r\n?/g, "\n");
+  return lines(seenName) === lines(name);
+}
+
+/**
  * A group name as stored: trimmed, 1 to 100 characters. A NUL character,
  * which PostgreSQL cannot store in text, makes it invalid too (ADR-0141).
  */
@@ -373,7 +406,11 @@ function nameTaken(): AppError {
   return nameRefused("A group with this name already exists", "NAME_TAKEN");
 }
 
-function nameRefused(message: string, reason: GroupNameRefusal): AppError {
+function renameStale(): AppError {
+  return nameRefused("This group changed meanwhile; reload and try again", "STALE");
+}
+
+function nameRefused(message: string, reason: GroupRenameRefusal): AppError {
   return new AppError("VALIDATION_FAILED", message, { details: { reason } });
 }
 

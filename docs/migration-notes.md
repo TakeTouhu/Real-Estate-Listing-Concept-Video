@@ -2477,3 +2477,17 @@ audited as `group.created`, as the service always did.
 
 **Rolling back.** To AT-8b's build: safe. Groups created stay, with their
 audit entries; no page shows them until AT-9a returns.
+
+## AT-9b — renaming and deleting a group
+
+**No migration** (ADR-0142). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. The groups
+page gains a rename form on each group for a holder of `group.manage`, and a
+delete form for an `OWNER` or `ADMIN` holding it, each with its form post. A
+rename is audited as `group.renamed` and a deletion as `group.deleted`, as
+the service always did.
+
+**Rolling back.** To AT-9a's build: safe. Renamed groups keep their names and
+deleted groups stay deleted, their Properties ungrouped; the page no longer
+offers either change.
