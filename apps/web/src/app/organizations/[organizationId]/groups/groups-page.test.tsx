@@ -157,6 +157,31 @@ function deleteForm(name: string): string | null {
   return `${form.getAttribute("method")} ${form.getAttribute("action")} (${fields}) ${said}`;
 }
 
+/** A group's add form: where it posts, its list, labelled and named, and the members it offers. */
+function addForm(group: string): string | null {
+  const button = screen.queryByRole("button", { name: `Add to group ${group}` });
+  if (button === null) return null;
+  const form = button.closest("form")!;
+  const list = form.querySelector("select")!;
+  const label = `${form.querySelector(`label[for="${list.id}"]`)?.textContent} (${list.getAttribute("aria-label")})`;
+  const offered = [...list.options].map(({ value, textContent, disabled }) =>
+    disabled ? `${textContent} (none)` : `${textContent} = ${value}`,
+  );
+  const attributes = `${label}: name=${list.name} value=${list.value} required=${list.required}`;
+  return `${form.getAttribute("method")} ${form.getAttribute("action")} (${attributes}) ${offered.join(" | ")}`;
+}
+
+/** A group member's remove form: where it posts, that it carries no field, and what its button is described by. */
+function removeForm(who: string, group: string): string | null {
+  const button = screen.queryByRole("button", { name: `Remove ${who} from group ${group}` });
+  if (button === null) return null;
+  const form = button.closest("form")!;
+  const description = document.getElementById(button.getAttribute("aria-describedby") ?? "");
+  const said = description?.textContent?.replace(/\s+/g, " ");
+  const fields = form.querySelectorAll("input").length;
+  return `${form.getAttribute("method")} ${form.getAttribute("action")} (${fields}) ${said}`;
+}
+
 describe("the groups page", () => {
   it("sends a signed-out visitor to sign in", async () => {
     await expect(GroupsPage({ params: Promise.resolve({ organizationId: orgId }) })).rejects.toThrow(
@@ -209,13 +234,15 @@ describe("the groups page", () => {
     expect(createForm()).toBeNull();
     expect(renameForm("East")).toBeNull();
     expect(deleteForm("East")).toBeNull();
+    expect(addForm("East")).toBeNull();
+    expect(screen.queryByText("Remove…")).toBeNull();
   });
 
   it("names a member without an address when the overview gives none", async () => {
     // The overview's own tests hold when it gives one: to a viewer holding member.view too.
     await signInAs("MANAGER");
-    const member = { userId: ownerId, name: "Aiko Owner", email: null, role: "OWNER" as const };
-    const groupsShown = [{ id: "grp_1", name: "East", members: [member] }];
+    const member = { userId: ownerId, name: "Aiko Owner", email: null, role: "OWNER" as const, mayRemove: false };
+    const groupsShown = [{ id: "grp_1", name: "East", members: [member], addable: [] }];
     overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: false, mayDelete: false }) };
     const text = await renderGroups();
     expect(text).toContain("East · 1 memberAiko Owner · Owner");
@@ -273,20 +300,60 @@ describe("the groups page", () => {
   it("offers renaming to whoever may manage groups, and deleting only to whoever the overview says may", async () => {
     // A manager granted group.manage: the overview's own tests hold it may not delete (ADR-0052 Decision 11).
     await signInAs("MANAGER");
-    const groupsShown = [{ id: "grp_1", name: "East", members: [] }];
+    const groupsShown = [{ id: "grp_1", name: "East", members: [], addable: [] }];
     overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true, mayDelete: false }) };
     await renderGroups();
     expect(renameForm("East")).toMatch(`post /api/organizations/${orgId}/groups/grp_1/rename (from=East;`);
     expect(deleteForm("East")).toBeNull();
   });
 
+  it("lets an admin add a member whose role it may assign, and remove one, each form named for its group", async () => {
+    const creatorId = await joined("Sora Creator", "CREATOR");
+    const viewerId = await joined("Mio Viewer", "VIEWER");
+    await group("West", [creatorId, ownerId]);
+    await signInAs("ADMIN");
+    await renderGroups();
+    const [west] = (await deps.repos.groups.listByOrganization(orgId)).map(({ id }) => id);
+    const path = `/api/organizations/${orgId}/groups/${west}/members`;
+    expect(addForm("West")).toBe(
+      `post ${path} (Member (Member to add to West): name=userId value= required=true) Choose a member (none) | ` +
+        `Mio Viewer · mio.viewer@example.com · Viewer = ${viewerId}`,
+    );
+    expect(removeForm("Sora Creator (sora.creator@example.com)", "West")).toBe(
+      `post ${path}/${creatorId}/remove (0) Sora Creator will leave West and lose only what this group gave them, ` +
+        "so a Manager no longer reaches the Properties assigned to it. They stay in the organization with their role.",
+    );
+    // An admin may not assign an owner's role, so it may not remove one from a group.
+    expect(removeForm("Aiko Owner (owner@example.com)", "West")).toBeNull();
+    const adder = `summary[aria-label="Add a member to West…"]`;
+    expect(screen.getByText("Add member…", { selector: adder })).toBeTruthy();
+    const summary = `summary[aria-label="Remove Sora Creator (sora.creator@example.com) from West…"]`;
+    expect(screen.getByText("Remove…", { selector: summary })).toBeTruthy();
+    expect(document.querySelectorAll("details[open]")).toHaveLength(0);
+  });
+
+  it("offers no add form when the overview gives no one to add, and names a member without an address", async () => {
+    await signInAs("OWNER");
+    const member = { userId: ownerId, name: "Aiko Owner", email: null, role: "OWNER" as const, mayRemove: true };
+    const groupsShown = [{ id: "grp_1", name: "East", members: [member], addable: [] }];
+    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true, mayDelete: true }) };
+    await renderGroups();
+    expect(addForm("East")).toBeNull();
+    expect(removeForm("Aiko Owner", "East")).toMatch(`/groups/grp_1/members/${ownerId}/remove (0) Aiko Owner will`);
+  });
+
   it("names a group's forms by its id in the address, encoded", async () => {
     await signInAs("OWNER");
-    const groupsShown = [{ id: "grp/1?x", name: "East", members: [] }];
+    const member = { userId: "usr/1?y", name: "Mio", email: null, role: "VIEWER" as const };
+    const groupsShown = [
+      { id: "grp/1?x", name: "East", members: [{ ...member, mayRemove: true }], addable: [{ ...member, name: "Rin" }] },
+    ];
     overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true, mayDelete: true }) };
     await renderGroups();
     expect(renameForm("East")).toMatch(`/groups/grp%2F1%3Fx/rename (`);
     expect(deleteForm("East")).toMatch(`/groups/grp%2F1%3Fx/delete (`);
+    expect(addForm("East")).toMatch(`/groups/grp%2F1%3Fx/members (`);
+    expect(removeForm("Mio", "East")).toMatch(`/groups/grp%2F1%3Fx/members/usr%2F1%3Fy/remove (`);
   });
 
   it("links to the members page", async () => {
@@ -311,6 +378,19 @@ describe("the groups page", () => {
     [{ error: "rename-group-failed" }, "alert", `${WENT_WRONG} Check below whether the group was renamed.`],
     [{ error: "may-not-delete-group" }, "alert", "You cannot delete this group."],
     [{ error: "delete-group-failed" }, "alert", `${WENT_WRONG} Check below whether the group was deleted.`],
+    [{ notice: "group-member-added" }, "status", "The member is in the group."],
+    [
+      { notice: "group-member-removed" },
+      "status",
+      "The member was removed from the group. They stay in the organization with their role.",
+    ],
+    [{ error: "group-member-gone" }, "alert", "That person is no longer a member of this organization."],
+    [{ error: "group-members-changed" }, "alert", "That group or member changed meanwhile. Check below and try again."],
+    [{ error: "not-in-group" }, "alert", "That member is no longer in this group."],
+    [{ error: "may-not-add-group-member" }, "alert", "You cannot add that member to this group."],
+    [{ error: "add-group-member-failed" }, "alert", `${WENT_WRONG} Check below whether the member was added.`],
+    [{ error: "may-not-remove-group-member" }, "alert", "You cannot remove that member from this group."],
+    [{ error: "remove-group-member-failed" }, "alert", `${WENT_WRONG} Check below whether the member was removed.`],
   ] as const)("says what %o names", async (query, role, sentence) => {
     await signInAs("OWNER");
     await renderGroups(query);

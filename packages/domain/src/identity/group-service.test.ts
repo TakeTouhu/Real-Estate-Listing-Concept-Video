@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthService } from "./auth-service";
 import { OrganizationService } from "./organization-service";
 import { MembershipService } from "./membership-service";
@@ -416,10 +416,12 @@ describe("group membership under the role-assignment ceiling", () => {
     await expect(fx.groups.addMember(fx.ownerId, fx.orgId, group.id, fx.outsiderId)).rejects.toMatchObject({
       code: "NOT_FOUND",
       message: "Membership not found",
+      details: { reason: "MEMBER" },
     });
     await expect(fx.groups.addMember(fx.ownerId, fx.orgId, elsewhere.id, fx.ids.CREATOR)).rejects.toMatchObject({
       code: "NOT_FOUND",
       message: "Group not found",
+      details: { reason: "GROUP" },
     });
     expect(await memberIds(group.id)).toEqual([]);
     expect(await memberIds(elsewhere.id, fx.otherOrgId)).toEqual([]);
@@ -465,8 +467,23 @@ describe("group membership under the role-assignment ceiling", () => {
     await expect(fx.groups.removeMember(fx.ownerId, fx.orgId, group.id, fx.ids.CREATOR)).rejects.toMatchObject({
       code: "NOT_FOUND",
       message: "The member is not in this group",
+      details: { reason: "NOT_IN_GROUP" },
+    });
+    await expect(fx.groups.removeMember(fx.ownerId, fx.orgId, group.id, fx.outsiderId)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      details: { reason: "MEMBER" },
     });
     expect(audits("group.member_removed")).toEqual([]);
+  });
+
+  it("says when an addition finds the group or the membership gone as it writes", async () => {
+    const group = await newGroup();
+    vi.spyOn(fx.deps.repos.groups, "addMember").mockResolvedValueOnce({ outcome: "STALE" });
+    await expect(fx.groups.addMember(fx.ownerId, fx.orgId, group.id, fx.ids.CREATOR)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "The group or the member no longer exists",
+      details: { reason: "STALE" },
+    });
   });
 });
 

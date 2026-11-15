@@ -2,12 +2,13 @@ import { expect, test } from "@playwright/test";
 import { signUpOwner } from "./support/owner";
 
 /**
- * Groups in a real browser (AT-9a, ADR-0141; AT-9b, ADR-0142): an owner
- * follows the organization's Groups link, creates a group, and sees it listed;
- * a second group of the same name is refused and nothing is added. The owner
- * then renames the group and deletes it.
+ * Groups in a real browser (AT-9a, ADR-0141; AT-9b, ADR-0142; AT-9c,
+ * ADR-0143): an owner follows the organization's Groups link, creates a group,
+ * and sees it listed; a second group of the same name is refused and nothing
+ * is added. The owner adds itself to the group and removes itself, then
+ * renames the group and deletes it.
  */
-test("an owner creates, renames and deletes a group from the groups page", async ({ page }) => {
+test("an owner creates a group, changes its members, renames it and deletes it", async ({ page }) => {
   const organizationName = `Shinjuku Homes ${Date.now()}`;
   await signUpOwner(page, organizationName);
   const card = page.locator(".card", { has: page.getByRole("heading", { name: `${organizationName} (OWNER)` }) });
@@ -25,6 +26,20 @@ test("an owner creates, renames and deletes a group from the groups page", async
   await page.getByRole("button", { name: "Create group" }).click();
   await expect(page.getByRole("alert")).toHaveText("Another group of this organization already has that name.");
   await expect(page.getByRole("heading", { name: "Groups (1)" })).toBeVisible();
+
+  await page.locator('summary[aria-label="Add a member to East office…"]').click();
+  // The owner is the organization's only member, so the only one to add.
+  await page.getByLabel("Member to add to East office").selectOption({ index: 1 });
+  await page.getByRole("button", { name: "Add to group East office" }).click();
+  await expect(page.getByRole("status")).toHaveText("The member is in the group.");
+  await expect(page.getByText("East office · 1 member", { exact: false })).toBeVisible();
+
+  await page.locator('summary[aria-label$=" from East office…"]').click();
+  await page.getByRole("button", { name: /^Remove .+ from group East office$/ }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "The member was removed from the group. They stay in the organization with their role.",
+  );
+  await expect(page.getByText("East office · 0 members")).toBeVisible();
 
   await page.locator('summary[aria-label="Rename East office…"]').click();
   await page.getByLabel("New name").fill("North office");

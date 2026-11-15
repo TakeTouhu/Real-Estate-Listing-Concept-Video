@@ -2491,3 +2491,17 @@ the service always did.
 **Rolling back.** To AT-9a's build: safe. Renamed groups keep their names and
 deleted groups stay deleted, their Properties ungrouped; the page no longer
 offers either change.
+
+## AT-9c — adding and removing a group's members
+
+**No migration** (ADR-0143). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. The groups
+page gains an add form on each group and a remove form on each member, for
+a viewer who may assign the member's role, each with its form post. An
+addition is audited as `group.member_added` and a removal as
+`group.member_removed`, as the service always did. A `MANAGER` added to a
+group reaches the Properties assigned to it at once (ADR-0064).
+
+**Rolling back.** To AT-9b's build: safe. Members added stay in their groups
+and members removed stay out; the page no longer offers either change.

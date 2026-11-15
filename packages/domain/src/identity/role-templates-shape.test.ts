@@ -122,8 +122,9 @@ describe("dormancy", () => {
   });
 
   it("removes a member only from the members page's route, through the web app's members module", () => {
-    // AT-8b (ADR-0140): the route calls `removeOrganizationMember` there.
-    expect(callersOf(/\.removeMember\(/)).toEqual(["apps/web/src/lib/members.ts"]);
+    // AT-8b (ADR-0140): the route calls `removeOrganizationMember` there. The groups module's call is the group
+    // service's (AT-9c, ADR-0143), which the groups dormancy test pins.
+    expect(callersOf(/(?<!getGroupService\(\))\.removeMember\(/)).toEqual(["apps/web/src/lib/members.ts"]);
     expect(callersOf(/\bremoveOrganizationMember\(/)).toEqual([
       "apps/web/src/app/api/organizations/[organizationId]/members/[userId]/remove/route.ts",
       "apps/web/src/lib/members.ts",

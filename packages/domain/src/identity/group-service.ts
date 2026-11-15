@@ -39,6 +39,14 @@ export type GroupNameRefusal = "INVALID_NAME" | "NAME_TAKEN";
  */
 export type GroupRenameRefusal = GroupNameRefusal | "STALE";
 
+/**
+ * Why a group change found nothing to change, as a `NOT_FOUND`'s
+ * `details.reason` (AT-9c, ADR-0143): no such group in the organization, no
+ * such member of it, the group or the membership gone as an addition wrote,
+ * or a removal of a member not in the group.
+ */
+export type GroupNotFoundReason = "GROUP" | "MEMBER" | "STALE" | "NOT_IN_GROUP";
+
 /** What a refused group change was aimed at, for its audit entry. */
 interface RefusedTarget {
   readonly groupId: string | null;
@@ -162,7 +170,11 @@ export class GroupService {
     return this.deps.repos.groups.listMembers(organizationId, groupId);
   }
 
-  /** Add a member to a group. Adding one already in it changes nothing (`added: false`). */
+  /**
+   * Add a member to a group. Adding one already in it changes nothing
+   * (`added: false`). Anything not found is `NOT_FOUND` with a
+   * {@link GroupNotFoundReason} as `details.reason`.
+   */
   async addMember(
     actorUserId: string,
     organizationId: string,
@@ -184,10 +196,14 @@ export class GroupService {
         permission: added.refusal.permission,
       });
     }
-    if (added.outcome === "STALE") throw new AppError("NOT_FOUND", "The group or the member no longer exists");
+    if (added.outcome === "STALE") throw notFound("The group or the member no longer exists", "STALE");
     return { added: added.outcome === "ADDED" };
   }
 
+  /**
+   * Remove a member from a group; they stay in the organization. Anything not
+   * found is `NOT_FOUND` with a {@link GroupNotFoundReason} as `details.reason`.
+   */
   async removeMember(actorUserId: string, organizationId: string, groupId: string, targetUserId: string): Promise<void> {
     const { actor, target } = await this.authorizeMemberChange(
       "remove_member",
@@ -212,7 +228,7 @@ export class GroupService {
         permission: removed.refusal.permission,
       });
     }
-    if (removed.outcome === "NOT_IN_GROUP") throw new AppError("NOT_FOUND", "The member is not in this group");
+    if (removed.outcome === "NOT_IN_GROUP") throw notFound("The member is not in this group", "NOT_IN_GROUP");
   }
 
   /** A group's permissions, which each of its members holds. */
@@ -302,7 +318,7 @@ export class GroupService {
     const actor = await this.requireGroupManage(actorUserId, organizationId, operation, { groupId, targetUserId });
     await this.requireGroup(organizationId, groupId);
     const target = await this.deps.repos.memberships.find(organizationId, targetUserId);
-    if (!target) throw new AppError("NOT_FOUND", "Membership not found");
+    if (!target) throw notFound("Membership not found", "MEMBER");
     if (!mayAssignRole(actor.role, target.role)) {
       await this.refuse(actor, operation, "target_role", { groupId, targetUserId, targetRole: target.role });
     }
@@ -415,7 +431,11 @@ function nameRefused(message: string, reason: GroupRenameRefusal): AppError {
 }
 
 function groupNotFound(): AppError {
-  return new AppError("NOT_FOUND", "Group not found");
+  return notFound("Group not found", "GROUP");
+}
+
+function notFound(message: string, reason: GroupNotFoundReason): AppError {
+  return new AppError("NOT_FOUND", message, { details: { reason } });
 }
 
 function changeAudit(

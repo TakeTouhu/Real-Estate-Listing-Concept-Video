@@ -928,6 +928,16 @@ its Properties are left with no group. Both are same-origin form posts
 answered with the page and a fixed code. The browser test renames and
 deletes the group it created.
 
+**AT-9c — adding and removing a group's members** (ADR-0143, no migration):
+an `OWNER` or `ADMIN` adds a member of the organization to a group, and
+removes one, from closed forms on the groups page, within the
+role-assignment ceiling: an `ADMIN` only `MANAGER`, `CREATOR` and `VIEWER`
+members. The page offers only the members the viewer may add or remove, and
+the remove form says what leaving the group does. A missing group or member
+now says which (`details.reason`). Both are same-origin form posts answered
+with the page and a fixed code. The browser test adds the owner to its
+group and removes them. AT-9 is complete.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
