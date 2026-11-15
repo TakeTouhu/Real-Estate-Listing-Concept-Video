@@ -2,6 +2,8 @@ import { AppError } from "@app/shared";
 import { recordAudit } from "../identity/audit";
 import { authorizeOrganization, type AuthContext } from "../identity/authorization";
 import type { Clock, IdentityServiceDeps, IdGenerator } from "../identity/ports";
+import type { Role } from "../identity/roles";
+import { compareMembers } from "../team/member-order";
 import { PropertyAuditAction } from "./audit";
 import type { MediaAssetRepository, PropertyAssignment, PropertyRepository } from "./ports";
 import { findReachableProperty, reachOf } from "./reach";
@@ -45,6 +47,40 @@ export interface CreatePropertyInput {
 export interface AssignPropertyInput {
   readonly responsibleUserId?: string | null;
   readonly groupId?: string | null;
+}
+
+/**
+ * Why a choice of a Property's assignments was invalid, as `details.reason` of
+ * its `VALIDATION_FAILED` (ADR-0144).
+ */
+export type PropertyAssignmentProblem =
+  /** The responsible user is not a member of this organization, or is a `BILLING` one. */
+  | "RESPONSIBLE_USER"
+  /** The group is not a group of this organization. */
+  | "GROUP"
+  /** The assignment changed meanwhile. */
+  | "STALE";
+
+/** A member the Property page offers as a Property's responsible user (ADR-0144). */
+export interface AssignableMember {
+  readonly userId: string;
+  readonly name: string;
+  /** The member's address, for a viewer who holds `member.view`; `null` for anyone else. */
+  readonly email: string | null;
+  readonly role: Role;
+}
+
+/** What an `OWNER` or `ADMIN` may choose for a Property, and what it has now (ADR-0144). */
+export interface PropertyAssignmentChoices {
+  readonly responsibleUserId: string | null;
+  readonly groupId: string | null;
+  /**
+   * Any member but a `BILLING` one, and the current responsible user whatever
+   * their role now, in the members page's order.
+   */
+  readonly members: readonly AssignableMember[];
+  /** The organization's groups, by name. */
+  readonly groups: readonly { readonly id: string; readonly name: string }[];
 }
 
 /** Why a member's assignment was refused, as its audit entry records it. */
@@ -125,12 +161,18 @@ export class PropertyService {
    * it: `property.edit` alone does not. Anyone else is refused and audited,
    * before the Property is looked up. A change that changes nothing writes
    * nothing (`changed: false`).
+   *
+   * `shown`, when given, is the assignment the caller saw: a Property whose
+   * assignment is no longer that is not changed (ADR-0144). Every invalid
+   * choice is `VALIDATION_FAILED` with a {@link PropertyAssignmentProblem} as
+   * `details.reason`.
    */
   async assign(
     actorUserId: string,
     organizationId: string,
     propertyId: string,
     input: AssignPropertyInput,
+    shown?: PropertyAssignment,
   ): Promise<{ readonly property: Property; readonly changed: boolean }> {
     const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
     if (!mayReassign(actor)) {
@@ -141,6 +183,9 @@ export class PropertyService {
       throw new AppError("NOT_FOUND", "Property not found");
     }
     const expected: PropertyAssignment = { responsibleUserId: existing.responsibleUserId, groupId: existing.groupId };
+    if (shown && (shown.responsibleUserId !== expected.responsibleUserId || shown.groupId !== expected.groupId)) {
+      throw assignmentChanged();
+    }
     const next: PropertyAssignment = {
       responsibleUserId: input.responsibleUserId === undefined ? expected.responsibleUserId : input.responsibleUserId,
       groupId: input.groupId === undefined ? expected.groupId : input.groupId,
@@ -168,6 +213,43 @@ export class PropertyService {
     });
     if (assigned.outcome === "STALE") throw assignmentChanged();
     return { property: assigned.property, changed: true };
+  }
+
+  /**
+   * What the Property page offers an `OWNER` or `ADMIN` to change a Property's
+   * assignments (ADR-0144); `null` for anyone else, who may change neither.
+   * Reads the members' accounts together, writes nothing and audits nothing.
+   *
+   * @throws AppError FORBIDDEN without `property.view`, NOT_FOUND for a Property it does not reach.
+   */
+  async assignmentChoices(
+    actorUserId: string,
+    organizationId: string,
+    propertyId: string,
+  ): Promise<PropertyAssignmentChoices | null> {
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
+    if (!mayReassign(actor)) return null;
+    const property = await this.requireReachable(actor, propertyId);
+    const { repos } = this.deps.identity;
+    const [memberships, groups] = await Promise.all([
+      repos.memberships.listByOrganization(organizationId),
+      repos.groups.listByOrganization(organizationId),
+    ]);
+    // Keeping a responsible user is always possible: a role change does not rewrite an assignment.
+    const choosable = memberships
+      .filter(({ userId, role }) => role !== "BILLING" || userId === property.responsibleUserId)
+      .sort(compareMembers);
+    const users = await Promise.all(choosable.map(({ userId }) => repos.users.findById(userId)));
+    const addresses = actor.permissions.includes("member.view");
+    return {
+      responsibleUserId: property.responsibleUserId,
+      groupId: property.groupId,
+      members: choosable.flatMap(({ userId, role }, index): AssignableMember[] => {
+        const user = users[index];
+        return user ? [{ userId, name: user.name, email: addresses ? user.email : null, role }] : [];
+      }),
+      groups: groups.map(({ id, name }) => ({ id, name })),
+    };
   }
 
   /** The organization's Properties the member reaches (ADR-0052 Decision 10). */
@@ -298,7 +380,8 @@ export class PropertyService {
     if (userId === null) return;
     const member = await this.deps.identity.repos.memberships.find(organizationId, userId);
     if (!member || member.role === "BILLING") {
-      throw new AppError("VALIDATION_FAILED", "The responsible user must be a member of this organization who is not BILLING");
+      const message = "The responsible user must be a member of this organization who is not BILLING";
+      throw invalid(message, "RESPONSIBLE_USER");
     }
   }
 
@@ -306,7 +389,7 @@ export class PropertyService {
   private async requireGroup(organizationId: string, groupId: string | null): Promise<void> {
     if (groupId === null) return;
     if (!(await this.deps.identity.repos.groups.find(organizationId, groupId))) {
-      throw new AppError("VALIDATION_FAILED", "The group must be a group of this organization");
+      throw invalid("The group must be a group of this organization", "GROUP");
     }
   }
 
@@ -341,5 +424,9 @@ function mayReassign(actor: AuthContext): boolean {
 }
 
 function assignmentChanged(): AppError {
-  return new AppError("VALIDATION_FAILED", "The responsible user or group changed meanwhile; reload and try again");
+  return invalid("The responsible user or group changed meanwhile; reload and try again", "STALE");
+}
+
+function invalid(message: string, reason: PropertyAssignmentProblem): AppError {
+  return new AppError("VALIDATION_FAILED", message, { details: { reason } });
 }

@@ -10,7 +10,9 @@ import { describe, expect, it } from "vitest";
  *    refuses deletion, and touching nothing else. No existing row is rewritten:
  *    every existing Property starts unassigned.
  * 2. **No assignment surface.** Reassignment is a service no route or page
- *    reaches yet, and the create route passes no assignment.
+ *    reaches yet, and the create route passes no assignment. Since AT-10a
+ *    (ADR-0144) the Property page's form reaches reassignment through one
+ *    route and one library function; the create route still passes none.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -79,11 +81,16 @@ describe("durable shape", () => {
 });
 
 describe("dormancy", () => {
-  it("adds no reassignment caller to either application", () => {
-    const callers = ["apps/web", "apps/worker"]
-      .flatMap((app) => sourceFiles(join(REPO_ROOT, app)))
-      .filter((file) => /properties\.assign\(|AssignPropertyInput|listGroupIdsForMember/.test(code(readFileSync(file, "utf8"))));
-    expect(callers).toEqual([]);
+  it("calls reassignment from the Property page's library alone, and that from its route alone", () => {
+    const files = ["apps/web", "apps/worker"].flatMap((app) => sourceFiles(join(REPO_ROOT, app)));
+    const relative = (file: string) => file.slice(REPO_ROOT.length + 1);
+    const using = (pattern: RegExp) => files.filter((file) => pattern.test(code(readFileSync(file, "utf8"))));
+    const library = "apps/web/src/lib/property-assignment.ts";
+    expect(using(/properties\.assign\(|AssignPropertyInput|listGroupIdsForMember/).map(relative)).toEqual([library]);
+    expect(using(/\bassignProperty\(/).map(relative)).toEqual([
+      "apps/web/src/app/api/organizations/[organizationId]/properties/[propertyId]/assignment/route.ts",
+      library,
+    ]);
   });
 
   it("passes no assignment when a Property is created over HTTP", () => {

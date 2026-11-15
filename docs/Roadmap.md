@@ -938,6 +938,16 @@ now says which (`details.reason`). Both are same-origin form posts answered
 with the page and a fixed code. The browser test adds the owner to its
 group and removes them. AT-9 is complete.
 
+**AT-10a — changing a Property's assignment on its page** (ADR-0144, no
+migration): an `OWNER` or `ADMIN` sees a Property's responsible user and
+group on the Property page and changes either from a closed form, which
+carries the assignment shown, so a change someone made meanwhile is never
+undone. Anyone else sees neither. An invalid choice now says which
+(`details.reason`). It is a same-origin form post answered with the page and
+a fixed code. A browser test assigns a Property to a group and its owner and
+then deletes the group. Choosing the assignment when creating a Property
+follows in AT-10b.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

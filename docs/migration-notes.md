@@ -2505,3 +2505,17 @@ group reaches the Properties assigned to it at once (ADR-0064).
 
 **Rolling back.** To AT-9b's build: safe. Members added stay in their groups
 and members removed stay out; the page no longer offers either change.
+
+## AT-10a — changing a Property's assignment on its page
+
+**No migration** (ADR-0144). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. The Property
+page shows an `OWNER` or `ADMIN` the Property's responsible user and group,
+with a form that changes them. A change is audited as
+`property.assignment_changed` and a refusal as `property.assignment_refused`,
+as the service always did. A `MANAGER` in the chosen group, and a `CREATOR`
+or `VIEWER` made responsible, reach the Property at once (ADR-0064).
+
+**Rolling back.** To AT-9c's build: safe. Assignments made stay; the page no
+longer shows or changes them.
