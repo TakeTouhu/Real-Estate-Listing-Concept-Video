@@ -948,6 +948,17 @@ a fixed code. A browser test assigns a Property to a group and its owner and
 then deletes the group. Choosing the assignment when creating a Property
 follows in AT-10b.
 
+**AT-10b — choosing a Property's assignment when creating it** (ADR-0145, no
+migration): the home page's "Add a property" form offers what the member's
+role may choose. An `OWNER` or `ADMIN` chooses the responsible user and group,
+each "None" unless chosen. A `MANAGER` is responsible and chooses one of its
+own groups, so a `MANAGER` in several groups can now create a Property; one
+in no group is told why it cannot. A `CREATOR` is responsible, in no group.
+Anyone without `property.create` sees no form. The create route is now a
+same-origin form post, and refuses ids over 64 characters unread. The home
+page no longer fails for a `BILLING` member, who sees no Property list. A
+browser test creates a Property with its owner responsible and in a group.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

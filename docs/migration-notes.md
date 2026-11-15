@@ -2519,3 +2519,19 @@ or `VIEWER` made responsible, reach the Property at once (ADR-0064).
 
 **Rolling back.** To AT-9c's build: safe. Assignments made stay; the page no
 longer shows or changes them.
+
+## AT-10b — choosing a Property's assignment when creating it
+
+**No migration** (ADR-0145). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. The home
+page's "Add a property" form offers a member what its role may choose for the
+new Property, and `POST /api/properties` passes it on; a refusal is audited as
+`property.assignment_refused`, as the service always did. That route now
+refuses a post from another origin with `403`. A `BILLING` member's home page
+no longer fails.
+
+**Rolling back.** To AT-10a's build: safe. Properties keep the assignments
+they were created with. An `OWNER` or `ADMIN` again creates them unassigned,
+a `MANAGER` in several groups again cannot create one, and a `BILLING`
+member's home page fails again.

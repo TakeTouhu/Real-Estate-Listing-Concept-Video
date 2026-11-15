@@ -50,7 +50,11 @@ vi.mock("@/lib/groups", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/groups")>()),
   getGroupsOverviewService: () => overview.value,
 }));
-vi.mock("@/lib/property", () => ({ getPropertyServices: () => ({ properties: { list: () => Promise.resolve([]) } }) }));
+vi.mock("@/lib/property", () => ({
+  getPropertyServices: () => ({
+    properties: { list: () => Promise.resolve([]), creationChoices: () => Promise.resolve(null) },
+  }),
+}));
 
 const { default: GroupsPage } = await import("./page");
 const { default: DashboardPage } = await import("../../../page");

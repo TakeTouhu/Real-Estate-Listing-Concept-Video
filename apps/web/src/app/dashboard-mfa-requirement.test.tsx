@@ -40,7 +40,11 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
-vi.mock("@/lib/property", () => ({ getPropertyServices: () => ({ properties: { list: () => Promise.resolve([]) } }) }));
+vi.mock("@/lib/property", () => ({
+  getPropertyServices: () => ({
+    properties: { list: () => Promise.resolve([]), creationChoices: () => Promise.resolve(null) },
+  }),
+}));
 
 const { default: DashboardPage } = await import("./page");
 

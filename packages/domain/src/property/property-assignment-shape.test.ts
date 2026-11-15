@@ -12,7 +12,8 @@ import { describe, expect, it } from "vitest";
  * 2. **No assignment surface.** Reassignment is a service no route or page
  *    reaches yet, and the create route passes no assignment. Since AT-10a
  *    (ADR-0144) the Property page's form reaches reassignment through one
- *    route and one library function; the create route still passes none.
+ *    route and one library function; since AT-10b (ADR-0145) the create route
+ *    passes the assignment the home page's form chose, an empty field none.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -93,9 +94,10 @@ describe("dormancy", () => {
     ]);
   });
 
-  it("passes no assignment when a Property is created over HTTP", () => {
+  it("passes a Property created over HTTP only the assignment its form chose, an empty field none", () => {
     const route = code(readFileSync(join(REPO_ROOT, "apps", "web", "src", "app", "api", "properties", "route.ts"), "utf8"));
     expect(route).toContain("properties.create(");
-    expect(route).not.toMatch(/responsibleUserId|groupId/);
+    expect(route).toContain(`...(responsibleUserId === "" ? {} : { responsibleUserId }),`);
+    expect(route).toContain(`...(groupId === "" ? {} : { groupId }),`);
   });
 });

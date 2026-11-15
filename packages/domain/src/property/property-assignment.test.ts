@@ -516,6 +516,48 @@ describe("assignment choices", () => {
   });
 });
 
+describe("creation choices", () => {
+  it.each(["OWNER", "ADMIN"] as const)("offers an %s every member but a BILLING one, and every group", async (role) => {
+    const choices = await fx.service.creationChoices(fx.ids[role], fx.orgId);
+    expect(choices?.kind).toBe("ANY");
+    if (choices?.kind !== "ANY") return;
+    const members = [fx.ownerId, fx.ids.OWNER, fx.ids.ADMIN, fx.ids.MANAGER, fx.ids.CREATOR, fx.ids.VIEWER];
+    expect(choices.members.map(({ userId }) => userId)).toEqual(members);
+    const viewer = { userId: fx.ids.VIEWER, name: "VIEWER", email: "member-viewer@example.com", role: "VIEWER" };
+    expect(choices.members[5]).toEqual(viewer);
+    expect(choices.groups).toEqual([
+      { id: fx.east, name: "East" },
+      { id: fx.north, name: "North" },
+      { id: fx.west, name: "West" },
+    ]);
+  });
+
+  it("offers a MANAGER its own groups by name, and none when it is in none", async () => {
+    expect(await fx.service.creationChoices(fx.ids.MANAGER, fx.orgId)).toEqual({
+      kind: "OWN_GROUP",
+      groups: [
+        { id: fx.east, name: "East" },
+        { id: fx.west, name: "West" },
+      ],
+    });
+    await managerGroups();
+    expect(await fx.service.creationChoices(fx.ids.MANAGER, fx.orgId)).toEqual({ kind: "OWN_GROUP", groups: [] });
+  });
+
+  it("offers a CREATOR nothing to choose, even in a group, and a VIEWER or BILLING member no creation", async () => {
+    expect(await fx.service.creationChoices(fx.ids.CREATOR, fx.orgId)).toEqual({ kind: "SELF" });
+    expect(await fx.service.creationChoices(fx.ids.VIEWER, fx.orgId)).toBeNull();
+    expect(await fx.service.creationChoices(fx.ids.BILLING, fx.orgId)).toBeNull();
+  });
+
+  it("refuses a non-member, and writes nothing", async () => {
+    const before = fx.deps.repos.auditLogs.all().length;
+    await expect(fx.service.creationChoices(fx.outsiderId, fx.orgId)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    for (const role of ROLES) await fx.service.creationChoices(fx.ids[role], fx.orgId);
+    expect(fx.deps.repos.auditLogs.all()).toHaveLength(before);
+  });
+});
+
 describe("releasing assignments", () => {
   it("ungroups a deleted group's Properties, and only those, counting them", async () => {
     const inEast = await create(fx.ownerId, { responsibleUserId: fx.ids.VIEWER, groupId: fx.east });
