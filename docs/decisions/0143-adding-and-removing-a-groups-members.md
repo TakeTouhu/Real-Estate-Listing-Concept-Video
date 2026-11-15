@@ -85,9 +85,10 @@ whose role changed since the page was shown is judged on the new role.
 
 ## Decision 4 — A missing group or member says which
 
-The group service answered four different absences with `NOT_FOUND`, told
-apart only by their messages. Each now carries `details.reason`, as a
-refused name does (ADR-0141); the type is `GroupNotFoundReason`:
+Adding and removing a group's member answered four different absences
+with `NOT_FOUND`, told apart only by their messages. Each now carries
+`details.reason`, as a refused name does (ADR-0141); the type is
+`GroupNotFoundReason`:
 - `GROUP`: no such group in this organization;
 - `MEMBER`: no such member of this organization;
 - `STALE`: an addition found the group or the member's membership gone as
@@ -95,7 +96,10 @@ refused name does (ADR-0141); the type is `GroupNotFoundReason`:
 - `NOT_IN_GROUP`: a removal of a member who is not in the group, also when
   the group went as the removal wrote.
 
-Codes, messages and audit entries do not change.
+Codes, messages and audit entries do not change. A missing group carries
+`GROUP` wherever the service answers one. Revoking a permission the group
+does not carry still answers `NOT_FOUND` without a reason, until AT-11
+offers revoking on a page.
 
 ## Decision 5 — Codes, and a member id from the address
 

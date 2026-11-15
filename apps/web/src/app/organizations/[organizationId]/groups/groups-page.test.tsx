@@ -173,7 +173,7 @@ function addForm(group: string): string | null {
 
 /** A group member's remove form: where it posts, that it carries no field, and what its button is described by. */
 function removeForm(who: string, group: string): string | null {
-  const button = screen.queryByRole("button", { name: `Remove ${who} from group ${group}` });
+  const button = screen.queryByRole("button", { name: `Remove from group ${group}: ${who}` });
   if (button === null) return null;
   const form = button.closest("form")!;
   const description = document.getElementById(button.getAttribute("aria-describedby") ?? "");
@@ -325,7 +325,7 @@ describe("the groups page", () => {
     );
     // An admin may not assign an owner's role, so it may not remove one from a group.
     expect(removeForm("Aiko Owner (owner@example.com)", "West")).toBeNull();
-    const adder = `summary[aria-label="Add a member to West…"]`;
+    const adder = `summary[aria-label="Add member to West…"]`;
     expect(screen.getByText("Add member…", { selector: adder })).toBeTruthy();
     const summary = `summary[aria-label="Remove Sora Creator (sora.creator@example.com) from West…"]`;
     expect(screen.getByText("Remove…", { selector: summary })).toBeTruthy();

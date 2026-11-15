@@ -43,7 +43,7 @@ A form post from the groups page. No field.
 
 | Export | Shape |
 | --- | --- |
-| `GroupService` | each `NOT_FOUND` of a group or membership change now carries `details.reason`, a `GroupNotFoundReason` |
+| `GroupService` | a missing group, and each `NOT_FOUND` of adding or removing a member, now carries `details.reason`, a `GroupNotFoundReason`; revoking a permission the group lacks does not yet (AT-11) |
 | `GroupNotFoundReason` | new: `"GROUP" \| "MEMBER" \| "STALE" \| "NOT_IN_GROUP"` |
 | `GroupsOverviewGroup` | gains `addable`: the members the viewer may add; its `members` are `GroupsOverviewGroupMember` |
 | `GroupsOverviewGroupMember` | new: a `GroupsOverviewMember` with `mayRemove` |

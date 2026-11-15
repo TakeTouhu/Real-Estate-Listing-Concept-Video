@@ -27,7 +27,7 @@ test("an owner creates a group, changes its members, renames it and deletes it",
   await expect(page.getByRole("alert")).toHaveText("Another group of this organization already has that name.");
   await expect(page.getByRole("heading", { name: "Groups (1)" })).toBeVisible();
 
-  await page.locator('summary[aria-label="Add a member to East office…"]').click();
+  await page.locator('summary[aria-label="Add member to East office…"]').click();
   // The owner is the organization's only member, so the only one to add.
   await page.getByLabel("Member to add to East office").selectOption({ index: 1 });
   await page.getByRole("button", { name: "Add to group East office" }).click();
@@ -35,7 +35,7 @@ test("an owner creates a group, changes its members, renames it and deletes it",
   await expect(page.getByText("East office · 1 member", { exact: false })).toBeVisible();
 
   await page.locator('summary[aria-label$=" from East office…"]').click();
-  await page.getByRole("button", { name: /^Remove .+ from group East office$/ }).click();
+  await page.getByRole("button", { name: /^Remove from group East office: .+$/ }).click();
   await expect(page.getByRole("status")).toHaveText(
     "The member was removed from the group. They stay in the organization with their role.",
   );

@@ -135,6 +135,13 @@ describe("the groups overview", () => {
     expect(listed?.addable.map(({ role }) => role)).toEqual(["MANAGER", "VIEWER"]);
   });
 
+  it("never offers an ADMIN a member it may not change because they are in another group", async () => {
+    await group("West", ["OWNER", "ADMIN", "CREATOR"]);
+    await group("East");
+    const [east] = (await service.overview(ids.ADMIN, orgId)).groups;
+    expect(east?.addable.map(({ role }) => role)).toEqual(["MANAGER", "CREATOR", "VIEWER"]);
+  });
+
   it("offers a MANAGER granted group.manage no member to add or remove, as the ceiling gives it none", async () => {
     await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "group.manage");
     await group("West", ["CREATOR"]);

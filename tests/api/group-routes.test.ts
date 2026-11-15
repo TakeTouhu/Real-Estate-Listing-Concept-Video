@@ -833,6 +833,17 @@ describe("removing a group's member", () => {
     expect(audited("group.change_refused").map(({ metadata }) => metadata.reason)).toEqual(["lacks_group_manage"]);
   });
 
+  it("refuses a manager granted group.manage, whom the ceiling lets remove no one", async () => {
+    const manager = await member("team.manager", "MANAGER");
+    const viewer = await member("team.viewer", "VIEWER");
+    const east = await eastWith(viewer);
+    await new PermissionGrantService(deps).grant(ownerId, orgId, manager, "group.manage");
+    await signIn("team.manager");
+    expect(landing(await removing(east, viewer))).toBe("error=may-not-remove-group-member");
+    expect(await inGroup(east)).toEqual([viewer]);
+    expect(audited("group.change_refused").map(({ metadata }) => metadata.reason)).toEqual(["target_role"]);
+  });
+
   it("refuses an admin a member of a group carrying a permission it may not take", async () => {
     const viewer = await member("team.viewer", "VIEWER");
     const east = await eastWith(viewer);
@@ -877,10 +888,20 @@ describe("removing a group's member", () => {
     await member("acting.viewer", "VIEWER");
     await signIn("acting.viewer");
     const east = await eastWith();
-    expect(landing(await removing(east, "u".repeat(65)))).toBe("error=group-member-gone");
+    const longest = "u".repeat(64);
+    expect(landing(await removing(east, `${longest}u`))).toBe("error=group-member-gone");
     expect(landing(await removing("g".repeat(GROUP_ID_MAX_LENGTH + 1), ownerId))).toBe("error=group-gone");
     expect(await removeGroupMember(ownerId, orgId, "", ownerId)).toEqual({ error: "group-gone" });
     expect(audited("group.change_refused")).toEqual([]);
+    expect(landing(await removing(east, longest))).toBe("error=may-not-remove-group-member");
+    expect(audited("group.change_refused").map(({ metadata }) => metadata.targetUserId)).toEqual([longest]);
+  });
+
+  it("answers a reason it does not know as a failure", async () => {
+    const east = await eastWith(ownerId);
+    const gone = new AppError("NOT_FOUND", "Gone", { details: { reason: "toString" } });
+    vi.spyOn(deps.repos.groups, "removeMember").mockRejectedValueOnce(gone);
+    expect(landing(await removing(east, ownerId))).toBe("error=remove-group-member-failed");
   });
 
   it("logs a failure by its code alone, and says to check the list", async () => {

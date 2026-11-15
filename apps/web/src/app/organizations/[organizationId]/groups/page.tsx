@@ -206,7 +206,7 @@ function DeleteGroup({ organizationId, group }: { organizationId: string; group:
 function AddGroupMember({ organizationId, group }: { organizationId: string; group: GroupsOverviewGroup }) {
   return (
     <details>
-      <summary aria-label={`Add a member to ${group.name}…`}>Add member…</summary>
+      <summary aria-label={`Add member to ${group.name}…`}>Add member…</summary>
       <form method="post" action={groupAction(organizationId, group.id, "members")}>
         <label className="field" htmlFor={`add-${group.id}`}>
           Member
@@ -262,7 +262,7 @@ function RemoveGroupMember({
           {member.name} will leave {group.name} and lose only what this group gave them, so a Manager no longer
           reaches the Properties assigned to it. They stay in the organization with their role.
         </p>
-        <button type="submit" aria-label={`Remove ${who} from group ${group.name}`} aria-describedby={effects}>
+        <button type="submit" aria-label={`Remove from group ${group.name}: ${who}`} aria-describedby={effects}>
           Remove from group
         </button>
       </form>
