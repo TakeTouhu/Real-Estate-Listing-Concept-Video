@@ -1,10 +1,5 @@
-import type { AssignableMember, PropertyAssignmentChoices } from "@app/domain";
-import { ROLE_NAMES } from "@/lib/role-names";
-
-/** A member as the lists name them: name, address where shown, and role. */
-function memberLine(member: AssignableMember): string {
-  return `${member.name}${member.email === null ? "" : ` · ${member.email}`} · ${ROLE_NAMES[member.role]}`;
-}
+import type { PropertyAssignmentChoices } from "@app/domain";
+import { memberLine } from "@/lib/role-names";
 
 /**
  * A Property's responsible user and group, and the closed form that changes

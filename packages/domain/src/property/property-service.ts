@@ -70,6 +70,12 @@ export interface AssignableMember {
   readonly role: Role;
 }
 
+/** A group a Property may be put in, as the forms list it. */
+export interface GroupChoice {
+  readonly id: string;
+  readonly name: string;
+}
+
 /** What an `OWNER` or `ADMIN` may choose for a Property, and what it has now (ADR-0144). */
 export interface PropertyAssignmentChoices {
   readonly responsibleUserId: string | null;
@@ -80,8 +86,21 @@ export interface PropertyAssignmentChoices {
    */
   readonly members: readonly AssignableMember[];
   /** The organization's groups, by name. */
-  readonly groups: readonly { readonly id: string; readonly name: string }[];
+  readonly groups: readonly GroupChoice[];
 }
+
+/** What a member may choose for a Property it creates, by its role (ADR-0145). */
+export type PropertyCreationChoices =
+  /** An `OWNER` or `ADMIN`: any member but a `BILLING` one, any group, either, both or neither. */
+  | {
+      readonly kind: "ANY";
+      readonly members: readonly AssignableMember[];
+      readonly groups: readonly GroupChoice[];
+    }
+  /** A `MANAGER`: itself as the responsible user, and one of its own groups, by name; none if it is in none. */
+  | { readonly kind: "OWN_GROUP"; readonly groups: readonly GroupChoice[] }
+  /** A `CREATOR`: itself as the responsible user, in no group. */
+  | { readonly kind: "SELF" };
 
 /** Why a member's assignment was refused, as its audit entry records it. */
 export type PropertyAssignmentRefusal =
@@ -230,26 +249,37 @@ export class PropertyService {
     const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId, "property.view");
     if (!mayReassign(actor)) return null;
     const property = await this.requireReachable(actor, propertyId);
-    const { repos } = this.deps.identity;
-    const [memberships, groups] = await Promise.all([
-      repos.memberships.listByOrganization(organizationId),
-      repos.groups.listByOrganization(organizationId),
+    const [members, groups] = await Promise.all([
+      this.assignableMembers(actor, property.responsibleUserId),
+      this.groupChoices(organizationId),
     ]);
-    // Keeping a responsible user is always possible: a role change does not rewrite an assignment.
-    const choosable = memberships
-      .filter(({ userId, role }) => role !== "BILLING" || userId === property.responsibleUserId)
-      .sort(compareMembers);
-    const users = await Promise.all(choosable.map(({ userId }) => repos.users.findById(userId)));
-    const addresses = actor.permissions.includes("member.view");
-    return {
-      responsibleUserId: property.responsibleUserId,
-      groupId: property.groupId,
-      members: choosable.flatMap(({ userId, role }, index): AssignableMember[] => {
-        const user = users[index];
-        return user ? [{ userId, name: user.name, email: addresses ? user.email : null, role }] : [];
-      }),
-      groups: groups.map(({ id, name }) => ({ id, name })),
-    };
+    return { responsibleUserId: property.responsibleUserId, groupId: property.groupId, members, groups };
+  }
+
+  /**
+   * What the "Add a property" form offers a member to choose for a Property it
+   * creates (ADR-0145), as {@link create} decides it by the member's role;
+   * `null` for a member without `property.create`. Reads the members' accounts
+   * together, writes nothing and audits nothing.
+   *
+   * @throws AppError FORBIDDEN for a non-member.
+   */
+  async creationChoices(actorUserId: string, organizationId: string): Promise<PropertyCreationChoices | null> {
+    const actor = await authorizeOrganization(this.deps.identity, actorUserId, organizationId);
+    if (!actor.permissions.includes("property.create")) return null;
+    if (mayReassign(actor)) {
+      const [members, groups] = await Promise.all([
+        this.assignableMembers(actor, null),
+        this.groupChoices(organizationId),
+      ]);
+      return { kind: "ANY", members, groups };
+    }
+    if (actor.role !== "MANAGER") return { kind: "SELF" };
+    const [own, groups] = await Promise.all([
+      this.deps.identity.repos.groups.listGroupIdsForMember(organizationId, actorUserId),
+      this.groupChoices(organizationId),
+    ]);
+    return { kind: "OWN_GROUP", groups: groups.filter(({ id }) => own.includes(id)) };
   }
 
   /** The organization's Properties the member reaches (ADR-0052 Decision 10). */
@@ -338,6 +368,31 @@ export class PropertyService {
       throw new AppError("NOT_FOUND", "Property not found");
     }
     return property;
+  }
+
+  /**
+   * The members an `OWNER` or `ADMIN` may make a Property's responsible user:
+   * any but a `BILLING` one, and `keep` whatever its role now, since a role
+   * change does not rewrite an assignment; in the members page's order. A
+   * member's address only for an actor holding `member.view`.
+   */
+  private async assignableMembers(actor: AuthContext, keep: string | null): Promise<AssignableMember[]> {
+    const { repos } = this.deps.identity;
+    const choosable = (await repos.memberships.listByOrganization(actor.organizationId))
+      .filter(({ userId, role }) => role !== "BILLING" || userId === keep)
+      .sort(compareMembers);
+    const users = await Promise.all(choosable.map(({ userId }) => repos.users.findById(userId)));
+    const addresses = actor.permissions.includes("member.view");
+    return choosable.flatMap(({ userId, role }, index): AssignableMember[] => {
+      const user = users[index];
+      return user ? [{ userId, name: user.name, email: addresses ? user.email : null, role }] : [];
+    });
+  }
+
+  /** The organization's groups, by name. */
+  private async groupChoices(organizationId: string): Promise<GroupChoice[]> {
+    const groups = await this.deps.identity.repos.groups.listByOrganization(organizationId);
+    return groups.map(({ id, name }) => ({ id, name }));
   }
 
   /**
