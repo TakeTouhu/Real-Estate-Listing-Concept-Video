@@ -214,19 +214,18 @@ describe("creating a Property with its assignment", () => {
     expect(audited("property.assignment_refused")).toHaveLength(1);
   });
 
-  it("refuses a VIEWER, who may create no Property", async () => {
-    await signIn("viewer");
-    expect(landing(await creating())).toBe("/ Role VIEWER lacks permission 'property.create'");
+  it.each(["VIEWER", "BILLING"] as const)("refuses a %s, who may create no Property", async (role) => {
+    await signIn(role.toLowerCase());
+    expect(landing(await creating({ groupId: east }))).toBe(`/ Role ${role} lacks permission 'property.create'`);
     expect(await created()).toEqual([]);
+    expect(audited("property.assignment_refused")).toEqual([]);
   });
 
   it("refuses ids longer than any this product makes, so they never reach the audit log", async () => {
     await signIn("manager");
     const longest = "x".repeat(ASSIGNMENT_ID_MAX_LENGTH);
     expect(landing(await creating({ groupId: `${longest}x` }))).toBe(NOT_A_GROUP);
-    expect(landing(await creating({ responsibleUserId: `${longest}x`, groupId: east }))).toBe(
-      "/ The responsible user must be a member of this organization",
-    );
+    expect(landing(await creating({ responsibleUserId: `${longest}x`, groupId: east }))).toBe(INELIGIBLE);
     expect(audited("property.assignment_refused")).toEqual([]);
     expect(landing(await creating({ groupId: longest }))).toMatch(/^\/ Role MANAGER may not choose/);
     expect(audited("property.assignment_refused").map(({ metadata }) => metadata.groupId)).toEqual([longest]);
@@ -236,8 +235,12 @@ describe("creating a Property with its assignment", () => {
   it.each([
     ["no origin", {}],
     ["another site", { origin: "https://evil.example.net" }],
-  ])("refuses a post from %s before reading anything", async (_what, headers) => {
+  ])("refuses a post from %s before reading anything, signed in or not", async (_what, headers) => {
     expect((await creating({}, headers)).status).toBe(403);
+    cookie.value = undefined;
+    const request = new Request(`${SITE}/api/properties`, { method: "POST", headers, body: "name=Harbor+View" });
+    expect((await create(request)).status).toBe(403);
+    expect(request.bodyUsed).toBe(false);
     expect(await created()).toEqual([]);
   });
 

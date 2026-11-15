@@ -2532,6 +2532,6 @@ refuses a post from another origin with `403`. A `BILLING` member's home page
 no longer fails.
 
 **Rolling back.** To AT-10a's build: safe. Properties keep the assignments
-they were created with; the form again creates them unassigned, a `MANAGER`
-in several groups again cannot create one, and a `BILLING` member's home page
-fails again.
+they were created with. An `OWNER` or `ADMIN` again creates them unassigned,
+a `MANAGER` in several groups again cannot create one, and a `BILLING`
+member's home page fails again.

@@ -77,7 +77,8 @@ The home page's form keeps its fields and adds, by Decision 1:
 Its answers are otherwise unchanged: `303` to the new Property's page, or
 `303` to the home page with the error's sentence. The home page already shows
 those sentences for this route and others; none of them names a member or a
-group.
+group. A body that is not a form, which used to fail, is now read as an empty
+form, and so refused with a sentence like any other.
 
 ## Decision 4 — The home page no longer fails for a `BILLING` member
 
@@ -94,8 +95,8 @@ and `GET /api/properties` are unchanged.
 - No migration, permission or audit action. A Property created with an
   assignment records it in `property.created`, as the service always did.
 - A `MANAGER` in several groups can create a Property from the product.
-- Phase 6H's shape test now checks that the create route passes only the
-  assignment the form chose, an empty field none.
+- Phase 6H's shape test now checks that the create route passes the
+  assignment the form chose, leaving out an empty field.
 - A browser test creates a group, then a Property with its owner responsible
   and in that group.
 
@@ -105,3 +106,6 @@ and `GET /api/properties` are unchanged.
   (ADR-0144).
 - Keeping what was typed in the form when it is refused: the home page shows
   the error and an empty form, as before.
+- Fixed codes instead of sentences in the home page's address, as the
+  Property page has (ADR-0144): the home page still shows whatever sentence
+  its address carries, escaped.

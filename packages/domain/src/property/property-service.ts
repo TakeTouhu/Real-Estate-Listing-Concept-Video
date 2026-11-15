@@ -37,8 +37,8 @@ export interface CreatePropertyInput {
   readonly responsibleUserId?: string;
   /**
    * The group an `OWNER` or `ADMIN` chooses, omitted for none; or the one of
-   * its own groups a `MANAGER` in several names, omitted for one in a single
-   * group. A `CREATOR` names none.
+   * its own groups a `MANAGER` names, which a `MANAGER` in a single group may
+   * omit. A `CREATOR` names none.
    */
   readonly groupId?: string;
 }

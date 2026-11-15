@@ -49,7 +49,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   const responsibleUserId = formString(form, "responsibleUserId");
   const groupId = formString(form, "groupId");
   if (responsibleUserId.length > ASSIGNMENT_ID_MAX_LENGTH) {
-    return redirectWithError(request.url, "/", "The responsible user must be a member of this organization");
+    const message = "The responsible user must be a member of this organization who is not BILLING";
+    return redirectWithError(request.url, "/", message);
   }
   if (groupId.length > ASSIGNMENT_ID_MAX_LENGTH) {
     return redirectWithError(request.url, "/", "The group must be a group of this organization");

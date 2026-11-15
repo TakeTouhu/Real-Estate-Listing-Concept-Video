@@ -26,12 +26,13 @@ export default async function DashboardPage({
   const services = getPropertyServices();
 
   const groups = await Promise.all(
-    organizations.map(async ({ organization, role }) => ({
-      organization,
-      role,
-      properties: await services.properties.list(current.user.id, organization.id).catch(withoutPropertyView),
-      creation: await services.properties.creationChoices(current.user.id, organization.id),
-    })),
+    organizations.map(async ({ organization, role }) => {
+      const [properties, creation] = await Promise.all([
+        services.properties.list(current.user.id, organization.id).catch(withoutPropertyView),
+        services.properties.creationChoices(current.user.id, organization.id),
+      ]);
+      return { organization, role, properties, creation };
+    }),
   );
   const joined = groups.find(({ organization }) => organization.id === params.joined);
 
