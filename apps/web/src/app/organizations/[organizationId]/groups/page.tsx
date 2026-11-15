@@ -1,5 +1,10 @@
 import { redirect } from "next/navigation";
-import { GROUP_NAME_MAX_LENGTH, type GroupsOverview, type GroupsOverviewGroup } from "@app/domain";
+import {
+  GROUP_NAME_MAX_LENGTH,
+  type GroupsOverview,
+  type GroupsOverviewGroup,
+  type GroupsOverviewMember,
+} from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { GROUPS_ERRORS, GROUPS_NOTICES, getGroupsOverviewService, groupsError, groupsNotice } from "@/lib/groups";
@@ -14,8 +19,9 @@ type Query = { notice?: string | string[]; error?: string | string[] };
  * An organization's groups and who belongs to each (AT-9a, ADR-0141), for a
  * holder of `group.view`. Viewing writes nothing. A holder of `group.manage`
  * creates and renames a group, and one who is also an `OWNER` or `ADMIN`
- * deletes one (AT-9b, ADR-0142); each route answers with a code this page
- * turns into a fixed sentence.
+ * deletes one (AT-9b, ADR-0142); one who may also assign a member's role adds
+ * them to a group or removes them (AT-9c, ADR-0143). Each route answers with a
+ * code this page turns into a fixed sentence.
  */
 export default async function GroupsPage({
   params,
@@ -83,12 +89,15 @@ export default async function GroupsPage({
                   <ul>
                     {group.members.map((member) => (
                       <li key={member.userId}>
-                        {member.name}
-                        {member.email === null ? null : ` · ${member.email}`} · {ROLE_NAMES[member.role]}
+                        {memberLine(member)}
+                        {member.mayRemove ? (
+                          <RemoveGroupMember organizationId={organizationId} group={group} member={member} />
+                        ) : null}
                       </li>
                     ))}
                   </ul>
                 ) : null}
+                {group.addable.length > 0 ? <AddGroupMember organizationId={organizationId} group={group} /> : null}
                 {overview.mayManage ? <RenameGroup organizationId={organizationId} group={group} /> : null}
                 {overview.mayDelete ? <DeleteGroup organizationId={organizationId} group={group} /> : null}
               </li>
@@ -123,8 +132,13 @@ function CreateGroup({ organizationId }: { organizationId: string }) {
   );
 }
 
+/** A member as the page names them: name, address where shown, and role. */
+function memberLine(member: GroupsOverviewMember): string {
+  return `${member.name}${member.email === null ? "" : ` · ${member.email}`} · ${ROLE_NAMES[member.role]}`;
+}
+
 /** Where a group's changes are posted. */
-function groupAction(organizationId: string, groupId: string, change: "rename" | "delete"): string {
+function groupAction(organizationId: string, groupId: string, change: "rename" | "delete" | "members"): string {
   return `/api/organizations/${encodeURIComponent(organizationId)}/groups/${encodeURIComponent(groupId)}/${change}`;
 }
 
@@ -179,6 +193,77 @@ function DeleteGroup({ organizationId, group }: { organizationId: string; group:
         </p>
         <button type="submit" aria-label={`Delete group ${group.name}`} aria-describedby={`delete-${group.id}-effects`}>
           Delete group
+        </button>
+      </form>
+    </details>
+  );
+}
+
+/**
+ * The closed form that adds a member of the organization to a group: one of
+ * those not in it whose role the viewer may assign (ADR-0143).
+ */
+function AddGroupMember({ organizationId, group }: { organizationId: string; group: GroupsOverviewGroup }) {
+  return (
+    <details>
+      <summary aria-label={`Add member to ${group.name}…`}>Add member…</summary>
+      <form method="post" action={groupAction(organizationId, group.id, "members")}>
+        <label className="field" htmlFor={`add-${group.id}`}>
+          Member
+        </label>
+        <select
+          id={`add-${group.id}`}
+          aria-label={`Member to add to ${group.name}`}
+          name="userId"
+          defaultValue=""
+          required
+        >
+          <option value="" disabled>
+            Choose a member
+          </option>
+          {group.addable.map((member) => (
+            <option key={member.userId} value={member.userId}>
+              {memberLine(member)}
+            </option>
+          ))}
+        </select>
+        <p className="field">
+          <button type="submit" aria-label={`Add to group ${group.name}`}>
+            Add to group
+          </button>
+        </p>
+      </form>
+    </details>
+  );
+}
+
+/**
+ * The closed form that removes a member from a group, for a viewer who may
+ * assign their role (ADR-0143). Opened, it says what removing does before its
+ * button.
+ */
+function RemoveGroupMember({
+  organizationId,
+  group,
+  member,
+}: {
+  organizationId: string;
+  group: GroupsOverviewGroup;
+  member: GroupsOverviewMember;
+}) {
+  const who = member.email === null ? member.name : `${member.name} (${member.email})`;
+  const effects = `remove-${group.id}-${member.userId}-effects`;
+  const action = `${groupAction(organizationId, group.id, "members")}/${encodeURIComponent(member.userId)}/remove`;
+  return (
+    <details>
+      <summary aria-label={`Remove ${who} from ${group.name}…`}>Remove…</summary>
+      <form method="post" action={action}>
+        <p className="muted" id={effects}>
+          {member.name} will leave {group.name} and lose only what this group gave them, so a Manager no longer
+          reaches the Properties assigned to it. They stay in the organization with their role.
+        </p>
+        <button type="submit" aria-label={`Remove from group ${group.name}: ${who}`} aria-describedby={effects}>
+          Remove from group
         </button>
       </form>
     </details>

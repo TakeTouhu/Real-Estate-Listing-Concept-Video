@@ -21,8 +21,9 @@ import {
 import { AppError, hotp } from "@app/shared";
 
 /**
- * Route tests for creating a group from the groups page (AT-9a, ADR-0141), and
- * renaming and deleting one (AT-9b, ADR-0142): a same-origin form post, signed
+ * Route tests for creating a group from the groups page (AT-9a, ADR-0141),
+ * renaming and deleting one (AT-9b, ADR-0142), and adding and removing its
+ * members (AT-9c, ADR-0143): a same-origin form post, signed
  * in, reaches the group service, which decides and audits; the answer is the
  * groups page with a fixed code, never a name.
  * Only the cookie store, the environment and the identity wiring are stubbed:
@@ -54,7 +55,12 @@ vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }))
 const { POST: create } = await import("@/app/api/organizations/[organizationId]/groups/route");
 const { POST: rename } = await import("@/app/api/organizations/[organizationId]/groups/[groupId]/rename/route");
 const { POST: remove } = await import("@/app/api/organizations/[organizationId]/groups/[groupId]/delete/route");
-const { GROUP_ID_MAX_LENGTH, createGroup, deleteGroup, renameGroup } = await import("@/lib/groups");
+const { POST: add } = await import("@/app/api/organizations/[organizationId]/groups/[groupId]/members/route");
+const { POST: leave } = await import(
+  "@/app/api/organizations/[organizationId]/groups/[groupId]/members/[userId]/remove/route"
+);
+const { GROUP_ID_MAX_LENGTH, addGroupMember, createGroup, deleteGroup, removeGroupMember, renameGroup } =
+  await import("@/lib/groups");
 
 let deps: TestDeps;
 let auth: AuthService;
@@ -124,7 +130,7 @@ type HeaderFields = Record<string, string>;
 /** A post of `fields` to one group's change. */
 const changing = (
   route: typeof rename,
-  change: "rename" | "delete",
+  change: "rename" | "delete" | "members",
   groupId: string,
   fields: Record<string, string>,
   organizationId = orgId,
@@ -144,6 +150,24 @@ const renaming = (groupId: string, fields: Record<string, string>, organizationI
 
 const deleting = (groupId: string, organizationId = orgId, headers?: HeaderFields) =>
   changing(remove, "delete", groupId, {}, organizationId, headers);
+
+const adding = (groupId: string, userId: string, organizationId = orgId, headers?: HeaderFields) =>
+  changing(add, "members", groupId, { userId }, organizationId, headers);
+
+/** A post that removes `userId` from a group. */
+const removing = (groupId: string, userId: string, organizationId = orgId, headers: HeaderFields = { origin: SITE }) =>
+  leave(
+    new Request(
+      `${SITE}/api/organizations/${organizationId}/groups/${encodeURIComponent(groupId)}` +
+        `/members/${encodeURIComponent(userId)}/remove`,
+      { method: "POST", headers: { host: "app.vtavision.test", ...headers } },
+    ),
+    { params: Promise.resolve({ organizationId, groupId, userId }) },
+  );
+
+/** Who is in a group. */
+const inGroup = async (groupId: string, organizationId = orgId) =>
+  (await deps.repos.groups.listMembers(organizationId, groupId)).map(({ userId }) => userId);
 
 /** A group of the organization, made by its owner; returns its id. */
 const newGroup = async (name: string, organizationId = orgId, by = ownerId) =>
@@ -581,5 +605,332 @@ describe("deleting a group", () => {
     const response = await deleting(east);
     expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
     expect(await names()).toEqual(["East"]);
+  });
+});
+
+describe("adding a group's member", () => {
+  it("adds a member of the organization, and audits it with their role", async () => {
+    const east = await newGroup("East");
+    const viewer = await member("team.viewer", "VIEWER");
+    expect(landing(await adding(east, viewer))).toBe("notice=group-member-added");
+    expect(await inGroup(east)).toEqual([viewer]);
+    expect(audited("group.member_added").map(entryOf)).toEqual([
+      { actorUserId: ownerId, resourceId: east, metadata: { targetUserId: viewer, targetRole: "VIEWER" } },
+    ]);
+  });
+
+  it("says a member already in the group is in it, writing nothing", async () => {
+    const east = await newGroup("East");
+    const viewer = await member("team.viewer", "VIEWER");
+    await adding(east, viewer);
+    expect(landing(await adding(east, viewer))).toBe("notice=group-member-added");
+    expect(audited("group.member_added")).toHaveLength(1);
+  });
+
+  it("lets an owner add itself, and an admin a manager, creator or viewer", async () => {
+    const east = await newGroup("East");
+    expect(landing(await adding(east, ownerId))).toBe("notice=group-member-added");
+    const added = [];
+    for (const role of ["MANAGER", "CREATOR", "VIEWER"] as const) added.push(await member(`team.${role}`, role));
+    await member("team.admin", "ADMIN");
+    await signIn("team.admin");
+    for (const userId of added) expect(landing(await adding(east, userId))).toBe("notice=group-member-added");
+    expect((await inGroup(east)).sort()).toEqual([ownerId, ...added].sort());
+  });
+
+  it("refuses an admin a member whose role it may not assign, itself included, and audits it", async () => {
+    const east = await newGroup("East");
+    const admin = await member("team.admin", "ADMIN");
+    const billing = await member("team.billing", "BILLING");
+    await signIn("team.admin");
+    for (const userId of [ownerId, admin, billing]) {
+      expect(landing(await adding(east, userId))).toBe("error=may-not-add-group-member");
+    }
+    expect(await inGroup(east)).toEqual([]);
+    expect(audited("group.change_refused").map(({ metadata }) => [metadata.reason, metadata.targetRole])).toEqual([
+      ["target_role", "OWNER"],
+      ["target_role", "ADMIN"],
+      ["target_role", "BILLING"],
+    ]);
+  });
+
+  it("refuses a manager granted group.manage, whom the ceiling lets add no one", async () => {
+    const east = await newGroup("East");
+    const manager = await member("team.manager", "MANAGER");
+    const viewer = await member("team.viewer", "VIEWER");
+    await new PermissionGrantService(deps).grant(ownerId, orgId, manager, "group.manage");
+    await signIn("team.manager");
+    expect(landing(await adding(east, viewer))).toBe("error=may-not-add-group-member");
+    expect(audited("group.change_refused").map(({ metadata }) => metadata.reason)).toEqual(["target_role"]);
+  });
+
+  it.each(["MANAGER", "CREATOR", "VIEWER", "BILLING"] as const)(
+    "refuses a %s, lacking group.manage, and audits it",
+    async (role) => {
+      const east = await newGroup("East");
+      const viewer = await member("team.viewer", "VIEWER");
+      await member(`acting.${role}`, role);
+      await signIn(`acting.${role}`);
+      expect(landing(await adding(east, viewer))).toBe("error=may-not-add-group-member");
+      expect(audited("group.change_refused").map(({ metadata }) => metadata.reason)).toEqual(["lacks_group_manage"]);
+    },
+  );
+
+  it("refuses an admin a group carrying a permission it may not give, adding no one", async () => {
+    const east = await newGroup("East");
+    await new GroupService(deps).grantPermission(ownerId, orgId, east, "billing.manage");
+    const viewer = await member("team.viewer", "VIEWER");
+    await member("team.admin", "ADMIN");
+    await signIn("team.admin");
+    expect(landing(await adding(east, viewer))).toBe("error=may-not-add-group-member");
+    expect(await inGroup(east)).toEqual([]);
+    expect(audited("group.change_refused").map(({ metadata }) => metadata.permission)).toEqual(["billing.manage"]);
+  });
+
+  it("finds no group of another organization, nor a missing one", async () => {
+    const outsider = await register("outsider");
+    const { organization } = await new OrganizationService(deps).createOrganization(outsider, { name: "Elsewhere" });
+    const theirs = await newGroup("Theirs", organization.id, outsider);
+    expect(landing(await adding(theirs, ownerId))).toBe("error=group-gone");
+    expect(landing(await adding("grp_missing", ownerId))).toBe("error=group-gone");
+    expect(await inGroup(theirs, organization.id)).toEqual([]);
+  });
+
+  it("finds no one who is not a member of this organization", async () => {
+    const east = await newGroup("East");
+    const outsider = await register("outsider");
+    expect(landing(await adding(east, outsider))).toBe("error=group-member-gone");
+    expect(await inGroup(east)).toEqual([]);
+  });
+
+  it("refuses an organization the poster is no member of, writing nothing there", async () => {
+    const outsider = await register("outsider");
+    const { organization } = await new OrganizationService(deps).createOrganization(outsider, { name: "Elsewhere" });
+    const theirs = await newGroup("Theirs", organization.id, outsider);
+    expect(landing(await adding(theirs, ownerId, organization.id), organization.id)).toBe(
+      "error=may-not-add-group-member",
+    );
+    expect(await inGroup(theirs, organization.id)).toEqual([]);
+    expect(audited("group.change_refused")).toEqual([]);
+  });
+
+  it("says the group or member changed when the addition finds either gone as it writes", async () => {
+    const east = await newGroup("East");
+    vi.spyOn(deps.repos.groups, "addMember").mockResolvedValue({ outcome: "STALE" });
+    expect(landing(await adding(east, ownerId))).toBe("error=group-members-changed");
+  });
+
+  it("refuses ids longer than any unread, so they never reach the audit log", async () => {
+    await member("acting.viewer", "VIEWER");
+    await signIn("acting.viewer");
+    const east = await newGroup("East");
+    const longest = "u".repeat(64);
+    expect(landing(await adding(east, `${longest}u`))).toBe("error=group-member-gone");
+    expect(landing(await adding("g".repeat(GROUP_ID_MAX_LENGTH + 1), ownerId))).toBe("error=group-gone");
+    expect(audited("group.change_refused")).toEqual([]);
+    expect(landing(await adding(east, longest))).toBe("error=may-not-add-group-member");
+    expect(audited("group.change_refused").map(({ metadata }) => metadata.targetUserId)).toEqual([longest]);
+  });
+
+  it("asks an empty member for the permission first, so its refusal is audited", async () => {
+    const east = await newGroup("East");
+    expect(landing(await adding(east, ""))).toBe("error=group-member-gone");
+    await member("acting.viewer", "VIEWER");
+    await signIn("acting.viewer");
+    expect(landing(await adding(east, ""))).toBe("error=may-not-add-group-member");
+    expect(audited("group.change_refused")).toHaveLength(1);
+  });
+
+  it("answers a reason it does not know, or a reason on another error, as a failure", async () => {
+    const east = await newGroup("East");
+    const spy = vi.spyOn(deps.repos.groups, "addMember");
+    spy.mockRejectedValueOnce(new AppError("NOT_FOUND", "Gone", { details: { reason: "constructor" } }));
+    expect(landing(await adding(east, ownerId))).toBe("error=add-group-member-failed");
+    spy.mockRejectedValueOnce(new AppError("INTERNAL_ERROR", "Lost", { details: { reason: "GROUP" } }));
+    expect(landing(await adding(east, ownerId))).toBe("error=add-group-member-failed");
+  });
+
+  it("logs a failure by its code alone, and says to check the list", async () => {
+    const east = await newGroup("East");
+    vi.spyOn(deps.repos.groups, "addMember").mockRejectedValue(new Error("lost owner@example.com"));
+    const logged: unknown[] = [];
+    const outcome = await addGroupMember(ownerId, orgId, east, { userId: ownerId }, {
+      error: (message, fields) => logged.push({ message, fields }),
+    });
+    expect(outcome).toEqual({ error: "add-group-member-failed" });
+    expect(logged).toEqual([{ message: "A member could not be added to a group", fields: { code: "UNEXPECTED" } }]);
+  });
+
+  it.each([
+    ["no origin", {}],
+    ["another site", { origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading anything", async (_what, headers) => {
+    const east = await newGroup("East");
+    expect((await adding(east, ownerId, orgId, headers)).status).toBe(403);
+    expect(await inGroup(east)).toEqual([]);
+  });
+
+  it("sends a signed-out visitor to sign in, adding no one", async () => {
+    const east = await newGroup("East");
+    cookie.value = undefined;
+    const response = await adding(east, ownerId);
+    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(await inGroup(east)).toEqual([]);
+  });
+});
+
+describe("removing a group's member", () => {
+  /** A group named East holding `userIds`, added by the owner; returns its id. */
+  const eastWith = async (...userIds: string[]) => {
+    const east = await newGroup("East");
+    for (const userId of userIds) await new GroupService(deps).addMember(ownerId, orgId, east, userId);
+    return east;
+  };
+
+  it("removes the member from the group, keeping them in the organization, and audits it", async () => {
+    const viewer = await member("team.viewer", "VIEWER");
+    const east = await eastWith(viewer);
+    expect(landing(await removing(east, viewer))).toBe("notice=group-member-removed");
+    expect(await inGroup(east)).toEqual([]);
+    expect((await deps.repos.memberships.find(orgId, viewer))?.role).toBe("VIEWER");
+    expect(audited("group.member_removed").map(entryOf)).toEqual([
+      { actorUserId: ownerId, resourceId: east, metadata: { targetUserId: viewer, targetRole: "VIEWER" } },
+    ]);
+  });
+
+  it("lets an owner remove itself, and an admin a manager, creator or viewer", async () => {
+    const others = [];
+    for (const role of ["MANAGER", "CREATOR", "VIEWER"] as const) others.push(await member(`team.${role}`, role));
+    const east = await eastWith(ownerId, ...others);
+    expect(landing(await removing(east, ownerId))).toBe("notice=group-member-removed");
+    await member("team.admin", "ADMIN");
+    await signIn("team.admin");
+    for (const userId of others) expect(landing(await removing(east, userId))).toBe("notice=group-member-removed");
+    expect(await inGroup(east)).toEqual([]);
+  });
+
+  it("refuses an admin a member whose role it may not assign, itself included, and audits it", async () => {
+    const admin = await member("team.admin", "ADMIN");
+    const east = await eastWith(ownerId, admin);
+    await signIn("team.admin");
+    for (const userId of [ownerId, admin]) {
+      expect(landing(await removing(east, userId))).toBe("error=may-not-remove-group-member");
+    }
+    expect((await inGroup(east)).sort()).toEqual([ownerId, admin].sort());
+    expect(audited("group.change_refused").map(({ metadata }) => metadata.reason)).toEqual([
+      "target_role",
+      "target_role",
+    ]);
+  });
+
+  it.each(["MANAGER", "CREATOR", "VIEWER", "BILLING"] as const)("refuses a %s, lacking group.manage", async (role) => {
+    const viewer = await member("team.viewer", "VIEWER");
+    const east = await eastWith(viewer);
+    await member(`acting.${role}`, role);
+    await signIn(`acting.${role}`);
+    expect(landing(await removing(east, viewer))).toBe("error=may-not-remove-group-member");
+    expect(await inGroup(east)).toEqual([viewer]);
+    expect(audited("group.change_refused").map(({ metadata }) => metadata.reason)).toEqual(["lacks_group_manage"]);
+  });
+
+  it("refuses a manager granted group.manage, whom the ceiling lets remove no one", async () => {
+    const manager = await member("team.manager", "MANAGER");
+    const viewer = await member("team.viewer", "VIEWER");
+    const east = await eastWith(viewer);
+    await new PermissionGrantService(deps).grant(ownerId, orgId, manager, "group.manage");
+    await signIn("team.manager");
+    expect(landing(await removing(east, viewer))).toBe("error=may-not-remove-group-member");
+    expect(await inGroup(east)).toEqual([viewer]);
+    expect(audited("group.change_refused").map(({ metadata }) => metadata.reason)).toEqual(["target_role"]);
+  });
+
+  it("refuses an admin a member of a group carrying a permission it may not take", async () => {
+    const viewer = await member("team.viewer", "VIEWER");
+    const east = await eastWith(viewer);
+    await new GroupService(deps).grantPermission(ownerId, orgId, east, "billing.manage");
+    await member("team.admin", "ADMIN");
+    await signIn("team.admin");
+    expect(landing(await removing(east, viewer))).toBe("error=may-not-remove-group-member");
+    expect(await inGroup(east)).toEqual([viewer]);
+  });
+
+  it("says a member is not in the group, and that someone is no member of the organization", async () => {
+    const viewer = await member("team.viewer", "VIEWER");
+    const east = await eastWith();
+    expect(landing(await removing(east, viewer))).toBe("error=not-in-group");
+    expect(landing(await removing(east, await register("outsider")))).toBe("error=group-member-gone");
+    expect(audited("group.member_removed")).toEqual([]);
+  });
+
+  it("finds no group of another organization, nor a missing one", async () => {
+    const outsider = await register("outsider");
+    const { organization } = await new OrganizationService(deps).createOrganization(outsider, { name: "Elsewhere" });
+    const theirs = await newGroup("Theirs", organization.id, outsider);
+    await new GroupService(deps).addMember(outsider, organization.id, theirs, outsider);
+    expect(landing(await removing(theirs, ownerId))).toBe("error=group-gone");
+    expect(landing(await removing("grp_missing", ownerId))).toBe("error=group-gone");
+    expect(await inGroup(theirs, organization.id)).toEqual([outsider]);
+  });
+
+  it("refuses an organization the poster is no member of, writing nothing there", async () => {
+    const outsider = await register("outsider");
+    const { organization } = await new OrganizationService(deps).createOrganization(outsider, { name: "Elsewhere" });
+    const theirs = await newGroup("Theirs", organization.id, outsider);
+    await new GroupService(deps).addMember(outsider, organization.id, theirs, outsider);
+    expect(landing(await removing(theirs, outsider, organization.id), organization.id)).toBe(
+      "error=may-not-remove-group-member",
+    );
+    expect(await inGroup(theirs, organization.id)).toEqual([outsider]);
+    expect(audited("group.change_refused")).toEqual([]);
+  });
+
+  it("refuses ids longer than any unread, so they never reach the audit log", async () => {
+    await member("acting.viewer", "VIEWER");
+    await signIn("acting.viewer");
+    const east = await eastWith();
+    const longest = "u".repeat(64);
+    expect(landing(await removing(east, `${longest}u`))).toBe("error=group-member-gone");
+    expect(landing(await removing("g".repeat(GROUP_ID_MAX_LENGTH + 1), ownerId))).toBe("error=group-gone");
+    expect(await removeGroupMember(ownerId, orgId, "", ownerId)).toEqual({ error: "group-gone" });
+    expect(audited("group.change_refused")).toEqual([]);
+    expect(landing(await removing(east, longest))).toBe("error=may-not-remove-group-member");
+    expect(audited("group.change_refused").map(({ metadata }) => metadata.targetUserId)).toEqual([longest]);
+  });
+
+  it("answers a reason it does not know as a failure", async () => {
+    const east = await eastWith(ownerId);
+    const gone = new AppError("NOT_FOUND", "Gone", { details: { reason: "toString" } });
+    vi.spyOn(deps.repos.groups, "removeMember").mockRejectedValueOnce(gone);
+    expect(landing(await removing(east, ownerId))).toBe("error=remove-group-member-failed");
+  });
+
+  it("logs a failure by its code alone, and says to check the list", async () => {
+    const east = await eastWith(ownerId);
+    vi.spyOn(deps.repos.groups, "removeMember").mockRejectedValue(new Error("lost owner@example.com"));
+    const logged: unknown[] = [];
+    const outcome = await removeGroupMember(ownerId, orgId, east, ownerId, {
+      error: (message, fields) => logged.push({ message, fields }),
+    });
+    expect(outcome).toEqual({ error: "remove-group-member-failed" });
+    expect(logged).toEqual([
+      { message: "A member could not be removed from a group", fields: { code: "UNEXPECTED" } },
+    ]);
+  });
+
+  it.each([
+    ["no origin", {}],
+    ["another site", { origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading anything", async (_what, headers) => {
+    const east = await eastWith(ownerId);
+    expect((await removing(east, ownerId, orgId, headers)).status).toBe(403);
+    expect(await inGroup(east)).toEqual([ownerId]);
+  });
+
+  it("sends a signed-out visitor to sign in, removing no one", async () => {
+    const east = await eastWith(ownerId);
+    cookie.value = undefined;
+    const response = await removing(east, ownerId);
+    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(await inGroup(east)).toEqual([ownerId]);
   });
 });

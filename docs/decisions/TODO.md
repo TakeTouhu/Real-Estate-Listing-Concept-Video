@@ -1429,7 +1429,10 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       group's deletion when the group carries a permission the `ADMIN` may
       not take from a member (ADR-0061). Groups carry none until AT-11, so
       today the page offers Delete exactly where it succeeds. AT-11 should
-      decide it per group, or say why the page offers it anyway.
+      decide it per group, or say why the page offers it anyway. The same
+      holds for adding and removing a member (ADR-0143): the overview asks
+      `group.manage` and the role-assignment ceiling, not the grant ceiling
+      of what the group gives or takes.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

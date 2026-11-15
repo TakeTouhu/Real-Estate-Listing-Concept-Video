@@ -9,8 +9,8 @@ import { describe, expect, it } from "vitest";
  *    else. Both foreign keys of a group member carry the organization.
  * 2. **No group surface** then. Since AT-9a (ADR-0141) the groups page and
  *    its routes reach groups through the web app's groups module only; AT-9b
- *    (ADR-0142) adds renaming and deleting. No permission vocabulary on any
- *    group table.
+ *    (ADR-0142) adds renaming and deleting, and AT-9c (ADR-0143) adding and
+ *    removing a group's members. No permission vocabulary on any group table.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -81,7 +81,8 @@ describe("durable shape", () => {
 describe("dormancy", () => {
   it("reaches groups from the web app's groups module only, and changes them from the groups page's routes", () => {
     // AT-9a (ADR-0141): the page reads the groups there, and each route calls its one change there (AT-9b,
-    // ADR-0142, renames and deletes). The application's own tests are not callers.
+    // ADR-0142, renames and deletes; AT-9c, ADR-0143, adds and removes members). The application's own tests
+    // are not callers.
     const callersOf = (pattern: RegExp) =>
       ["apps/web", "apps/worker", "apps/ops"]
         .flatMap((app) => sourceFiles(join(REPO_ROOT, app)))
@@ -97,19 +98,29 @@ describe("dormancy", () => {
         "apps/web/src/lib/groups.ts",
       ]);
     }
+    expect(callersOf(/\baddGroupMember\(/)).toEqual([
+      `${groupRoutes}/[groupId]/members/route.ts`,
+      "apps/web/src/lib/groups.ts",
+    ]);
+    expect(callersOf(/\bremoveGroupMember\(/)).toEqual([
+      `${groupRoutes}/[groupId]/members/[userId]/remove/route.ts`,
+      "apps/web/src/lib/groups.ts",
+    ]);
   });
 
-  it("asks the group service only to create, rename and delete a group", () => {
-    // Changing a group's members follows in AT-9c, widening this list.
+  it("asks the group service only to create, rename and delete a group, and to add and remove its members", () => {
+    // Its permissions follow in AT-11, widening this list.
     const lib = code(readFileSync(join(REPO_ROOT, "apps", "web", "src", "lib", "groups.ts"), "utf8"));
     expect([...lib.matchAll(/getGroupService\(\)\.(\w+)\(/g)].map(([, method]) => method)).toEqual([
       "create",
       "rename",
       "delete",
+      "addMember",
+      "removeMember",
     ]);
     expect(lib).not.toMatch(/export function getGroupService/);
     expect(lib.match(/new GroupService\(/g)).toHaveLength(1);
-    // Its definition and those three calls: the service is never kept and asked something else later.
-    expect(lib.match(/getGroupService\(/g)).toHaveLength(4);
+    // Its definition and those five calls: the service is never kept and asked something else later.
+    expect(lib.match(/getGroupService\(/g)).toHaveLength(6);
   });
 });

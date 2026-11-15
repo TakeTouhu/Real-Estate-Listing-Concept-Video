@@ -3,11 +3,13 @@ import {
   GroupService,
   GroupsOverviewService,
   type GroupNameRefusal,
+  type GroupNotFoundReason,
   type GroupRenameRefusal,
 } from "@app/domain";
 import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
+import { MEMBER_ID_MAX_LENGTH } from "./members";
 import { codeOf } from "./page-codes";
 
 let overview: GroupsOverviewService | undefined;
@@ -35,6 +37,8 @@ export const GROUPS_NOTICES = {
   "group-created": "The group was created.",
   "group-renamed": "The group's name was saved.",
   "group-deleted": "The group was deleted.",
+  "group-member-added": "The member is in the group.",
+  "group-member-removed": "The member was removed from the group. They stay in the organization with their role.",
 } as const;
 
 export const GROUPS_ERRORS = {
@@ -48,6 +52,13 @@ export const GROUPS_ERRORS = {
   "rename-group-failed": "Something went wrong. Check below whether the group was renamed.",
   "may-not-delete-group": "You cannot delete this group.",
   "delete-group-failed": "Something went wrong. Check below whether the group was deleted.",
+  "group-member-gone": "That person is no longer a member of this organization.",
+  "group-members-changed": "That group or member changed meanwhile. Check below and try again.",
+  "not-in-group": "That member is no longer in this group.",
+  "may-not-add-group-member": "You cannot add that member to this group.",
+  "add-group-member-failed": "Something went wrong. Check below whether the member was added.",
+  "may-not-remove-group-member": "You cannot remove that member from this group.",
+  "remove-group-member-failed": "Something went wrong. Check below whether the member was removed.",
 } as const;
 
 export type GroupsNotice = keyof typeof GROUPS_NOTICES;
@@ -99,6 +110,22 @@ function refusalOf<R extends string>(error: unknown, refusals: Record<R, GroupsE
 
 /** Whether an error is the given code's. */
 const isCode = (error: unknown, code: string) => error instanceof AppError && error.code === code;
+
+const NOT_FOUND_ANSWERS: Record<GroupNotFoundReason, GroupsError> = {
+  GROUP: "group-gone",
+  MEMBER: "group-member-gone",
+  STALE: "group-members-changed",
+  NOT_IN_GROUP: "not-in-group",
+};
+
+/** What a membership change's `NOT_FOUND` says, by its reason, or `null` for any other error. */
+function notFoundOf(error: unknown): GroupsError | null {
+  if (!(error instanceof AppError) || error.code !== "NOT_FOUND") return null;
+  const reason = error.details?.["reason"];
+  return typeof reason === "string" && Object.hasOwn(NOT_FOUND_ANSWERS, reason)
+    ? NOT_FOUND_ANSWERS[reason as GroupNotFoundReason]
+    : null;
+}
 
 /** The longest group id a groups page's address may name; a group's is 20 characters. */
 export const GROUP_ID_MAX_LENGTH = 64;
@@ -184,5 +211,65 @@ export async function deleteGroup(
     if (isCode(error, "NOT_FOUND")) return { error: "group-gone" };
     log.error("A group could not be deleted", { code: errorCode(error) });
     return { error: "delete-group-failed" };
+  }
+}
+
+/**
+ * Add a member of the organization to a group, as the groups page's form asks
+ * (AT-9c, ADR-0143): `userId`. The group service decides (`group.manage`, the
+ * group, the member, the role-assignment ceiling on the member's role, then
+ * the grant ceiling of what the group gives) and audits it. Adding one already
+ * in the group changes nothing and says the same. An id longer than any
+ * account's is refused before the service is asked, so it never reaches the
+ * audit log; an empty one is asked, so a refusal is still audited. A failure
+ * that is not a refusal is logged by its error code alone.
+ */
+export async function addGroupMember(
+  actorUserId: string,
+  organizationId: string,
+  groupId: string,
+  form: { readonly userId: string },
+  log: Pick<Logger, "error"> = getGroupsLogger(),
+): Promise<GroupsOutcome> {
+  if (!isGroupId(groupId)) return { error: "group-gone" };
+  if (form.userId.length > MEMBER_ID_MAX_LENGTH) return { error: "group-member-gone" };
+  try {
+    await getGroupService().addMember(actorUserId, organizationId, groupId, form.userId);
+    return { notice: "group-member-added" };
+  } catch (error) {
+    if (isCode(error, "FORBIDDEN")) return { error: "may-not-add-group-member" };
+    const missing = notFoundOf(error);
+    if (missing !== null) return { error: missing };
+    log.error("A member could not be added to a group", { code: errorCode(error) });
+    return { error: "add-group-member-failed" };
+  }
+}
+
+/**
+ * Remove a member from a group, as the groups page's form asks (AT-9c,
+ * ADR-0143). The group service decides (`group.manage`, the group, the member,
+ * the role-assignment ceiling on the member's role, then the grant ceiling of
+ * what the group gave) and audits it; the member stays in the organization.
+ * Ids are bounded as an addition's are. A failure that is not a refusal is
+ * logged by its error code alone.
+ */
+export async function removeGroupMember(
+  actorUserId: string,
+  organizationId: string,
+  groupId: string,
+  memberUserId: string,
+  log: Pick<Logger, "error"> = getGroupsLogger(),
+): Promise<GroupsOutcome> {
+  if (!isGroupId(groupId)) return { error: "group-gone" };
+  if (memberUserId.length > MEMBER_ID_MAX_LENGTH) return { error: "group-member-gone" };
+  try {
+    await getGroupService().removeMember(actorUserId, organizationId, groupId, memberUserId);
+    return { notice: "group-member-removed" };
+  } catch (error) {
+    if (isCode(error, "FORBIDDEN")) return { error: "may-not-remove-group-member" };
+    const missing = notFoundOf(error);
+    if (missing !== null) return { error: missing };
+    log.error("A member could not be removed from a group", { code: errorCode(error) });
+    return { error: "remove-group-member-failed" };
   }
 }

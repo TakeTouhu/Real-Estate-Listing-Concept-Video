@@ -11,7 +11,8 @@ import { GroupsOverviewService } from "./groups-overview";
  * The groups page's reading (AT-9a, ADR-0141): `group.view` to see it; the
  * groups by name, each with its members by role and then the longest-standing
  * first; what the viewer may do (create and rename with `group.manage`, delete
- * only as an `OWNER` or `ADMIN` holding it); and nothing written.
+ * only as an `OWNER` or `ADMIN` holding it, add and remove a member whose role
+ * it may assign, AT-9c, ADR-0143); and nothing written.
  */
 
 const iso = (value: string) => new Date(value);
@@ -70,21 +71,29 @@ describe("the groups overview", () => {
     const grants = new PermissionGrantService(deps);
     await grants.grant(ids.OWNER, orgId, ids.CREATOR, "group.view");
     const [listed] = (await service.overview(ids.CREATOR, orgId)).groups;
-    expect(listed?.members).toEqual([{ userId: ids.ADMIN, name: "admin san", email: null, role: "ADMIN" }]);
+    expect(listed?.members).toEqual([
+      { userId: ids.ADMIN, name: "admin san", email: null, role: "ADMIN", mayRemove: false },
+    ]);
     await grants.grant(ids.OWNER, orgId, ids.CREATOR, "member.view");
     const [again] = (await service.overview(ids.CREATOR, orgId)).groups;
     expect(again?.members[0]?.email).toBe("admin@example.com");
   });
 
-  it("reads the grouped members in one listing, and only their accounts", async () => {
+  it("reads the grouped members in one listing, and only the accounts it shows, each once", async () => {
     await group("East", ["ADMIN"]);
     await group("West", ["ADMIN", "CREATOR"]);
     await group("North");
     const perGroup = vi.spyOn(deps.repos.groups, "listMembers");
     const accounts = vi.spyOn(deps.repos.users, "findById");
-    await service.overview(ids.OWNER, orgId);
+    const read = () => accounts.mock.calls.map(([userId]) => userId).sort();
+    // A viewer who may add no one reads the grouped members' accounts alone.
+    await service.overview(ids.MANAGER, orgId);
     expect(perGroup).not.toHaveBeenCalled();
-    expect(accounts.mock.calls.map(([userId]) => userId).sort()).toEqual([ids.ADMIN, ids.CREATOR].sort());
+    expect(read()).toEqual([ids.ADMIN, ids.CREATOR].sort());
+    // An ADMIN also reads those it may add to a group.
+    accounts.mockClear();
+    await service.overview(ids.ADMIN, orgId);
+    expect(read()).toEqual([ids.ADMIN, ids.CREATOR, ids.MANAGER, ids.VIEWER].sort());
   });
 
   it("lists the groups by name, each member by role and then the longest-standing first", async () => {
@@ -98,8 +107,47 @@ describe("the groups overview", () => {
     expect(listed[0]).toEqual({
       id: expect.any(String),
       name: "East",
-      members: [{ userId: ids.ADMIN, name: "admin san", email: "admin@example.com", role: "ADMIN" }],
+      members: [{ userId: ids.ADMIN, name: "admin san", email: "admin@example.com", role: "ADMIN", mayRemove: false }],
+      addable: [],
     });
+  });
+
+  it("offers an OWNER every member not in a group, itself included, and lets it remove anyone", async () => {
+    await group("West", ["ADMIN", "CREATOR"]);
+    const [listed] = (await service.overview(ids.OWNER, orgId)).groups;
+    expect(listed?.members.map(({ role, mayRemove }) => [role, mayRemove])).toEqual([
+      ["ADMIN", true],
+      ["CREATOR", true],
+    ]);
+    expect(listed?.addable.map(({ role }) => role)).toEqual(["OWNER", "MANAGER", "VIEWER", "BILLING"]);
+    const owner = { userId: ids.OWNER, name: "owner san", email: "owner@example.com", role: "OWNER" };
+    expect(listed?.addable[0]).toEqual(owner);
+  });
+
+  it("offers an ADMIN only MANAGER, CREATOR and VIEWER members, never itself", async () => {
+    await group("West", ["OWNER", "ADMIN", "CREATOR"]);
+    const [listed] = (await service.overview(ids.ADMIN, orgId)).groups;
+    expect(listed?.members.map(({ role, mayRemove }) => [role, mayRemove])).toEqual([
+      ["OWNER", false],
+      ["ADMIN", false],
+      ["CREATOR", true],
+    ]);
+    expect(listed?.addable.map(({ role }) => role)).toEqual(["MANAGER", "VIEWER"]);
+  });
+
+  it("never offers an ADMIN a member it may not change because they are in another group", async () => {
+    await group("West", ["OWNER", "ADMIN", "CREATOR"]);
+    await group("East");
+    const [east] = (await service.overview(ids.ADMIN, orgId)).groups;
+    expect(east?.addable.map(({ role }) => role)).toEqual(["MANAGER", "CREATOR", "VIEWER"]);
+  });
+
+  it("offers a MANAGER granted group.manage no member to add or remove, as the ceiling gives it none", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "group.manage");
+    await group("West", ["CREATOR"]);
+    const [listed] = (await service.overview(ids.MANAGER, orgId)).groups;
+    expect(listed?.members.map(({ mayRemove }) => mayRemove)).toEqual([false]);
+    expect(listed?.addable).toEqual([]);
   });
 
   it("orders members of one role by when they joined, not by their ids", async () => {
