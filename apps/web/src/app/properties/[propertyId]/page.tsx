@@ -3,6 +3,8 @@ import { DEFAULT_UPLOAD_LIMITS, type MediaAsset } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
+import { ASSIGNMENT_ERRORS, ASSIGNMENT_NOTICES, assignmentError, assignmentNotice } from "@/lib/property-assignment";
+import { AssignmentSection } from "./assignment-section";
 import { UploadPanel } from "./upload-panel";
 
 export const dynamic = "force-dynamic";
@@ -13,14 +15,27 @@ function statusClass(status: MediaAsset["status"]): string {
   return "muted";
 }
 
+type Query = { notice?: string | string[]; error?: string | string[] };
+
+/**
+ * A Property's photos and links to its reviews and videos. An `OWNER` or
+ * `ADMIN` also sees its responsible user and group and changes them (AT-10a,
+ * ADR-0144); the route answers with a code this page turns into a fixed
+ * sentence.
+ */
 export default async function PropertyDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ propertyId: string }>;
+  searchParams?: Promise<Query>;
 }) {
   const current = await getCurrentUser();
   if (!current) redirect("/login");
   const { propertyId } = await params;
+  const query = (await searchParams) ?? {};
+  const notice = assignmentNotice(query.notice);
+  const failure = assignmentError(query.error);
 
   // Resolve the property within one of the user's organizations.
   const organizations = await getIdentityServices().organizations.listForUser(current.user.id);
@@ -36,6 +51,7 @@ export default async function PropertyDetailPage({
     const assets = await services.assets.list(current.user.id, organization.id, propertyId);
     const used = assets.filter((a) => services.assets.countsTowardLimit(a)).length;
     const remaining = Math.max(DEFAULT_UPLOAD_LIMITS.maxAssetsPerProperty - used, 0);
+    const choices = await services.properties.assignmentChoices(current.user.id, organization.id, propertyId);
 
     return (
       <section>
@@ -47,6 +63,16 @@ export default async function PropertyDetailPage({
           {organization.name} · {property.propertyType}
           {property.addressMasked ? ` · ${property.addressMasked}` : ""}
         </p>
+        {notice ? (
+          <p className="status-ok" role="status">
+            {ASSIGNMENT_NOTICES[notice]}
+          </p>
+        ) : null}
+        {failure ? (
+          <p className="status-bad" role="alert">
+            {ASSIGNMENT_ERRORS[failure]}
+          </p>
+        ) : null}
         {property.description ? <p>{property.description}</p> : null}
         <p>
           <a href={`/properties/${property.id}/review`}>Review photo analyses →</a>
@@ -54,6 +80,10 @@ export default async function PropertyDetailPage({
         <p>
           <a href={`/properties/${property.id}/video-projects`}>Videos →</a>
         </p>
+
+        {choices ? (
+          <AssignmentSection organizationId={organization.id} propertyId={property.id} choices={choices} />
+        ) : null}
 
         <UploadPanel
           organizationId={organization.id}

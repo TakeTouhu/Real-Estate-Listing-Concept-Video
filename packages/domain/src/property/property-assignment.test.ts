@@ -359,14 +359,15 @@ describe("reassignment", () => {
   });
 
   it("refuses a BILLING member, a non-member, and another organization's group as the new choice", async () => {
-    for (const [input, message] of [
-      [{ responsibleUserId: fx.ids.BILLING }, INELIGIBLE],
-      [{ responsibleUserId: fx.outsiderId }, INELIGIBLE],
-      [{ groupId: fx.elsewhere }, NOT_A_GROUP],
+    for (const [input, message, reason] of [
+      [{ responsibleUserId: fx.ids.BILLING }, INELIGIBLE, "RESPONSIBLE_USER"],
+      [{ responsibleUserId: fx.outsiderId }, INELIGIBLE, "RESPONSIBLE_USER"],
+      [{ groupId: fx.elsewhere }, NOT_A_GROUP, "GROUP"],
     ] as const) {
       await expect(fx.service.assign(fx.ownerId, fx.orgId, property.id, input)).rejects.toMatchObject({
         code: "VALIDATION_FAILED",
         message,
+        details: { reason },
       });
     }
     expect(assignment(await fx.repo.findById(fx.orgId, property.id))).toEqual({
@@ -392,12 +393,44 @@ describe("reassignment", () => {
       fx.service.assign(fx.ids.ADMIN, fx.orgId, property.id, { responsibleUserId: fx.ids.MANAGER }),
     ]);
     expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected"]);
-    expect(results[1]).toMatchObject({ reason: { code: "VALIDATION_FAILED" } });
+    expect(results[1]).toMatchObject({ reason: { code: "VALIDATION_FAILED", details: { reason: "STALE" } } });
     expect(assignment(await fx.repo.findById(fx.orgId, property.id))).toEqual({
       responsibleUserId: fx.ids.VIEWER,
       groupId: fx.east,
     });
     expect(audits("property.assignment_changed")).toHaveLength(1);
+  });
+
+  it("changes nothing when the assignment is no longer the one shown", async () => {
+    const shown = { responsibleUserId: fx.ids.VIEWER, groupId: fx.east };
+    const choice = { responsibleUserId: fx.ids.VIEWER, groupId: fx.north };
+    await expect(fx.service.assign(fx.ownerId, fx.orgId, property.id, choice, shown)).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      details: { reason: "STALE" },
+    });
+    // Choosing again what it now is, from an older page, is still refused.
+    const current = { responsibleUserId: fx.ids.CREATOR, groupId: fx.east };
+    await expect(
+      fx.service.assign(fx.ownerId, fx.orgId, property.id, current, { ...current, groupId: null }),
+    ).rejects.toMatchObject({ details: { reason: "STALE" } });
+    expect(assignment(await fx.repo.findById(fx.orgId, property.id))).toEqual(current);
+    expect(audits("property.assignment_changed")).toEqual([]);
+  });
+
+  it("changes the assignment it was shown, or says a choice of it changes nothing", async () => {
+    const shown = { responsibleUserId: fx.ids.CREATOR, groupId: fx.east };
+    expect(await fx.service.assign(fx.ownerId, fx.orgId, property.id, shown, shown)).toMatchObject({ changed: false });
+    const result = await fx.service.assign(fx.ownerId, fx.orgId, property.id, { ...shown, groupId: null }, shown);
+    expect(result).toMatchObject({ changed: true });
+    expect(assignment(result.property)).toEqual({ responsibleUserId: fx.ids.CREATOR, groupId: null });
+  });
+
+  it("refuses, and audits, a MANAGER before comparing what it was shown", async () => {
+    const shown = { responsibleUserId: null, groupId: null };
+    await expect(
+      fx.service.assign(fx.ids.MANAGER, fx.orgId, property.id, { groupId: null }, shown),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(audits("property.assignment_refused")).toHaveLength(1);
   });
 
   it("is never undone by editing or deleting the Property", async () => {
@@ -413,6 +446,73 @@ describe("reassignment", () => {
       responsibleUserId: fx.ids.CREATOR,
       groupId: fx.east,
     });
+  });
+});
+
+describe("assignment choices", () => {
+  it.each(["OWNER", "ADMIN"] as const)(
+    "offers an %s every member but a BILLING one, and the groups by name",
+    async (role) => {
+      const property = await create(fx.ownerId, { responsibleUserId: fx.ids.CREATOR, groupId: fx.east });
+      const choices = await fx.service.assignmentChoices(fx.ids[role], fx.orgId, property.id);
+      expect(choices).toMatchObject({ responsibleUserId: fx.ids.CREATOR, groupId: fx.east });
+      expect(choices?.members.map(({ userId }) => userId)).toEqual([
+        fx.ownerId,
+        fx.ids.OWNER,
+        fx.ids.ADMIN,
+        fx.ids.MANAGER,
+        fx.ids.CREATOR,
+        fx.ids.VIEWER,
+      ]);
+      expect(choices?.members[4]).toEqual({
+        userId: fx.ids.CREATOR,
+        name: "CREATOR",
+        email: "member-creator@example.com",
+        role: "CREATOR",
+      });
+      expect(choices?.groups).toEqual([
+        { id: fx.east, name: "East" },
+        { id: fx.north, name: "North" },
+        { id: fx.west, name: "West" },
+      ]);
+    },
+  );
+
+  it("keeps offering a responsible user whose role changed to BILLING", async () => {
+    const property = await create(fx.ownerId, { responsibleUserId: fx.ids.CREATOR });
+    await fx.members.changeRole(fx.ownerId, fx.orgId, fx.ids.CREATOR, "BILLING");
+    const choices = await fx.service.assignmentChoices(fx.ownerId, fx.orgId, property.id);
+    const roles = choices?.members.map(({ role }) => role);
+    expect(roles).toEqual(["OWNER", "OWNER", "ADMIN", "MANAGER", "VIEWER", "BILLING"]);
+    // Anyone else who is BILLING stays out.
+    expect(choices?.members.map(({ userId }) => userId)).not.toContain(fx.ids.BILLING);
+  });
+
+  it.each(["MANAGER", "CREATOR", "VIEWER"] as const)("offers a %s nothing, as it may change neither", async (role) => {
+    const property = await create(fx.ownerId, { responsibleUserId: fx.ids[role], groupId: fx.east });
+    expect(await fx.service.assignmentChoices(fx.ids[role], fx.orgId, property.id)).toBeNull();
+  });
+
+  it("refuses a BILLING member, who cannot view Properties, and finds no Property it does not reach", async () => {
+    const property = await create(fx.ownerId);
+    await expect(fx.service.assignmentChoices(fx.ids.BILLING, fx.orgId, property.id)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(fx.service.assignmentChoices(fx.ownerId, fx.otherOrgId, property.id)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await fx.service.remove(fx.ownerId, fx.orgId, property.id);
+    await expect(fx.service.assignmentChoices(fx.ownerId, fx.orgId, property.id)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+
+  it("writes nothing", async () => {
+    const property = await create(fx.ownerId);
+    const before = fx.deps.repos.auditLogs.all().length;
+    await fx.service.assignmentChoices(fx.ownerId, fx.orgId, property.id);
+    await fx.service.assignmentChoices(fx.ids.MANAGER, fx.orgId, property.id);
+    expect(fx.deps.repos.auditLogs.all()).toHaveLength(before);
   });
 });
 
