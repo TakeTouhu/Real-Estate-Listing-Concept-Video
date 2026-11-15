@@ -279,6 +279,8 @@ describe("changing a Property's assignment", () => {
 
   it("finds no missing, deleted or other organization's Property", async () => {
     expect(landing(await assigning({}, "prp_missing"), "prp_missing")).toBe("error=property-gone");
+    // An id that is no Property's still lands on its own page, its every character encoded.
+    expect(landing(await assigning({}, "prp a/b?c#d"), "prp a/b?c#d")).toBe("error=property-gone");
     const { organization } = await new OrganizationService(deps).createOrganization(ownerId, { name: "Other" });
     const elsewhere = (await newProperty(organization.id)).id;
     expect(landing(await assigning({}, elsewhere), elsewhere)).toBe("error=property-gone");

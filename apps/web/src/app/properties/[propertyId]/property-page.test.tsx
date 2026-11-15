@@ -14,7 +14,7 @@ import type { Property, PropertyAssignmentChoices } from "@app/domain";
 const ORG = "org_kanda";
 const PROPERTY = "prp_harbor";
 
-const choices = vi.hoisted(() => ({ value: null as PropertyAssignmentChoices | null }));
+const choices = vi.hoisted(() => ({ value: null as PropertyAssignmentChoices | null, asked: [] as string[][] }));
 
 vi.mock("next/navigation", () => ({
   redirect: (path: string) => {
@@ -32,7 +32,10 @@ vi.mock("@/lib/property", () => ({
     properties: {
       get: (_actor: string, _org: string, propertyId: string) =>
         Promise.resolve({ id: propertyId, name: "Harbor View", propertyType: "APARTMENT" } as Property),
-      assignmentChoices: () => Promise.resolve(choices.value),
+      assignmentChoices: (...asked: string[]) => {
+        choices.asked.push(asked);
+        return Promise.resolve(choices.value);
+      },
     },
     assets: { list: () => Promise.resolve([]), countsTowardLimit: () => false },
   }),
@@ -56,6 +59,7 @@ const ASSIGNED: PropertyAssignmentChoices = {
 
 beforeEach(() => {
   choices.value = ASSIGNED;
+  choices.asked = [];
 });
 
 afterEach(() => {
@@ -89,6 +93,7 @@ function assignmentForm(): string | null {
 describe("the Property page's assignment", () => {
   it("shows an owner or admin the assignment, and a closed form that carries it as shown", async () => {
     await show();
+    expect(choices.asked).toEqual([["usr_viewer", ORG, PROPERTY]]);
     expect(screen.getByRole("heading", { name: "Assignment" })).toBeTruthy();
     expect(screen.getByText("Responsible user: Sora Creator · sora@example.com · Creator")).toBeTruthy();
     expect(screen.getByText("Group: East office")).toBeTruthy();

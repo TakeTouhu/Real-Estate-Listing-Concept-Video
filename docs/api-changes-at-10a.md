@@ -11,10 +11,10 @@ For an `OWNER` or `ADMIN`, the page also shows:
 - the Property's responsible user and group, each "None" when unset;
 - a closed **Change assignment…** form with a **Responsible user** list (any
   member but a `BILLING` one, and the current one) and a **Group** list,
-  each starting at the current choice;
-- the sentence of each code below.
+  each starting at the current choice.
 
-Anyone else sees neither the assignment nor the form.
+Anyone else sees neither the assignment nor the form. Anyone who opens the
+page sees the sentence of a code below that its address carries.
 
 ### Added: `POST /api/organizations/{organizationId}/properties/{propertyId}/assignment`
 
@@ -28,6 +28,9 @@ A form post from the Property page. Fields: `responsibleUserId`, `groupId`,
 | `303` to the Property page, `notice=assignment-saved` | changed (`property.assignment_changed`) |
 | `303` to the Property page, `notice=assignment-unchanged` | the choice is the assignment shown; nothing written |
 | `303` to the Property page, `error=<code>` | `property-gone` (`NOT_FOUND`, or a Property id over 64 characters), `responsible-user-gone` (`RESPONSIBLE_USER`, or a member id over 64 characters), `assignment-group-gone` (`GROUP`, or a group id over 64 characters), `assignment-changed` (`STALE`), `may-not-assign` (`FORBIDDEN`, audited for a member), `assign-failed` |
+
+A Property gone meanwhile is answered by the Property page as before: it
+sends the visitor home with "Property not found".
 
 ## Internal API
 
@@ -44,7 +47,7 @@ A form post from the Property page. Fields: `responsibleUserId`, `groupId`,
 
 | Export | Shape |
 | --- | --- |
-| `assignProperty(actor, organizationId, propertyId, form)` | the route's work, a notice or an error code |
+| `assignProperty(actor, organizationId, propertyId, form, log?)` | the route's work, a notice or an error code |
 | `ASSIGNMENT_NOTICES`, `ASSIGNMENT_ERRORS` | each code's sentence |
 | `ASSIGNMENT_ID_MAX_LENGTH` | 64: the longest id read from the form or the address |
 
