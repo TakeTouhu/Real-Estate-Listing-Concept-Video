@@ -85,7 +85,9 @@ describe("a member's permissions", () => {
   });
 
   it("adds up the role, an individual grant and each group, naming the groups by name", async () => {
-    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.CREATOR, "member.view");
+    const grants = new PermissionGrantService(deps);
+    await grants.grant(ids.OWNER, orgId, ids.CREATOR, "member.view");
+    await grants.grant(ids.OWNER, orgId, ids.CREATOR, "billing.view");
     await group("West", ["member.view"], ids.CREATOR);
     await group("East", ["member.view", "group.view"], ids.CREATOR);
     await group("North", ["member.view", "audit.view"], ids.VIEWER);
@@ -98,6 +100,12 @@ describe("a member's permissions", () => {
       groupNames: ["East", "West"],
     });
     expect(await row("OWNER", "CREATOR", "group.view")).toMatchObject({ effective: true, groupNames: ["East"] });
+    expect(await row("OWNER", "CREATOR", "billing.view")).toEqual({
+      permission: "billing.view",
+      effective: true,
+      ...none,
+      granted: true,
+    });
     expect(await row("OWNER", "CREATOR", "property.view")).toEqual({
       permission: "property.view",
       effective: true,
@@ -131,6 +139,23 @@ describe("a member's permissions", () => {
     });
     expect(await row("BILLING", "MANAGER", "video.view")).toMatchObject({ groupCount: 0, groupNames: null });
     expect(await row("MANAGER", "MANAGER", "audit.view")).toMatchObject({ groupNames: ["East", "West"] });
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.BILLING, "group.view");
+    expect(await row("BILLING", "MANAGER", "audit.view")).toMatchObject({ groupNames: ["East", "West"] });
+  });
+
+  it("counts nothing a group of another organization gives the same person", async () => {
+    const other = (await new OrganizationService(deps).createOrganization(ids.outsider, { name: "Other" }))
+      .organization.id;
+    await deps.repos.memberships.create({ organizationId: other, userId: ids.CREATOR, role: "CREATOR" });
+    const elsewhere = new GroupService(deps);
+    const { id } = await elsewhere.create(ids.outsider, other, "Elsewhere");
+    await elsewhere.grantPermission(ids.outsider, other, id, "member.view");
+    await elsewhere.addMember(ids.outsider, other, id, ids.CREATOR);
+    const here = await row("OWNER", "CREATOR", "member.view");
+    expect(here).toEqual({ permission: "member.view", effective: false, ...none });
+    expect((await service.view(ids.outsider, other, ids.CREATOR)).permissions).toContainEqual(
+      expect.objectContaining({ permission: "member.view", effective: true, groupNames: ["Elsewhere"] }),
+    );
   });
 
   it("writes nothing", async () => {

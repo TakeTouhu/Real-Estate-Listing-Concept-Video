@@ -150,9 +150,10 @@ describe("a member's permissions page", () => {
     ]);
     const shown = lines();
     expect(shown.get("permission.manage")).toBe(
-      "Change members' roles and permissions (permission.manage): Yes, from their role.",
+      "Change members' roles and permissions, and groups' permissions (permission.manage): Yes, from their role.",
     );
-    expect(shown.get("billing.manage")).toBe("Buy Units and manage billing (billing.manage): No.");
+    expect(shown.get("member.manage")).toBe("Invite and remove members (member.manage): Yes, from their role.");
+    expect(shown.get("billing.manage")).toBe("Buy Units (billing.manage): No.");
     expect(shown.get("audit.view")).toBe(
       "See the audit log (audit.view): Yes, from their role. Nothing in VTaVision uses it yet.",
     );
@@ -165,6 +166,20 @@ describe("a member's permissions page", () => {
     await renderAs("OWNER", ids.OWNER);
     const shown = lines();
     expect([...shown.keys()]).toEqual(GRANTABLE_PERMISSIONS);
+    expect(screen.getAllByRole("listitem")).toHaveLength(GRANTABLE_PERMISSIONS.length);
+    const areas = [...document.querySelectorAll(".card")].slice(1).map((card) => [
+      card.querySelector("h2")?.textContent,
+      [...card.querySelectorAll("li")].map((item) => /\(([a-z.]+)\)/.exec(item.textContent ?? "")?.[1]),
+    ]);
+    expect(areas.map(([title, keys]) => `${title}: ${(keys as string[]).join(" ")}`)).toEqual([
+      "Organization and team: organization.view organization.manage member.view member.manage group.view " +
+        "group.manage permission.manage",
+      "Properties and photos: property.view property.create property.edit property.delete asset.upload " +
+        "asset.delete analysis.review",
+      "Videos: video.view video.generate video.regenerate video.download disclosure.change disclosure.none",
+      "Units and billing: unit.consume unit.view billing.view billing.manage",
+      "Audit log: audit.view audit.export",
+    ]);
     expect([...shown].filter(([, text]) => text.endsWith("Nothing in VTaVision uses it yet.")).map(([key]) => key))
       .toEqual([
         "organization.view",
@@ -195,18 +210,48 @@ describe("a member's permissions page", () => {
     const shown = lines();
     expect(shown.get("member.view")).toBe(
       "See the members and their permissions (member.view): " +
-        "Yes, from an individual grant and the groups East and West.",
+        'Yes, from an individual grant and the groups "East" and "West".',
     );
     expect(shown.get("property.view")).toBe(
-      "See Properties (property.view): Yes, from their role, an individual grant and the group East.",
+      "See Properties, their photos and the photos' analysis (property.view): " +
+        'Yes, from their role, an individual grant and the group "East".',
     );
     cleanup();
     await answering("OWNER", ids.VIEWER, { "property.create": { groupCount: 1, groupNames: ["East"] } });
     render(await page(ids.VIEWER));
     expect(lines().get("property.create")).toBe(
       "Add Properties (property.create): " +
-        "No, although it comes from the group East: it is never in effect for a Viewer.",
+        'No, although it comes from the group "East": it is never in effect for a Viewer member.',
     );
+    cleanup();
+    await answering("OWNER", ids.BILLING, { "property.create": { groupCount: 2, groupNames: ["East", "West"] } });
+    render(await page(ids.BILLING));
+    expect(lines().get("property.create")).toBe(
+      "Add Properties (property.create): " +
+        'No, although it comes from the groups "East" and "West": it is never in effect for a Billing member.',
+    );
+  });
+
+  it("says only an Owner's or Admin's role lets team permissions reach another member", async () => {
+    const held = { effective: true, granted: true };
+    const team = { "member.manage": held, "group.manage": held, "permission.manage": held };
+    await answering("OWNER", ids.MANAGER, team);
+    await renderAs("OWNER", ids.MANAGER);
+    const shown = lines();
+    expect(shown.get("member.manage")).toBe(
+      "Invite and remove members (member.manage): Yes, from an individual grant. " +
+        "Their role lets them invite or remove no one.",
+    );
+    expect(shown.get("group.manage")).toMatch(
+      /: Yes, from an individual grant\. Their role lets them add no one to a group, nor remove anyone\.$/,
+    );
+    expect(shown.get("permission.manage")).toMatch(
+      /: Yes, from an individual grant\. Their role lets them change no one's role or permissions\.$/,
+    );
+    expect(shown.get("property.edit")).toMatch(/: Yes, from their role\.$/);
+    cleanup();
+    render(await page(ids.OWNER));
+    expect(lines().get("permission.manage")).toMatch(/: Yes, from their role\.$/);
   });
 
   it("counts a member's groups without naming them for a viewer without group.view", async () => {

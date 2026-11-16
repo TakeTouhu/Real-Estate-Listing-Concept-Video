@@ -69,8 +69,9 @@ export default async function MemberPermissionsPage({
         </p>
         <p className="muted">
           What they can do comes from their role, from permissions given to them individually, and from the
-          permissions of the groups they belong to. These add up: nothing takes a permission away. Their permissions
-          over Properties, photos and videos apply to {REACH[view.scope]}, which their role decides.
+          permissions of the groups they belong to. These add up: nothing takes a permission away, though a Viewer
+          or Billing member can never add Properties, however it is given. Their permissions over Properties, photos
+          and videos apply to {REACH[view.scope]}, which their role decides.
         </p>
       </div>
       {PERMISSION_AREAS.map((area) => (

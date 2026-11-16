@@ -12,12 +12,12 @@ export const PERMISSION_NAMES: Record<Permission, string> = {
   "member.manage": "Invite and remove members",
   "group.view": "See the groups and who is in them",
   "group.manage": "Create and rename groups, and change who is in them",
-  "permission.manage": "Change members' roles and permissions",
-  "property.view": "See Properties",
+  "permission.manage": "Change members' roles and permissions, and groups' permissions",
+  "property.view": "See Properties, their photos and the photos' analysis",
   "property.create": "Add Properties",
   "property.edit": "Edit Properties",
   "property.delete": "Delete Properties",
-  "asset.upload": "Upload photos",
+  "asset.upload": "Upload photos and have them analyzed",
   "asset.delete": "Delete photos",
   "analysis.review": "Review the analysis of photos",
   "video.view": "See video projects and watch videos",
@@ -28,8 +28,8 @@ export const PERMISSION_NAMES: Record<Permission, string> = {
   "disclosure.none": "Make videos without the AI disclosure",
   "unit.consume": "Spend Units on videos",
   "unit.view": "See Units",
-  "billing.view": "See billing",
-  "billing.manage": "Buy Units and manage billing",
+  "billing.view": "See the plan's billing details on the Units page",
+  "billing.manage": "Buy Units",
   "audit.view": "See the audit log",
   "audit.export": "Export the audit log",
   "video.share": "Share videos",
@@ -93,6 +93,17 @@ export const NOT_YET_USED: readonly Permission[] = [
   "audit.export",
 ];
 
+/**
+ * What a member may still not do with a permission, because only an `OWNER`
+ * or `ADMIN` may act on another member at all: the role-assignment ceiling
+ * gives every other role no one (ADR-0052 Decision 10).
+ */
+const BEYOND_THE_ROLE: Partial<Record<Permission, string>> = {
+  "member.manage": "Their role lets them invite or remove no one.",
+  "group.manage": "Their role lets them add no one to a group, nor remove anyone.",
+  "permission.manage": "Their role lets them change no one's role or permissions.",
+};
+
 /** `items` as a sentence lists them: "a", "a and b", "a, b and c". */
 function listed(items: readonly string[]): string {
   return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
@@ -104,7 +115,8 @@ function sources({ fromRole, granted, groupCount, groupNames }: MemberPermission
   if (fromRole) from.push("their role");
   if (granted) from.push("an individual grant");
   if (groupNames !== null && groupNames.length > 0) {
-    from.push(`the group${groupNames.length > 1 ? "s" : ""} ${listed(groupNames)}`);
+    // Quoted: a group's name is its organization's own text, and may itself read "A and B".
+    from.push(`the group${groupNames.length > 1 ? "s" : ""} ${listed(groupNames.map((name) => `"${name}"`))}`);
   } else if (groupCount > 0) {
     from.push(groupCount === 1 ? "one of their groups" : `${groupCount} of their groups`);
   }
@@ -114,11 +126,16 @@ function sources({ fromRole, granted, groupCount, groupNames }: MemberPermission
 /**
  * Whether a member holding `role` may do what `permission` allows, and why,
  * as a sentence. Only `property.create`, for a `VIEWER` or `BILLING` member,
- * can be given and still not be in effect.
+ * can be given and still not be in effect. Holding `member.manage`,
+ * `group.manage` or `permission.manage` is said not to reach other members
+ * for any role but `OWNER` and `ADMIN`.
  */
 export function permissionAnswer(permission: MemberPermission, role: Role): string {
   const from = sources(permission);
   if (from === null) return "No.";
-  if (permission.effective) return `Yes, from ${from}.`;
-  return `No, although it comes from ${from}: it is never in effect for a ${ROLE_NAMES[role]}.`;
+  if (!permission.effective) {
+    return `No, although it comes from ${from}: it is never in effect for a ${ROLE_NAMES[role]} member.`;
+  }
+  const beyond = role === "OWNER" || role === "ADMIN" ? undefined : BEYOND_THE_ROLE[permission.permission];
+  return `Yes, from ${from}.${beyond === undefined ? "" : ` ${beyond}`}`;
 }

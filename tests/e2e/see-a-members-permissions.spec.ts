@@ -18,7 +18,7 @@ test("an owner opens its own permissions from the members page", async ({ page }
   await expect(page.getByRole("heading", { name: /\(you\)$/ })).toBeVisible();
   await expect(page.getByText(/apply to every Property of the organization/)).toBeVisible();
   await expect(page.getByRole("listitem").filter({ hasText: "(permission.manage)" })).toHaveText(
-    "Change members' roles and permissions (permission.manage): Yes, from their role.",
+    "Change members' roles and permissions, and groups' permissions (permission.manage): Yes, from their role.",
   );
   await expect(page.getByRole("listitem").filter({ hasText: "(disclosure.none)" })).toHaveText(
     "Make videos without the AI disclosure (disclosure.none): No. Nothing in VTaVision uses it yet.",
