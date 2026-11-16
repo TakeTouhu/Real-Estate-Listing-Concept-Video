@@ -72,16 +72,21 @@ not reaching a deadline that a client keeps for its own question: nothing
 is scheduled by one, and the web app's own database client keeps two by
 default.
 
-The reading is this decision's own, and no authorization under the rule
-had been given for it when this was accepted. It was put to the product
-owner on 2026-11-16 as a question, whether the rule reaches such limits,
-and `docs/decisions/TODO.md` holds the question until it is answered. If
-the rule is to reach them, the four settings come out again and readiness
-has no limit of its own, as ADR-0152 left it; the deadline the media
-process runner gives Node.js for a process, and the two defaults of the web
-app's own client, are limits of the same kind and wait for the same answer.
-The sources the guard reads still hold one timer, the transport's deadline
-(Decision 3), and this change adds none.
+The reading was this decision's own when it was written, with no
+authorization under the rule given for it. It was put to the product owner
+on 2026-11-16, as the question whether a time limit that ends one
+connection or one query is outside the rule, and the product owner
+answered the same day that it is. The question named the limits of the
+same kind the repository already had, the deadline the media process
+runner gives Node.js for a process and the two defaults of the web app's
+own client, and those the storage, mail and scanner clients of later
+milestones will need: such a limit is set without asking again.
+
+This decision takes the answer no further than a limit a client keeps for
+its own question. A timer written in the repository's own code is still
+refused by the guard by its name, and a deadline written there would need
+a decision of its own. The sources the guard reads still hold one timer,
+the transport's deadline (Decision 3), and this change adds none.
 
 ### Why a client of its own, and these four settings
 
@@ -117,8 +122,8 @@ too, twice, with the protocol in capitals, with a space before the address,
 with `pool_timeout=10s` and with `connection_limit=abc`: readiness read
 `200` with each, while a sign-in for an account that does not exist, which
 asks the web app's own client, was answered `Sign in failed`, the route's
-words for an error it does not know, and not `Invalid email or password`
-as with the address as it should be.
+words for an error it does not know, with nothing logged, and not `Invalid
+email or password` as with the address as it should be.
 
 ### What was measured
 
@@ -294,5 +299,7 @@ It calls a change to a reviewer's attention and proves nothing more.
   opened: how RD-3 limits the Google Cloud Storage adapter's `exists`,
   whether the web app's own database client is to be limited, what the
   readiness limit is to be once what watches readiness is known, where an
-  address the web app's own client cannot read is refused, and whether the
-  reading of the rule on timers is confirmed.
+  address the web app's own client cannot read is refused, and whether a
+  request that fails for a reason the app does not know is logged. The
+  question on the reading of the rule on timers is recorded there with its
+  answer.

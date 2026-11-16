@@ -1568,15 +1568,27 @@ blocks activation. The production email service is tracked below, under
       readiness asked that client. The environment check passes both, and
       the start check asks only whether `DATABASE_URL` is set. RD-2d is to
       decide where it is refused.
-- [ ] **Have the reading of the rule on timers confirmed.** ADR-0153
+- [ ] **Decide whether a request that fails for a reason the app does not
+      know is logged.** Measured in RD-2c with an address the web app's own
+      database client cannot read: a sign-in was answered `Sign in failed`
+      and the web app logged nothing for it. The sign-in route answers any
+      error that is not the app's own so, and logs none
+      (`apps/web/src/app/api/auth/login/route.ts`); other routes were not
+      examined. Readiness read `ready` meanwhile (the item above), so
+      nothing told an operator why no one could sign in. No milestone of
+      part 1 of the production readiness plan names it.
+- [x] **Have the reading of the rule on timers confirmed.** ADR-0153
       Decision 1 reads CLAUDE.md's rule on timers as not reaching a
-      deadline a client keeps for its own question. The reading is the
+      deadline a client keeps for its own question. The reading was the
       decision's own: no authorization under the rule had been given when
-      it was accepted. Put to the product owner on 2026-11-16. If the rule
-      is to reach such limits, the four settings come out again; the
-      deadline the media process runner gives Node.js for a process and the
-      two defaults of the web app's own database client are limits of the
-      same kind.
+      it was written. Put to the product owner on 2026-11-16, with the
+      limits of the same kind named: the deadline the media process runner
+      gives Node.js for a process, the two defaults of the web app's own
+      database client, and those the storage, mail and scanner clients
+      will need. *Answered by the product owner on 2026-11-16: a time limit
+      that ends one connection or one query is outside the rule, and is set
+      without asking again. A timer in the repository's own code is still
+      refused by the scheduler guard (ADR-0153 Decisions 1 and 3).*
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
