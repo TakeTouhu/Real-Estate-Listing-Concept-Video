@@ -1040,9 +1040,10 @@ describe("the worker's existing seams, over the folder", () => {
 });
 
 describe("where it is opened", () => {
-  it("is opened in production code only by the web app's wiring and the development pipeline", () => {
-    // The worker's side is opened by the development pipeline's assembly
-    // (GS-9b, ADR-0106). Anything else that opens the folder gets that review too.
+  it("is opened in production code only by the web app's adapters and the development pipeline", () => {
+    // The web app's side is opened where its adapters are chosen (ADR-0150), the
+    // worker's by the development pipeline's assembly (GS-9b, ADR-0106).
+    // Anything else that opens the folder gets that review too.
     const repo = join(__dirname, "..", "..", "..");
     const sources = (dir: string): string[] =>
       readdirSync(dir).flatMap((name) => {
@@ -1056,7 +1057,7 @@ describe("where it is opened", () => {
       .filter((file) => readFileSync(file, "utf8").includes("createSharedFolderStorage("))
       .map((file) => file.slice(repo.length + 1));
     expect(openers.sort()).toEqual([
-      "apps/web/src/lib/property.ts",
+      "apps/web/src/lib/adapters.ts",
       "apps/worker/src/development-pipeline/assembly.ts",
       "packages/storage/src/shared-folder-storage.ts",
     ]);

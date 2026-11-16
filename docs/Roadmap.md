@@ -1034,9 +1034,10 @@ uploads and invitations safely, against local stand-ins for Google Cloud
 
 **RD-1 — the web app's adapters in one place** (ADR-0150, no migration): one
 module chooses and builds the web app's storage, malware scanner, email,
-image analysis and prompt moderation, from the environment alone, and each
-development adapter refuses production by the configured or the ambient
-`NODE_ENV`. The same environment builds the same adapters as before.
+image analysis, prompt moderation and image processor, from the environment
+alone, and each development adapter refuses production by the configured or
+the ambient `NODE_ENV`. The same environment builds the same adapters as
+before.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —

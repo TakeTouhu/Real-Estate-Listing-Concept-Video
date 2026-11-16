@@ -31,16 +31,16 @@ production scheduler activation and live Stripe charges stay BLOCKED
 | Rate limiting | none, beyond locking an MFA sign-in after five wrong codes | |
 | Start-up checks | the environment schema refuses the development folders in production; an adapter refuses only when first built; `MFA_SECRET_KEY` is optional | `@app/shared` `env.ts` |
 | Readiness | a provider self-check and whether the MFA key is set; not the database or storage | `apps/web/src/lib/health.ts` |
-| Same-origin check | on two routes | `apps/web/src/lib/same-origin.ts` |
-| Security headers | none | |
+| Same-origin check | on 20 of the 45 route files with a mutating handler; sign-in, sign-up, password reset, email verification, MFA, organization creation, uploads, analysis review, storyboard and video projects rely on `SameSite=Lax` alone (the entry in `docs/decisions/TODO.md` still names two routes) | `apps/web/src/lib/same-origin.ts` |
+| Security headers | none app-wide; the download route sets its own `Content-Security-Policy` and `nosniff` | `apps/web/src/app/api/storage/download/route.ts` |
 | Container images | none; `infra/` holds a README only | |
 | Image analysis, prompt moderation | the offline adapters (ADR-0009, ADR-0014); not refused in production, and not replaced by this plan | `@app/ai-providers`, `@app/domain` |
 | Content moderation (ADR-0052 Decision 15) | **none**: no check for the prohibited-content categories, of prompts or photos | |
 
 ## The milestones
 
-Eleven pull requests in six stages. Each is split further where it would
-exceed about 500 changed lines.
+Eleven pull requests. Each is split further where it would exceed about 500
+changed lines.
 
 | PR | What | Migration |
 | --- | --- | --- |

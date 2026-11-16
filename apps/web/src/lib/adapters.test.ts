@@ -50,10 +50,10 @@ describe("the web app's adapter choice", () => {
     expect(adapters.email()).toBeNull();
   });
 
-  it("refuses production by the ambient value too, whatever the configured one says", () => {
+  it("refuses production by the ambient value too, read when each adapter is built", () => {
+    const adapters = createWebAdapters(serverEnvSchema.parse({ ...base, EMAIL_OUTBOX_DIR: join(dir, "outbox") }));
     vi.stubEnv("NODE_ENV", "production");
     try {
-      const adapters = createWebAdapters(serverEnvSchema.parse({ ...base, EMAIL_OUTBOX_DIR: join(dir, "outbox") }));
       expect(() => adapters.storage()).toThrow(NonProductionAdapterError);
       expect(() => adapters.malwareScanner()).toThrow(NonProductionAdapterError);
       expect(() => adapters.email()).toThrow(NonProductionAdapterError);
@@ -91,6 +91,7 @@ describe("the web app's adapters", () => {
     const outbox = join(dir, "outbox");
     const adapters = createWebAdapters(serverEnvSchema.parse({ ...base, EMAIL_OUTBOX_DIR: outbox }));
     const mail = outgoingEmail({ kind: "PASSWORD_RESET", to: "user@example.com", subject: "Subject", text: "Text" });
+    expect(adapters.email()).not.toBe(adapters.email());
     await adapters.email()?.send(mail);
     expect((await readDevelopmentEmailOutbox(outbox)).map((sent) => sent.to)).toEqual(["user@example.com"]);
     expect(createWebAdapters(serverEnvSchema.parse(base)).email()).toBeNull();

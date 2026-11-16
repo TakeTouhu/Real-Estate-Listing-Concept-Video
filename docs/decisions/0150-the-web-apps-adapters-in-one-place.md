@@ -7,14 +7,15 @@ readiness, part 1, which the product owner approved on 2026-11-16
 
 Builds on: ADR-0008 (storage and scanner ports, the production guard),
 ADR-0009 (offline analysis), ADR-0014 (offline prompt moderation), ADR-0085
-(the shared folder), ADR-0126 (the email port and outbox), ADR-0129 (the
-mailer).
+(the shared folder), ADR-0126 (the email port and outbox), ADR-0129 and
+ADR-0133 (the mailer).
 
 ## Context
 
-The web app serves five ports through adapters: object storage, malware
-scanning, email, image analysis and prompt moderation. Each service picked
-its own, in four files:
+The web app serves five ports through adapters that differ by environment:
+object storage, malware scanning, email, image analysis and prompt
+moderation. A sixth, the image processor, has one adapter. Each service
+picked its own, in four files:
 
 | Port | Chosen in | Adapters on the base |
 | --- | --- | --- |
@@ -53,9 +54,11 @@ to the services, routes or pages that use the port.
 
 Every development adapter refuses `NODE_ENV=production` when it is built
 (ADR-0008). The module gives each the configured value, or `production`
-when the ambient value says so: neither can vouch for the other, as the
-shared folder and the outbox already hold (ADR-0085, ADR-0126). Before, the
-in-memory storage and the test scanner read only the ambient value.
+when the ambient value says so, read as the adapter is built: neither can
+vouch for the other, as the shared folder and the outbox already hold
+(ADR-0085, ADR-0126). Before, the in-memory storage and the test scanner
+read only the ambient value, and the web app gave the shared folder no
+configured value, so it too read only the ambient one.
 
 ## Decision 3 — What this does not change
 
@@ -65,10 +68,12 @@ in-memory storage and the test scanner read only the ambient value.
   built only for the test provider, outside production (ADR-0111), and
   readiness builds the configured provider for its self-check; both stay as
   they are until paid activation is authorized (ADR-0054 Decision 7).
-- The offline analysis and prompt moderation stay allowed in production, as
-  on the base: no decision keeps them out. Replacing them is tracked in
-  `docs/decisions/TODO.md` (Phase 3C-3, and "Open in RD-1" for ADR-0052
-  Decision 15).
+- The offline analysis and prompt moderation are not refused in production,
+  as on the base: no decision keeps them out. A real vision vendor is a
+  separate decision with its own ADR (ADR-0009, Consequences); replacing the
+  prompt moderator is tracked in `docs/decisions/TODO.md` under Phase 3C-3,
+  and the check of ADR-0052 Decision 15's prohibited-content categories
+  under "Open in RD-1".
 - The worker has no production runtime yet; its adapters are assembled with
   it, in part 2 of the plan.
 

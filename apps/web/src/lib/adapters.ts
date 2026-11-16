@@ -73,20 +73,20 @@ export function createWebAdapters(env: ServerEnv): WebAdapters {
   const secret = env.STORAGE_SIGNING_SECRET;
   const folder = env.EMAIL_OUTBOX_DIR;
   // A development adapter refuses production by the configured value or the
-  // ambient one: neither can vouch for the other (ADR-0085).
-  const nodeEnv = process.env.NODE_ENV === "production" ? "production" : env.NODE_ENV;
+  // ambient one when it is built: neither can vouch for the other (ADR-0085).
+  const nodeEnv = () => (process.env.NODE_ENV === "production" ? "production" : env.NODE_ENV);
   return {
     choice,
     storage: once(() =>
       env.SHARED_STORAGE_DIR !== undefined
-        ? createSharedFolderStorage({ root: env.SHARED_STORAGE_DIR, secret, nodeEnv }).objectStorage
-        : new LocalObjectStorage({ secret, nodeEnv }),
+        ? createSharedFolderStorage({ root: env.SHARED_STORAGE_DIR, secret, nodeEnv: nodeEnv() }).objectStorage
+        : new LocalObjectStorage({ secret, nodeEnv: nodeEnv() }),
     ),
-    malwareScanner: once(() => new PassthroughMalwareScanner({ nodeEnv })),
+    malwareScanner: once(() => new PassthroughMalwareScanner({ nodeEnv: nodeEnv() })),
     images: once(() => new SharpImageProcessor()),
     imageAnalysis: once(() => createImageAnalysisProvider(env)),
     promptModerator: once(() => createOfflinePromptModerator()),
-    email: () => (folder !== undefined ? createDevelopmentEmailOutbox({ folder, nodeEnv }) : null),
+    email: () => (folder !== undefined ? createDevelopmentEmailOutbox({ folder, nodeEnv: nodeEnv() }) : null),
   };
 }
 
