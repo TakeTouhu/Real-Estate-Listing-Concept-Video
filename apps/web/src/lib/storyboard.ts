@@ -13,7 +13,7 @@ import {
   createPrismaStoryboardRepositories,
   getPrismaClient,
 } from "@app/database";
-import { createOfflinePromptModerator } from "@app/domain";
+import { getWebAdapters } from "./adapters";
 import { getIdentityServices } from "./identity";
 
 let service: StoryboardService | undefined;
@@ -21,9 +21,9 @@ let service: StoryboardService | undefined;
 /**
  * Wire the storyboard service. Server-only.
  *
- * The offline moderator is the Phase 3C default (ADR-0014); a real moderation
- * vendor would be another `PromptModerator` wired here, with no change to
- * routes or domain code.
+ * The prompt moderator is the web app's adapter (ADR-0150), today the offline
+ * Phase 3C one (ADR-0014); a real moderation vendor is another choice there,
+ * with no change to routes or domain code.
  */
 export function getStoryboardService(): StoryboardService {
   if (service) return service;
@@ -37,7 +37,7 @@ export function getStoryboardService(): StoryboardService {
     assets: property.assets,
     analyses: createPrismaAnalysisRepository(prisma),
     storyboards: createPrismaStoryboardRepositories(prisma),
-    moderator: createOfflinePromptModerator(),
+    moderator: getWebAdapters().promptModerator(),
     ids: identity.deps.ids,
   });
   return service;

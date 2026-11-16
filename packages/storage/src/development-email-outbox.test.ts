@@ -240,7 +240,7 @@ describe("who uses it", () => {
     });
   }
 
-  it("is opened, and its folder's setting read, only by the web app's mailer (ADR-0129, ADR-0133)", () => {
+  it("is opened only by the web app's adapters, for its mailer alone (ADR-0129, ADR-0133, ADR-0150)", () => {
     const files = sourceFiles(join(REPO_ROOT, "apps"));
     // The scan reaches both applications, including where sign-up is wired.
     const scanned = files.map(({ name }) => name);
@@ -248,6 +248,14 @@ describe("who uses it", () => {
     expect(scanned).toContain("apps/worker/src/bootstrap.ts");
     const names = ["DevelopmentEmailOutbox", "EMAIL_OUTBOX_DIR", "EmailSender", "outgoingEmail("];
     const users = files.filter(({ text }) => names.some((name) => text.includes(name)));
-    expect(users.map(({ name }) => name)).toEqual(["apps/web/src/lib/mailer.ts"]);
+    expect(users.map(({ name }) => name).sort()).toEqual([
+      "apps/web/src/lib/adapters.ts",
+      "apps/web/src/lib/mailer.ts",
+    ]);
+    // The adapters open the outbox, and only the mailer asks them for it.
+    const opening = files.filter(({ text }) => text.includes("DevelopmentEmailOutbox("));
+    expect(opening.map(({ name }) => name)).toEqual(["apps/web/src/lib/adapters.ts"]);
+    const asking = files.filter(({ text }) => text.includes(".email()"));
+    expect(asking.map(({ name }) => name)).toEqual(["apps/web/src/lib/mailer.ts"]);
   });
 });

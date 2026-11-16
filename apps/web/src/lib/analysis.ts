@@ -12,8 +12,7 @@ import {
   createPrismaReviewTransaction,
   getPrismaClient,
 } from "@app/database";
-import { createImageAnalysisProvider } from "@app/ai-providers";
-import { getServerEnv } from "./env";
+import { getWebAdapters } from "./adapters";
 import { getIdentityServices } from "./identity";
 import { getPropertyServices } from "./property";
 
@@ -22,14 +21,14 @@ let service: AnalysisService | undefined;
 /**
  * Wire the analysis service. Server-only.
  *
- * Phase 3 ships offline deterministic analysis only (ADR-0009); a real vision
- * vendor would be another `ImageAnalysisProvider` implementation, wired here,
- * with no change to routes or domain code.
+ * The analysis provider is the web app's adapter (ADR-0150); Phase 3 ships
+ * offline deterministic analysis only (ADR-0009), and a real vision vendor is
+ * another choice there, with no change to routes or domain code.
  */
 export function getAnalysisService(): AnalysisService {
   if (service) return service;
   const identity = getIdentityServices();
-  const env = getServerEnv();
+  const adapters = getWebAdapters();
   const repos = createPrismaPropertyRepositories(getPrismaClient());
 
   service = new AnalysisService({
@@ -38,7 +37,7 @@ export function getAnalysisService(): AnalysisService {
     assets: repos.assets,
     analyses: createPrismaAnalysisRepository(getPrismaClient()),
     storage: getPropertyServices().storage,
-    provider: createImageAnalysisProvider(env),
+    provider: adapters.imageAnalysis(),
     reviewTx: createPrismaReviewTransaction(getPrismaClient()),
     clock: identity.deps.clock,
     ids: identity.deps.ids,

@@ -293,7 +293,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       route (ADR-0111 Decision 1); every other form and JSON mutation route
       relies on `SameSite=Lax` alone. Applying the check
       across them is one cross-cutting milestone, like rate limiting, and needs
-      the deployment's proxy to pass the addressed host.
+      the deployment's proxy to pass the addressed host. *Later milestones
+      added it to more routes: on `main @ 148b6f6`, 20 of the 45 route files
+      with a mutating handler check it
+      (`docs/production-readiness-gap-analysis.md`). RD-9 is planned to close
+      this entry.*
 - [ ] **Decide whether analysis should run in the request or on the queue.**
       Phase 3A-3 runs it synchronously, which is fine for the offline
       deterministic adapter but not for a real vision vendor. Settle this before
@@ -356,7 +360,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       paraphrase passes it, and a test records that. A vendor adapter behind the
       same `PromptModerator` port, normalizing into the existing
       `ModerationCode` vocabulary, is the fix. Until then, prompt integrity rests
-      on structural separation (ADR-0014), not on this matcher.
+      on structural separation (ADR-0014), not on this matcher. *This entry is
+      about the integrity rules only; ADR-0052 Decision 15's prohibited-content
+      categories are a separate check, under "Open in RD-1".*
 - [ ] **Unstated moderation rules.** Profanity, competitor names, and
       advertising-law constraints are not in any product document, so the offline
       moderator enforces none of them. If they are required, they need stating
@@ -1469,6 +1475,35 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       ceiling on everything the group gives. Refusing them every group, as
       a member's permissions page refuses them every member, would be a
       one-line change in the service. It does not block the plan.
+
+## Open in RD-1 — decisions the production readiness plan leaves open
+
+Found by the plan's survey of `main @ 148b6f6`
+(`docs/production-readiness-gap-analysis.md`). None blocks the plan; each
+blocks activation. The production email service is tracked below, under
+*Decision gates — OPEN* (from AT-1).
+
+- [ ] **Choose the Google Cloud project and region.** ADR-0054 Decision 1
+      settles Google Cloud, but no document names a region or a rule on
+      where customer data may be kept. The plan's proposal recommends Tokyo
+      (`asia-northeast1`); the product owner decides.
+- [ ] **Check generation against ADR-0052 Decision 15's prohibited-content
+      categories.** Decision 15 blocks generation for eleven categories, the
+      last "anything explicitly prohibited by the active Provider's
+      applicable-use policy"; refusal happens "before a paid Provider call
+      wherever reasonably possible", and "a moderation-blocked request must
+      not consume a Unit". Nothing checks a prompt or a photo for any of
+      them: the offline prompt moderator checks only the preservation and
+      integrity rules (ADR-0014), and Decision 15 keeps the two checks
+      apart. The vendor is the product owner's to choose; the plan's
+      proposal suggests one behind a port of its own. The offline
+      moderator's entry under Phase 3C-3 is about the integrity rules only.
+- [ ] **Confirm the primary provider route.** The route table names fal's
+      H3 Max as the current default Normal route and WaveSpeed OpenVideo as
+      the economy and fallback route
+      (`packages/domain/src/authorization/routing.ts`), while ADR-0054
+      Decision 2 calls WaveSpeed the primary candidate. Part 2 of the plan
+      builds result polling for the route the product owner confirms.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
