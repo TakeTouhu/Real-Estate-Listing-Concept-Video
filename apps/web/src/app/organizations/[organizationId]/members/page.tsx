@@ -26,7 +26,8 @@ type Query = { notice?: string | string[]; error?: string | string[] };
  * page turns into a fixed sentence. A holder of `permission.manage` gives
  * another member a role its ceiling allows, in place of one it allows (AT-8a,
  * ADR-0139), and a holder of `member.manage` removes another member whose role
- * its ceiling allows (AT-8b, ADR-0140).
+ * its ceiling allows (AT-8b, ADR-0140). Each member links to their
+ * permissions page (AT-11a, ADR-0146).
  */
 export default async function MembersPage({
   params,
@@ -95,7 +96,15 @@ export default async function MembersPage({
             <li key={member.userId}>
               <strong>{member.name}</strong>
               {member.you ? " (you)" : null} · {member.email} · {ROLE_NAMES[member.role]} · joined{" "}
-              {formatJst(member.joinedAt)}
+              {formatJst(member.joinedAt)} ·{" "}
+              <a
+                href={`/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(
+                  member.userId,
+                )}/permissions`}
+                aria-label={`Permissions of ${member.email}`}
+              >
+                Permissions
+              </a>
               <ChangeRole organizationId={organizationId} member={member} assignableRoles={overview.assignableRoles} />
               <RemoveMember organizationId={organizationId} member={member} removableRoles={overview.invitableRoles} />
             </li>

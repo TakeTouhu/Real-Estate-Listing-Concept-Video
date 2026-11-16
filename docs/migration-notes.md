@@ -2535,3 +2535,15 @@ no longer fails.
 they were created with. An `OWNER` or `ADMIN` again creates them unassigned,
 a `MANAGER` in several groups again cannot create one, and a `BILLING`
 member's home page fails again.
+
+## AT-11a — a member's permissions page
+
+**No migration** (ADR-0146). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. A new page,
+`/organizations/{id}/members/{userId}/permissions`, reads a member's role,
+individual grants and groups' permissions, and the members page links each
+member to it. Nothing is written or audited.
+
+**Rolling back.** To AT-10b's build: safe. The page and the members page's
+links go; no permission changes.
