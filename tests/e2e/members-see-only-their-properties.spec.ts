@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
 import { E2E_BASE_URL } from "./support/environment";
-import { hydrated } from "./support/hydration";
+import { hydrated, pageAlert } from "./support/hydration";
 import { invitationLink, verificationLink } from "./support/outbox";
 import { newEmail, newPassword, provisionPremiumPlan, signUpOwner } from "./support/owner";
 import { makePhotos } from "./support/photos";
@@ -44,6 +44,7 @@ async function join(browser: Browser, email: string, name: string, heading: stri
   await expect(member.getByRole("heading", { name: "Verify your email address" })).toBeVisible();
   await member.goto(await verificationLink(email));
   await member.getByRole("button", { name: "Verify email address" }).click();
+  await expect(member.getByRole("heading", { name: "Email address verified" })).toBeVisible();
   await member.getByRole("link", { name: "Continue" }).click();
   await member.getByRole("button", { name: "Accept invitation" }).click();
   await expect(member.getByRole("heading", { name: heading })).toBeVisible();
@@ -137,13 +138,13 @@ test("invited members see only the Properties assigned to them or to their group
   // A Property a member does not reach is not found from its address either.
   for (const address of [ebisu, daikanyama]) {
     await creator.goto(address);
-    await expect(creator.getByRole("alert")).toHaveText("Property not found");
+    await expect(pageAlert(creator)).toHaveText("Property not found");
   }
   await manager.goto(daikanyama);
   await expect(manager.getByRole("heading", { name: "Daikanyama Loft" })).toBeVisible();
   for (const address of [ebisu, shibuya]) {
     await manager.goto(address);
-    await expect(manager.getByRole("alert")).toHaveText("Property not found");
+    await expect(pageAlert(manager)).toHaveText("Property not found");
   }
   await creator.close();
   await manager.close();

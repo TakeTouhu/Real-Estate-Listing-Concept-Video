@@ -990,11 +990,12 @@ is complete.
 **AT-12 — the browser test of what invited members reach** (ADR-0149, no
 migration): a tenth browser test has an owner invite a Creator and a
 Manager, who join from the emailed link with new, verified accounts and see
-no Property. Once the owner makes the Creator responsible for one Property
-and adds the Manager to a group with another, each sees only that one, and
-any other Property is not found from its address; the Creator uploads its
-Property's photos. No product change. The plan is complete; its record is
-`docs/accounts-team-completion.md`.
+no Property. Once the owner makes the Creator responsible for one Property,
+adds the Manager to a group and creates a third Property in it, each sees
+only their own, and any other Property is not found from its address; the
+Creator uploads its Property's photos. No product change; the browser tests
+find a page's alert inside `main`, apart from Next.js's route announcer.
+The plan is complete; its record is `docs/accounts-team-completion.md`.
 
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal

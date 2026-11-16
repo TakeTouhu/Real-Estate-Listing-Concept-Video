@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { pageAlert } from "./support/hydration";
 import { signUpOwner } from "./support/owner";
 
 /**
@@ -25,7 +26,7 @@ test("an owner creates a group, changes its permissions and members, renames it 
 
   await page.getByLabel("Group name").fill("East office");
   await page.getByRole("button", { name: "Create group" }).click();
-  await expect(page.getByRole("alert")).toHaveText("Another group of this organization already has that name.");
+  await expect(pageAlert(page)).toHaveText("Another group of this organization already has that name.");
   await expect(page.getByRole("heading", { name: "Groups (1)" })).toBeVisible();
 
   await expect(page.getByText("It gives its members no permissions.")).toBeVisible();

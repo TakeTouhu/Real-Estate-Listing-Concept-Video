@@ -1,7 +1,7 @@
 # ADR-0149 — The browser test of what invited members reach
 
-Status: Accepted (AT-12, 2026-11-16). The last milestone of the accounts-and-
-team plan, which the product owner approved on 2026-11-09
+Status: Accepted (AT-12, 2026-11-16). The last milestone of the
+accounts-and-team plan, which the product owner approved on 2026-11-09
 (`/mnt/project-files/cto/accounts-team-proposal.md`: "Playwright test:
 invite, sign up, verify, join, see only assigned Properties; password reset;
 completion report").
@@ -56,14 +56,29 @@ shown by the owner's own list.
 ## Decision 2 — The other parts are proved where they already are
 
 The invitation, sign-up, verification and acceptance run again in this test,
-since a member must join to be reached, but without the assertions the
-joining test already makes. Password reset is proved by its own test
-(ADR-0133) and is not repeated. No browser test is changed.
+since a member must join to be reached. It checks only that each step went
+through and leaves the rest to the joining test. Password reset is proved by its own test
+(ADR-0133) and is not repeated. Earlier browser tests change only in how
+they find a page's alert (Decision 4).
 
 ## Decision 3 — No product change
 
 The test asserts what is built. It adds no route, page, permission,
 migration or audit action, and changes no code outside `tests/e2e`.
+
+## Decision 4 — A check reads the page's own alert
+
+Once React has hydrated a page, Next.js adds a route announcer to the body:
+an element with the `alert` role, out of sight but found by Playwright's
+`getByRole`. A check of every alert on a hydrated page matches two elements
+and fails, so a check made before hydration passes and one made after fails.
+This test checks an alert right after a page loads, which is when hydration
+runs, and the earlier tests of password reset (ADR-0133) and groups
+(ADR-0141) check one each.
+
+`pageAlert(page)` in `tests/e2e/support/hydration.ts` finds the alert inside
+`main`, where every page of the app renders (the root layout), and the four
+checks use it. The announcer sits outside `main`.
 
 ## Consequences
 

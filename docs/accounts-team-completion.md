@@ -11,9 +11,10 @@ reset (ADR-0052 Decision 18), and screens for the members, invitations,
 groups, Property assignment and permissions built in Phases 6C to 6I, with
 the seat limit and a browser test, in about twelve pull requests (AT-1 to
 AT-12), each merged only with their yes. Each milestone recorded itself in
-its ADR, its API change summary, the Roadmap, the architecture table and the
-migration notes; this record closes the plan. The plan is not a Roadmap
-phase, so it receives no `phase-N-complete` tag.
+its ADR, its API change summary, the Roadmap and the migration notes, and,
+where it changed the runtime, in the architecture table; this record closes
+the plan. The plan is not a Roadmap phase, so it receives no
+`phase-N-complete` tag.
 
 ## AT-12 — the browser test of what invited members reach
 
@@ -36,6 +37,10 @@ ADR: `docs/decisions/0149-the-browser-test-of-what-invited-members-reach.md`
 - The Creator uploads its Property's three photos, which are processed.
 - Every Property a member does not reach answers "Property not found" from
   its address as well (ADR-0064 Decision 3).
+- **A check reads the page's own alert** (ADR-0149 Decision 4). Once a page
+  is hydrated, Next.js's route announcer is an alert too, so `pageAlert(page)`
+  finds the alert inside `main`. This test and the earlier password reset
+  and groups tests use it.
 
 ### Joining and reaching a Property
 
@@ -87,13 +92,32 @@ restored and checked unchanged.
 
 ### Review
 
-REVIEW_SUMMARY
+An independent review agent reviewed `94dc697` against `0338be1`, reading
+only git objects; Codex was not used. It checked every label, button and
+message the test uses against the pages, found that the test tells `OWN`,
+`GROUP` and `ORGANIZATION` apart and that each member has its own browser
+context, and confirmed every PR number, merge commit, time, migration, test
+file count, ADR citation and open item in this report against the
+repository. Verdict: nothing blocking; two should-fix findings and seven
+nits, answered in the commit that adds this section:
+
+| Finding | Answer |
+| --- | --- |
+| The Review section was still a placeholder | Fixed: this section |
+| `getByRole("alert")` also finds Next.js's route announcer, an alert added to the body once a page is hydrated, so a check made after hydration matches two elements and fails | Confirmed in Chromium: two alerts once the announcer is added, and the check fails. Fixed for all four such checks with `pageAlert(page)`, the alert inside `main` (ADR-0149 Decision 4), including the earlier password reset and groups tests |
+| A member's verification was not checked, so a failed one would surface later as a timeout | Fixed: `join` waits for "Email address verified" |
+| The test cannot tell reach by the responsible user from reach by the creator, since the owner creates every Property | Stays as is: reach never reads `createdBy` (ADR-0064 Decision 1), and `property-reach.test.ts` shows a Creator losing a Property when it is reassigned to another member; the browser test shows the assignments an owner makes |
+| ADR-0149's status line broke "accounts-and-team" across two lines | Fixed |
+| The Roadmap said the Manager was added to a group "with another" Property, which the group did not hold yet | Fixed: the owner creates the third Property in the group afterwards |
+| The limitation on leaving an organization cited only the proposal's default 6 | Fixed: it also cites `TODO.md`, "Open in AT-8a" |
+| The architecture table's browser-test row said every test makes an owner with MFA and a plan | Fixed: the password reset test signs up a person only, and only the tests that need a plan get one |
+| This report said every milestone is in the architecture table | Fixed: AT-2 and AT-4a, which changed no runtime part, are not in it, and the report now says so |
 
 ### Required documentation
 
 | Item | Where |
 | --- | --- |
-| Architecture diagram | `docs/architecture.md`: its runtime diagram, and the status table's rows for AT-1 to AT-11c and the browser test row |
+| Architecture diagram | `docs/architecture.md`: its runtime diagram, and the status table's rows for every milestone that changed the runtime (all but AT-2 and AT-4a, which made two existing writes atomic) and the browser test row |
 | Entity-relationship diagram | `docs/er-diagram.md`, *AT-3a* (`users.emailVerifiedAt`, `account_links`) and *AT-6a* (one pending invitation per address); AT-12: not applicable, no entity changes |
 | Critical sequence diagram | the diagram above; each milestone's ADR and API change summary carries its own |
 | OpenAPI / API change summary | `docs/api-changes-at-1.md` to `docs/api-changes-at-11c.md`; AT-12: not applicable, no route or page changes |
@@ -209,8 +233,9 @@ twice on the pull request, and its one re-run passed.
   invitations (the proposal's default 7; ADR-0054).
 - **Seats are the plan's included users** (3, 10 or 30). Seat purchase is
   not built, so a full organization cannot grow (default 5).
-- **No account deletion**, and a member cannot leave an organization or
-  change their own role from the product (default 6).
+- **No account deletion** (default 6), and a member cannot leave an
+  organization or change their own role from the product (`TODO.md`, "Open
+  in AT-8a").
 - **`disclosure.none` is not offered** on a member's permissions page before
   Mode C exists (ADR-0147).
 
