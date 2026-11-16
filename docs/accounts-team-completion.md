@@ -74,11 +74,11 @@ Run on this branch against a local PostgreSQL 16, after
 | --- | --- |
 | `pnpm run typecheck` | exit 0 |
 | `pnpm run lint` | exit 0 |
-| `pnpm run test` | VERIFY_UNIT |
-| `pnpm run test:db` | VERIFY_DB |
-| `pnpm run test:media` | VERIFY_MEDIA |
-| browser tests (`playwright test`) | VERIFY_E2E |
-| `pnpm run build` | VERIFY_BUILD |
+| `pnpm run test` | exit 0: 7,852 tests in 307 files |
+| `pnpm run test:db` | exit 0: 1,940 tests in 78 files |
+| `pnpm run test:media` | exit 0: 172 tests in 5 files |
+| browser tests (`playwright test`) | exit 0: 10 tests |
+| `pnpm run build` | exit 0 |
 
 The new test was also run against a break: with a `MANAGER` given the
 `ORGANIZATION` scope in `ROLE_SCOPE`, it fails at the Manager's first home
@@ -191,9 +191,14 @@ became 24 pull requests, each kept near 500 changed lines where it could be.
 
 ### Test results
 
-On this pull request's code, as measured above: VERIFY_SUMMARY. On `main`
+On this pull request's code, as measured above: 7,852 unit tests in 307
+files, 1,940 database tests in 78 files, 172 media tests in 5 files and 10
+browser tests, all passing, and the production build. On `main`
 after the last merge, `0338be1`, CI's `verify`, `media` and `e2e` jobs
-passed (run 971). MAIN_CI_DB
+passed (run 971). Its `database` job failed on the first attempt: the test
+runner's worker process crashed (`ERR_IPC_CHANNEL_CLOSED`) after 61 of the 78
+files had passed, with no test failing. The same tree had passed that job
+twice on the pull request, and its one re-run passed.
 
 ### Known limitations
 
