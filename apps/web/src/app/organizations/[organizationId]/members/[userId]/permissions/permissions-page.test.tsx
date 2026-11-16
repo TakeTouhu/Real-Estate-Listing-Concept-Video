@@ -8,6 +8,7 @@ import {
   MemberPermissionsService,
   MfaService,
   OrganizationService,
+  PermissionGrantService,
   createMfaSecretCipher,
   systemMfaRandom,
   totpStep,
@@ -21,9 +22,11 @@ import { AppError, hotp } from "@app/shared";
 /**
  * A member's permissions page (AT-11a, ADR-0146): a holder of `member.view`
  * sees every permission a member can hold, whether it is in effect and where
- * it comes from, in words; anyone else is refused alike. The identity
- * services run for real, on in-memory repositories, except where a test sets
- * the sources it words.
+ * it comes from, in words; anyone else is refused alike. A viewer the grant
+ * ceiling allows is offered to give what the member cannot do yet and to take
+ * back what was given individually (AT-11b, ADR-0147). The identity services
+ * run for real, on in-memory repositories, except where a test sets the
+ * sources it words.
  */
 const PASSWORD = "password-123456";
 const KEY = "4d".repeat(32);
@@ -46,7 +49,10 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
-vi.mock("@/lib/member-permissions", () => ({ getMemberPermissionsService: () => permissions.value }));
+vi.mock("@/lib/member-permissions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/member-permissions")>()),
+  getMemberPermissionsService: () => permissions.value,
+}));
 
 const { default: PermissionsPage } = await import("./page");
 
@@ -95,8 +101,11 @@ async function signIn(name: string): Promise<void> {
   cookie.value = token;
 }
 
-const page = (userId: string) =>
-  PermissionsPage({ params: Promise.resolve({ organizationId: orgId, userId }) }) as Promise<ReactElement>;
+const page = (userId: string, query: Record<string, string> = {}) =>
+  PermissionsPage({
+    params: Promise.resolve({ organizationId: orgId, userId }),
+    searchParams: Promise.resolve(query),
+  }) as Promise<ReactElement>;
 
 /** Render, as `viewer`, the permissions page of the member `userId`. */
 async function renderAs(viewer: Role | "outsider", userId: string): Promise<void> {
@@ -104,11 +113,13 @@ async function renderAs(viewer: Role | "outsider", userId: string): Promise<void
   render(await page(userId));
 }
 
-/** Each permission's line, by its key. */
+/** Each permission's line, by its key, without its forms. */
 function lines(): Map<string, string> {
   return new Map(
     screen.getAllByRole("listitem").map((item) => {
-      const text = (item.textContent ?? "").replace(/\s+/g, " ");
+      const line = item.cloneNode(true) as HTMLElement;
+      line.querySelectorAll("form").forEach((form) => form.remove());
+      const text = (line.textContent ?? "").replace(/\s+/g, " ");
       return [/\(([a-z.]+)\)/.exec(text)?.[1] ?? "", text];
     }),
   );
@@ -264,6 +275,113 @@ describe("a member's permissions page", () => {
     expect(shown.get("audit.view")).toMatch(/: Yes, from 2 of their groups\./);
     expect(shown.get("audit.export")).toMatch(/: Yes, from one of their groups\./);
     expect(shown.get("video.view")).toMatch(/: Yes, from their role\.$/);
+  });
+});
+
+/** The page's forms, in order: what each posts to, of which permission. */
+function changes(): string[] {
+  return [...document.querySelectorAll("li form")].map((form) => {
+    const permission = form.querySelector<HTMLInputElement>('input[type="hidden"][name="permission"]')?.value;
+    return `${form.getAttribute("action")?.split("/").at(-1)} ${permission}`;
+  });
+}
+
+describe("giving and taking back individual permissions (AT-11b, ADR-0147)", () => {
+  it("offers an Owner to give what the member cannot do yet, and to take back what was given", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "audit.view");
+    await renderAs("OWNER", ids.MANAGER);
+    expect(changes()).toEqual([
+      "grant organization.manage",
+      "grant member.manage",
+      "grant group.manage",
+      "grant permission.manage",
+      "grant billing.view",
+      "grant billing.manage",
+      "revoke audit.view",
+      "grant audit.export",
+    ]);
+    const forms = [...document.querySelectorAll("li form")];
+    expect(new Set(forms.map((form) => form.getAttribute("method")))).toEqual(new Set(["post"]));
+    expect(forms[0]?.getAttribute("action")).toBe(
+      `/api/organizations/${orgId}/members/${ids.MANAGER}/permissions/grant`,
+    );
+    expect(forms[6]?.getAttribute("action")).toBe(
+      `/api/organizations/${orgId}/members/${ids.MANAGER}/permissions/revoke`,
+    );
+    expect(screen.getByRole("button", { name: "Give manager@example.com the permission: Buy Units" }).textContent).toBe(
+      "Give",
+    );
+    expect(
+      screen.getByRole("button", { name: "Take back from manager@example.com the permission: See the audit log" })
+        .textContent,
+    ).toBe("Take back");
+    expect(screen.getByText(/^You can give them a permission they do not have, or take back one given/)).toBeTruthy();
+  });
+
+  it("says what holding a permission brings, and what the member's role still keeps them from", async () => {
+    await renderAs("OWNER", ids.MANAGER);
+    const said = (permission: string) =>
+      document.querySelector(`form:has(input[value="${permission}"])`)?.textContent?.replace(/\s+/g, " ");
+    expect(said("permission.manage")).toBe(
+      "Whoever holds it must use two-step sign-in. Their role lets them change no one's role or permissions. Give",
+    );
+    expect(said("billing.manage")).toBe("Whoever holds it must use two-step sign-in. Give");
+    expect(said("member.manage")).toBe("Their role lets them invite or remove no one. Give");
+    expect(said("billing.view")).toBe("Give");
+  });
+
+  it("offers an Admin only what the ceiling allows it, and nothing at all for an Owner", async () => {
+    await renderAs("ADMIN", ids.CREATOR);
+    expect(changes()).toEqual(
+      [
+        "organization.manage",
+        "member.view",
+        "member.manage",
+        "group.view",
+        "group.manage",
+        "billing.view",
+        "audit.view",
+        "audit.export",
+      ].map((permission) => `grant ${permission}`),
+    );
+    cleanup();
+    render(await page(ids.OWNER));
+    expect(changes()).toEqual([]);
+    expect(screen.queryByText(/^You can give them/)).toBeNull();
+  });
+
+  it("offers nothing to a viewer without permission.manage, nor on the viewer's own page as an Admin", async () => {
+    await renderAs("BILLING", ids.MANAGER);
+    expect(changes()).toEqual([]);
+    cleanup();
+    await renderAs("ADMIN", ids.ADMIN);
+    expect(changes()).toEqual([]);
+  });
+
+  it("never offers to give disclosure.none, yet offers to take back a grant of it", async () => {
+    await renderAs("OWNER", ids.ADMIN);
+    expect(changes()).toEqual(["grant billing.manage"]);
+    cleanup();
+    await answering("OWNER", ids.ADMIN, { "disclosure.none": { effective: true, granted: true, mayRevoke: true } });
+    render(await page(ids.ADMIN));
+    expect(changes()).toEqual(["revoke disclosure.none", "grant billing.manage"]);
+  });
+
+  it("says what a route sent back, and nothing for a code it does not know", async () => {
+    await signIn("owner");
+    render(await page(ids.CREATOR, { notice: "granted" }));
+    expect(screen.getByRole("status").textContent).toBe(
+      "The permission was given to them individually. What they can do now is shown below.",
+    );
+    cleanup();
+    render(await page(ids.CREATOR, { error: "not-granted" }));
+    expect(screen.getByRole("alert").textContent).toBe(
+      "They no longer hold that permission individually: it was taken back meanwhile.",
+    );
+    cleanup();
+    render(await page(ids.CREATOR, { notice: "constructor", error: "role-changed" }));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

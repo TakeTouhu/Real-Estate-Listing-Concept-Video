@@ -1434,6 +1434,17 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       `group.manage` and the role-assignment ceiling, not the grant ceiling
       of what the group gives or takes.
 
+## Open in AT-11b — `disclosure.none` on a member's permissions page
+
+- [ ] **Confirm that `disclosure.none` is not offered before Mode C.** A
+      member's permissions page offers an `OWNER` to give every other
+      permission the ceiling allows, but not `disclosure.none`, and its
+      grant route refuses it (ADR-0147 Decision 3): Mode C, its
+      organization enablement and per-video consent are not built, so the
+      grant would authorize nothing yet. The Mode C milestone should offer
+      it, saying what it allows. Taking back a grant of it is offered. It
+      does not block the plan.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of

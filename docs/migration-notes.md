@@ -2547,3 +2547,18 @@ member to it. Nothing is written or audited.
 
 **Rolling back.** To AT-10b's build: safe. The page and the members page's
 links go; no permission changes.
+
+## AT-11b — giving and taking back individual permissions
+
+**No migration** (ADR-0147). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing in the schema or the data. Two routes,
+`POST /api/organizations/{id}/members/{userId}/permissions/grant` and
+`.../revoke`, write individual grants through `PermissionGrantService`, each
+with its Phase 6D audit entry, and a member's permissions page offers them.
+A member given `permission.manage` or `billing.manage` is asked to set up
+two-step sign-in at their next page.
+
+**Rolling back.** To AT-11a's build: safe. The buttons and routes go. Grants
+given meanwhile stay, and stay in effect; an `OWNER` takes one back only
+through the database until AT-11b returns.

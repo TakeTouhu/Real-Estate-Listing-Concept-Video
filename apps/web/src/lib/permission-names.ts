@@ -94,6 +94,13 @@ export const NOT_YET_USED: readonly Permission[] = [
 ];
 
 /**
+ * Permissions a member's permissions page never offers to give, and its
+ * routes refuse to: `disclosure.none` waits for Mode C, which is not built
+ * (ADR-0147). Taking back a grant of it is still offered.
+ */
+export const NOT_GIVEN_HERE: readonly Permission[] = ["disclosure.none"];
+
+/**
  * What a member may still not do with a permission, because only an `OWNER`
  * or `ADMIN` may act on another member at all: the role-assignment ceiling
  * gives every other role no one (ADR-0052 Decision 10).
@@ -103,6 +110,16 @@ const BEYOND_THE_ROLE: Partial<Record<Permission, string>> = {
   "group.manage": "Their role lets them add no one to a group, nor remove anyone.",
   "permission.manage": "Their role lets them change no one's role or permissions.",
 };
+
+/**
+ * What holding `permission` still does not let a member holding `role` do,
+ * as a sentence, or `undefined` when nothing: only an `OWNER` or `ADMIN`
+ * reaches other members with `member.manage`, `group.manage` or
+ * `permission.manage`.
+ */
+export function roleLimit(permission: Permission, role: Role): string | undefined {
+  return role === "OWNER" || role === "ADMIN" ? undefined : BEYOND_THE_ROLE[permission];
+}
 
 /** `items` as a sentence lists them: "a", "a and b", "a, b and c". */
 function listed(items: readonly string[]): string {
@@ -136,6 +153,6 @@ export function permissionAnswer(permission: MemberPermission, role: Role): stri
   if (!permission.effective) {
     return `No, although it comes from ${from}: it is never in effect for a ${ROLE_NAMES[role]} member.`;
   }
-  const beyond = role === "OWNER" || role === "ADMIN" ? undefined : BEYOND_THE_ROLE[permission.permission];
+  const beyond = roleLimit(permission.permission, role);
   return `Yes, from ${from}.${beyond === undefined ? "" : ` ${beyond}`}`;
 }

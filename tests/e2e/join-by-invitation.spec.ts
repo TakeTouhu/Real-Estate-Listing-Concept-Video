@@ -10,9 +10,10 @@ import { newEmail, newPassword, provisionPremiumPlan, signUpOwner } from "./supp
  * address and verifies it, the invitation waiting all along, then accepts and
  * joins with the invited role. The link works once, and the owner's page
  * shows the new member in a seat. The owner then gives the colleague another
- * role, which the colleague's page follows (AT-8a, ADR-0139), and finally
- * removes the colleague, whose page no longer lists the organization (AT-8b,
- * ADR-0140).
+ * role, which the colleague's page follows (AT-8a, ADR-0139), gives them a
+ * permission individually from their permissions page and takes it back
+ * (AT-11b, ADR-0147), and finally removes the colleague, whose page no longer
+ * lists the organization (AT-8b, ADR-0140).
  */
 test("a colleague opens an emailed invitation, signs up, verifies, joins, gets another role and is removed", async ({
   page,
@@ -75,6 +76,18 @@ test("a colleague opens an emailed invitation, signs up, verifies, joins, gets a
   await expect(page.getByText(`New Colleague · ${colleague} · Viewer`)).toBeVisible();
   await invitee.goto("/");
   await expect(invitee.getByRole("heading", { name: `${organizationName} (VIEWER)` })).toBeVisible();
+
+  // The owner gives the colleague a permission individually, then takes it back.
+  await page.getByRole("link", { name: `Permissions of ${colleague}` }).click();
+  const units = page.getByRole("listitem").filter({ hasText: "(unit.view)" });
+  await expect(units).toContainText("See Units (unit.view): No.");
+  await page.getByRole("button", { name: `Give ${colleague} the permission: See Units` }).click();
+  await expect(page.getByRole("status")).toContainText("The permission was given to them individually.");
+  await expect(units).toContainText("See Units (unit.view): Yes, from an individual grant.");
+  await page.getByRole("button", { name: `Take back from ${colleague} the permission: See Units` }).click();
+  await expect(page.getByRole("status")).toContainText("Their individual permission was taken back.");
+  await expect(units).toContainText("See Units (unit.view): No.");
+  await page.getByRole("link", { name: "Back to members" }).click();
 
   // The owner removes the colleague, after reading what removing does; the colleague's page no longer lists it.
   await page.getByLabel(`Remove ${colleague}…`).click();
