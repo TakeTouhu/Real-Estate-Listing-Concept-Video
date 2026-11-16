@@ -1041,11 +1041,11 @@ before.
 
 **RD-2a — a production start checked** (ADR-0151, no migration): a
 production start of the web app is ended, with its reasons, when its
-environment is invalid, a port's adapter is not one production may use, or
-`DATABASE_URL`, `MFA_SECRET_KEY` or `APP_BASE_URL` is not set. Until RD-3,
-RD-5 and RD-6 add production adapters, every production start is refused.
-RD-2 is split in two for size; RD-2b adds the database and the object
-storage to readiness.
+environment is invalid, only one of the build and `NODE_ENV` says production,
+a port's adapter is not one production may use, or `DATABASE_URL`,
+`MFA_SECRET_KEY` or `APP_BASE_URL` is not set. Until RD-3, RD-5 and RD-6 add
+production adapters, every production start is refused. RD-2 is split in two
+for size; RD-2b adds the database and the object storage to readiness.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —

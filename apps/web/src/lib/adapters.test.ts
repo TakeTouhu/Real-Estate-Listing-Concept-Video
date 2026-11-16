@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { outgoingEmail } from "@app/domain";
 import { serverEnvSchema } from "@app/shared";
 import { NonProductionAdapterError, readDevelopmentEmailOutbox } from "@app/storage";
-import { chooseWebAdapters, createWebAdapters } from "./adapters";
+import { chooseWebAdapters } from "./adapter-choice";
+import { createWebAdapters } from "./adapters";
 
 /** Which adapters the web app takes, from its environment alone (RD-1, ADR-0150; ADR-0085, ADR-0126). */
 const base = {

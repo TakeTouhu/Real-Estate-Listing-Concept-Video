@@ -1,8 +1,8 @@
 import type { ServerEnv } from "@app/shared";
-import { chooseWebAdapters, type WebAdapterChoice } from "./adapters";
+import { chooseWebAdapters, type WebAdapterChoice } from "./adapter-choice";
 import { getServerEnv } from "./env";
 
-/** The adapters a production start may choose, for every port the web app has. */
+/** The adapters a production start may choose, for every port the web app chooses one for. */
 export type ProductionAdapters = { readonly [P in keyof WebAdapterChoice]: readonly WebAdapterChoice[P][] };
 
 /**
@@ -34,8 +34,9 @@ const PORT_NAMES: Readonly<Record<keyof WebAdapterChoice, string>> = {
  * The settings a production start needs beyond what the environment schema
  * requires everywhere: the database, the key that seals MFA secrets (ADR-0065;
  * the product owner's default for production, 2026-11-16), and the address
- * every emailed link starts with (ADR-0129). The worker shares the schema and
- * needs none of them, so the schema keeps them optional.
+ * every emailed link starts with (ADR-0129). The schema keeps each optional: a
+ * build and a test run are given none of them, and the worker has no use for
+ * the key or the address.
  */
 const PRODUCTION_SETTINGS = ["DATABASE_URL", "MFA_SECRET_KEY", "APP_BASE_URL"] as const;
 
@@ -88,10 +89,11 @@ const REFUSED = "The web app cannot start in production";
  * use or a missing setting reports why and ends the process: left running,
  * Next.js answers every request with an error instead.
  *
- * A start is a production one when the ambient `NODE_ENV` or the configured
- * one says so: neither can vouch for the other (ADR-0150 Decision 2). Any
- * other start is left alone, as `next dev` and the browser test choose
- * development adapters on purpose.
+ * A start is a production one when the ambient `NODE_ENV`, which a production
+ * build fixes at `production`, or the configured one says so: neither can
+ * vouch for the other (ADR-0150 Decision 2). One that only one of them calls
+ * production is refused for that too. Any other start is left alone, as
+ * `next dev` and the browser test choose development adapters on purpose.
  */
 export function checkWebStart(start: WebStart = processStart): void {
   const ambient = process.env.NODE_ENV === "production";
@@ -108,8 +110,18 @@ export function checkWebStart(start: WebStart = processStart): void {
     start.exit(1);
     return;
   }
-  if (!ambient && env.NODE_ENV !== "production") return;
-  const problems = productionStartProblems(env, start.allowed);
+  const configured = env.NODE_ENV === "production";
+  if (!ambient && !configured) return;
+  const problems = [...productionStartProblems(env, start.allowed)];
+  // The schema's production rules and the session cookie's `Secure` follow the configured value, and
+  // the build follows the ambient one: where the two differ, production's rules hold only in part.
+  if (ambient !== configured) {
+    problems.unshift(
+      ambient
+        ? 'NODE_ENV is not "production", but this is a production build'
+        : 'NODE_ENV is "production", but this is not a production build',
+    );
+  }
   if (problems.length === 0) return;
   start.report(`${REFUSED}:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
   start.exit(1);

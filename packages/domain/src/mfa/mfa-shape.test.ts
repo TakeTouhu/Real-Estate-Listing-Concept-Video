@@ -12,8 +12,8 @@ import { describe, expect, it } from "vitest";
  *    `lib/auth.ts` resolves a session, so no route or page can skip the code
  *    step. `AuthService` still knows nothing of MFA.
  * 3. **Set-up first** (MFA-3). A sign-in that must set MFA up reaches only the
- *    security page and the two set-up routes; the readiness probe says only
- *    whether the key is set.
+ *    security page and the two set-up routes; the readiness probe and the
+ *    production start check (ADR-0151) say only whether the key is set.
  * 4. **One more migration** (MFA-4): one `organizations` column, off for every
  *    existing organization, changed through one web route.
  */
@@ -112,7 +112,7 @@ describe("boundary", () => {
     // Named once, in the list of settings a production start needs, each asked only whether it is set.
     expect(startup.match(/MFA_SECRET_KEY/g)).toHaveLength(1);
     expect(startup.match(/\benv\[/g)).toHaveLength(1);
-    expect(startup).toContain("if (env[name] === undefined) problems.push(`${name} is not set`);");
+    expect(startup).toMatch(/env\[name\] === undefined/);
     expect(startup).not.toMatch(/\benv\.(?!NODE_ENV\b)/);
   });
 

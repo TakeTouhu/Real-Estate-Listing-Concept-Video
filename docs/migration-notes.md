@@ -2607,11 +2607,13 @@ again in its own file.
 
 **What changes at deploy.** A production start of the web app (`next start`)
 now ends with exit code 1 and its reasons on standard error, unless its
-environment is valid, every port's adapter is one production may use, and
-`DATABASE_URL`, `MFA_SECRET_KEY` and `APP_BASE_URL` are set. No production
-adapter exists for object storage, malware scanning or email until RD-3,
-RD-5 and RD-6, so no production start passes yet; nothing is deployed.
-`next dev`, the browser test and `next build` are unchanged.
+environment is valid, `NODE_ENV` is `production` or not set, every port's
+adapter is one production may use, and `DATABASE_URL`, `MFA_SECRET_KEY` and
+`APP_BASE_URL` are set. No production adapter exists for object storage,
+malware scanning or email until RD-3, RD-5 and RD-6, so no production start
+passes yet; nothing is deployed. `next build` is unchanged, and so are
+`next dev` and the browser test unless `NODE_ENV` is set to `production`
+there, which is now refused.
 
 **Rolling back.** To RD-1's build: safe. A production start is no longer
 checked, and a misconfiguration again surfaces at the first request that

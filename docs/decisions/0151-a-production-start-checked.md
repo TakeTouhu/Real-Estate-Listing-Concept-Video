@@ -9,7 +9,8 @@ storage to readiness.
 
 Builds on: ADR-0008 (the production guard), ADR-0065 Decision 14 (the MFA
 key fails closed), ADR-0129 (emailed links start with `APP_BASE_URL`),
-ADR-0150 (the web app's adapters chosen in one place).
+ADR-0150 (the web app's adapters chosen in one place; Decision 5 here refines
+its Decision 1).
 
 ## Context
 
@@ -33,15 +34,25 @@ once as the server starts. In the Node.js runtime it calls `checkWebStart()`
 A start is a production start when the ambient `NODE_ENV` or the configured
 one says `production`: neither can vouch for the other (ADR-0150 Decision 2).
 `next build` fixes the ambient value at `production` in the app it builds, so
-every `next start` is checked, whatever its environment says. Any other start
-is left alone: `next dev` and the browser test choose development adapters on
+a `next start` is checked whatever `NODE_ENV` it is given. Any other start is
+left alone: `next dev` and the browser test choose development adapters on
 purpose.
 
 A production start is refused when:
 
 - the environment fails its schema;
+- only one of the two `NODE_ENV` values says `production`;
 - a port's chosen adapter is not one production may use (Decision 2);
 - `DATABASE_URL`, `MFA_SECRET_KEY` or `APP_BASE_URL` is not set (Decision 3).
+
+The two values must agree because each brings rules of its own. The schema's
+production rules (an https `APP_BASE_URL`, no development folder) and the
+session cookie's `Secure` follow the configured value; what Next.js built
+follows the ambient one. Once production adapters exist, a production build
+given `NODE_ENV=development` would otherwise start without the first. A
+development server given `NODE_ENV=production` is refused the same way.
+`next start` with no `NODE_ENV` is a production start: Next.js sets it to
+`production`.
 
 A refused start writes one message to standard error and ends the process
 with exit code 1. Ending it matters: on Next.js 15.5 a server whose
@@ -61,9 +72,11 @@ When the environment fails its schema and the ambient value is not
 `production`, no configured value can be read. That start is left alone, and
 the environment is reported where it is first read, as before.
 
-`next build` does not run `register()` on Next.js 15.5. Were a later version
-to, the check is skipped while `NEXT_PHASE` names the build, which serves
-nothing and is given no production settings.
+`next build` does not run `register()`: Next.js 15.5 skips the hook while
+`NEXT_PHASE` names its build phase, which it sets for the build. A server
+started with that value in its environment is skipped the same way and is not
+checked. The hook adds no switch of its own, and such a start behaves as on
+the base: each development adapter refuses production when first built.
 
 ## Decision 2 — Production adapters are listed, port by port
 
@@ -96,10 +109,11 @@ upload or sign-up now fails at start. Nothing is deployed.
 - `APP_BASE_URL`: every emailed link starts with it (ADR-0129), and without
   the verification link no one can use the product (ADR-0052 Decision 18).
 
-The schema keeps all three optional, because the worker shares it and needs
-none of them. The video provider is not checked: generation start is built
-only for the test provider outside production (ADR-0111), and paid activation
-stays BLOCKED (ADR-0054 Decision 7).
+The schema keeps all three optional: a build and a test run are given none of
+them, and the worker has no use for the key or the address. The video
+provider is not checked: generation start is built only for the test provider
+outside production (ADR-0111), and paid activation stays BLOCKED (ADR-0054
+Decision 7).
 
 ## Decision 4 — The worker is checked with its runtime
 
@@ -107,10 +121,30 @@ The worker's start file runs a provider self-check and exits; it has no
 production runtime yet (ADR-0106 to ADR-0108). Its start is checked when that
 runtime is assembled, in part 2 of the plan.
 
+## Decision 5 — The start check loads no adapter
+
+`next dev` builds `instrumentation.ts` for the edge runtime as well as for
+Node.js, and the edge build cannot bundle sharp. `register()` therefore
+imports the check inside its test of the runtime, as Next.js documents, so
+only the Node.js build carries it.
+
+The check also reads the choice without loading an adapter.
+`WebAdapterChoice` and `chooseWebAdapters` move from `adapters.ts` to
+`apps/web/src/lib/adapter-choice.ts`, which imports no adapter; `adapters.ts`
+builds what it chooses. This refines ADR-0150 Decision 1, which kept the
+choice and the construction in one module. Left there, the hook would load
+every adapter's code before it could refuse: sharp today, and the Google
+Cloud Storage, ClamAV and SMTP clients after RD-3, RD-5 and RD-6. A package
+that failed to load would leave the server answering 500, which Decision 1
+exists to end. Under `next dev` the hook's build falls from 1,092 modules to
+45. `startup.test.ts` holds the check to importing the choice and the
+environment alone.
+
 ## Consequences
 
 - New: `apps/web/src/instrumentation.ts`, `apps/web/src/lib/startup.ts` and
-  their tests.
+  their tests; `apps/web/src/lib/adapter-choice.ts`, moved out of
+  `adapters.ts` unchanged.
 - The start check is the third web module to name `MFA_SECRET_KEY`, after
   the MFA service and readiness; `mfa-shape.test.ts` holds it to asking only
   whether the key is set.

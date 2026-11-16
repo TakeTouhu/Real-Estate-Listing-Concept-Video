@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serverEnvSchema, type ServerEnv } from "@app/shared";
-import { chooseWebAdapters } from "./adapters";
+import { chooseWebAdapters } from "./adapter-choice";
 import {
   checkWebStart,
   PRODUCTION_ADAPTERS,
@@ -87,10 +89,12 @@ describe("productionStartProblems", () => {
       "MFA_SECRET_KEY is not set",
       "APP_BASE_URL is not set",
     ]);
-    const lines = productionStartProblems(production).join("\n");
-    for (const value of ["password", "db.internal", "11".repeat(32), "app.example.com", base.SESSION_SECRET]) {
-      expect(lines).not.toContain(value);
-    }
+    // Lines about adapters a folder chose and a setting that is missing, beside settings that are set.
+    const folders = { SHARED_STORAGE_DIR: "/srv/marker-shared", EMAIL_OUTBOX_DIR: "/srv/marker-outbox" };
+    const lines = productionStartProblems({ ...production, ...folders, MFA_SECRET_KEY: undefined });
+    expect(lines).toHaveLength(4);
+    const values = ["marker", "password", "db.internal", "app.example.com", ...Object.values(base)];
+    for (const value of values) expect(lines.join("\n")).not.toContain(value);
   });
 
   it("allows the offline analysis and prompt moderation (ADR-0150 Decision 3)", () => {
@@ -107,6 +111,29 @@ describe("productionStartProblems", () => {
 
   it("finds nothing wrong once every chosen adapter is allowed and every setting is set", () => {
     expect(productionStartProblems(served, allowingTodays)).toEqual([]);
+  });
+});
+
+describe("what the start check loads", () => {
+  it("imports the choice of adapters and the environment, and no adapter (ADR-0151 Decision 5)", () => {
+    const packages = new Set<string>();
+    const files = new Set<string>();
+    const read = (file: string): void => {
+      if (files.has(file)) return;
+      files.add(file);
+      for (const [, name = ""] of readFileSync(file, "utf8").matchAll(/ from "([^"]+)"/g)) {
+        if (name.startsWith(".")) read(join(dirname(file), `${name}.ts`));
+        else packages.add(name);
+      }
+    };
+    read(join(__dirname, "startup.ts"));
+    expect([...files].map((file) => file.slice(__dirname.length + 1)).sort()).toEqual([
+      "adapter-choice.ts",
+      "env.ts",
+      "startup.ts",
+    ]);
+    // The environment's schema: no storage, image, database or provider code.
+    expect([...packages]).toEqual(["@app/shared"]);
   });
 });
 
@@ -135,19 +162,25 @@ describe("checkWebStart", () => {
     ]);
   });
 
-  it("takes the configured NODE_ENV's word too: neither vouches for the other (ADR-0150 Decision 2)", () => {
-    vi.stubEnv("NODE_ENV", "development");
-    const { start, reports, exits } = recorded(() => production);
-    checkWebStart(start);
-    expect(exits).toEqual([1]);
-    expect(reports).toHaveLength(1);
-  });
-
-  it("takes the ambient NODE_ENV's word when the configured one says otherwise", () => {
-    vi.stubEnv("NODE_ENV", "production");
-    const { start, exits } = recorded(() => development);
-    checkWebStart(start);
-    expect(exits).toEqual([1]);
+  it("checks a start only one NODE_ENV calls production, and refuses it for that (ADR-0150 Decision 2)", () => {
+    const refused = (ambient: string, env: ServerEnv, allowed?: ProductionAdapters): string[] => {
+      vi.stubEnv("NODE_ENV", ambient);
+      const { start, reports, exits } = recorded(() => env, allowed);
+      checkWebStart(start);
+      expect(exits).toEqual([1]);
+      return reports.join("\n").split("\n").slice(1);
+    };
+    // A production build given another NODE_ENV: the schema's production rules never ran.
+    expect(refused("production", { ...served, NODE_ENV: "development" }, allowingTodays)).toEqual([
+      '  - NODE_ENV is not "production", but this is a production build',
+    ]);
+    // A development server given NODE_ENV=production.
+    expect(refused("development", served, allowingTodays)).toEqual([
+      '  - NODE_ENV is "production", but this is not a production build',
+    ]);
+    // Neither vouches for the other: the adapters and the settings are checked all the same.
+    expect(refused("development", production)).toHaveLength(4);
+    expect(refused("production", development)).toContain("  - DATABASE_URL is not set");
   });
 
   it("ends a production start whose environment is invalid, with the schema's message", () => {
