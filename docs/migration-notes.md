@@ -2587,3 +2587,16 @@ service still refuses what the grant ceiling does not allow.
 **What changes at deploy.** Nothing: only a browser test and documents.
 
 **Rolling back.** Not applicable; no product code changes.
+
+## RD-1 — the web app's adapters in one place
+
+**No migration** (ADR-0150). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing a person sees: the same environment
+builds the same adapters, now chosen in `apps/web/src/lib/adapters.ts`. The
+in-memory storage and the test scanner now also refuse production when the
+configured `NODE_ENV` says so, not only the ambient one; in a real
+deployment the two are the same.
+
+**Rolling back.** To AT-12's build: safe. Each service picks its adapters
+again in its own file.

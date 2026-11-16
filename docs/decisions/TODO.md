@@ -1470,6 +1470,32 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       a member's permissions page refuses them every member, would be a
       one-line change in the service. It does not block the plan.
 
+## Open in RD-1 — decisions the production readiness plan leaves open
+
+Found by the plan's survey of `main @ 148b6f6`
+(`docs/production-readiness-gap-analysis.md`). None blocks the plan; each
+blocks activation. The production email service is tracked above, under AT-1.
+
+- [ ] **Choose the Google Cloud project and region.** ADR-0054 Decision 1
+      settles Google Cloud, but no document names a region or a rule on
+      where customer data may be kept. The plan's proposal recommends Tokyo
+      (`asia-northeast1`); the product owner decides.
+- [ ] **Check generation against ADR-0052 Decision 15's prohibited-content
+      categories.** Nothing checks a prompt or a photo for sexual content,
+      minors, violence, self-harm, hate, extremism, crime, non-consensual
+      imagery, impersonation or fraud: the offline prompt moderator checks
+      only the preservation and integrity rules (ADR-0014), and Decision 15
+      keeps the two checks apart. It needs a vendor the product owner
+      chooses, behind a port of its own, refusing before a Unit is reserved
+      and before any paid call. The offline moderator's entry under Phase
+      3C-3 is about the integrity rules only.
+- [ ] **Confirm the primary provider route.** The route table names fal's
+      H3 Max as the current default Normal route and WaveSpeed OpenVideo as
+      the economy and fallback route
+      (`packages/domain/src/authorization/routing.ts`), while ADR-0054
+      Decision 2 calls WaveSpeed the primary candidate. Part 2 of the plan
+      builds result polling for the route the product owner confirms.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of

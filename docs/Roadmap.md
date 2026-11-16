@@ -1026,6 +1026,18 @@ Scope:
 Completion criteria: staging production-readiness review passes and
 rollback/recovery procedures are tested.
 
+**Production readiness, part 1 (RD-1 to RD-11)** works toward this phase's
+scope without completing it: a production build that starts and serves sign-up,
+uploads and invitations safely, against local stand-ins for Google Cloud
+(`docs/production-readiness-gap-analysis.md`). The product owner approved it on
+2026-11-16; nothing is deployed and activation stays BLOCKED.
+
+**RD-1 — the web app's adapters in one place** (ADR-0150, no migration): one
+module chooses and builds the web app's storage, malware scanner, email,
+image analysis and prompt moderation, from the environment alone, and each
+development adapter refuses production by the configured or the ambient
+`NODE_ENV`. The same environment builds the same adapters as before.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

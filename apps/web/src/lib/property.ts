@@ -1,13 +1,6 @@
 import { AssetService, PropertyService, type ObjectStorage } from "@app/domain";
 import { createPrismaPropertyRepositories, getPrismaClient } from "@app/database";
-import type { ServerEnv } from "@app/shared";
-import {
-  LocalObjectStorage,
-  PassthroughMalwareScanner,
-  SharpImageProcessor,
-  createSharedFolderStorage,
-} from "@app/storage";
-import { getServerEnv } from "./env";
+import { getWebAdapters } from "./adapters";
 import { getIdentityServices } from "./identity";
 
 export interface PropertyServices {
@@ -18,26 +11,13 @@ export interface PropertyServices {
 
 let services: PropertyServices | undefined;
 
-/**
- * The folder shared with the worker when `SHARED_STORAGE_DIR` names one
- * (ADR-0085), otherwise this process's own memory. Both refuse production; the
- * Google Cloud Storage adapter replaces them without touching domain code.
- */
-export function createObjectStorage(env: ServerEnv): ObjectStorage {
-  const secret = env.STORAGE_SIGNING_SECRET;
-  if (env.SHARED_STORAGE_DIR !== undefined) {
-    return createSharedFolderStorage({ root: env.SHARED_STORAGE_DIR, secret }).objectStorage;
-  }
-  return new LocalObjectStorage({ secret });
-}
-
-/** Wire the property/media services. Server-only. */
+/** Wire the property/media services, on the web app's adapters (ADR-0150). Server-only. */
 export function getPropertyServices(): PropertyServices {
   if (services) return services;
-  const env = getServerEnv();
+  const adapters = getWebAdapters();
   const identity = getIdentityServices();
   const repos = createPrismaPropertyRepositories(getPrismaClient());
-  const storage = createObjectStorage(env);
+  const storage = adapters.storage();
 
   services = {
     storage,
@@ -53,8 +33,8 @@ export function getPropertyServices(): PropertyServices {
       properties: repos.properties,
       assets: repos.assets,
       storage,
-      scanner: new PassthroughMalwareScanner(),
-      images: new SharpImageProcessor(),
+      scanner: adapters.malwareScanner(),
+      images: adapters.images(),
       clock: identity.deps.clock,
       ids: identity.deps.ids,
     }),
