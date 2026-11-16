@@ -9,8 +9,9 @@ import { GROUP_GRANTABLE_PERMISSIONS } from "./roles";
  * 1. **One migration**, this phase's, adding one table and touching nothing
  *    else, with a CHECK that admits exactly what a group may carry: never
  *    `disclosure.none`, never `video.share`.
- * 2. **No group permission surface.** Group permissions are a service no route
- *    or page reaches yet.
+ * 2. **No group permission surface** then. Since AT-11c (ADR-0148) the groups
+ *    page shows each group's permissions and gives and takes them back,
+ *    through the web app's groups module only.
  */
 
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -77,12 +78,17 @@ describe("durable shape", () => {
 });
 
 describe("dormancy", () => {
-  it("adds no group permission caller to either application", () => {
-    const callers = ["apps/web", "apps/worker"]
+  it("changes a group's permissions from the web app's groups module only, and reads them in the domain", () => {
+    // AT-11c (ADR-0148): the groups page's two routes give and take back through that module, whose calls the
+    // groups shape test pins; the page reads them through the groups overview. The application's own tests are
+    // not callers.
+    const callers = ["apps/web", "apps/worker", "apps/ops"]
       .flatMap((app) => sourceFiles(join(REPO_ROOT, app)))
+      .filter((file) => !/\.test\.tsx?$/.test(file))
       .filter((file) =>
-        /grantPermission|revokePermission|listPermissions\(|groupPermission/.test(code(readFileSync(file, "utf8"))),
-      );
-    expect(callers).toEqual([]);
+        /grantPermission|revokePermission|listPermissions\w*\(|groupPermission/.test(code(readFileSync(file, "utf8"))),
+      )
+      .map((file) => file.slice(REPO_ROOT.length + 1));
+    expect(callers).toEqual(["apps/web/src/lib/groups.ts"]);
   });
 });

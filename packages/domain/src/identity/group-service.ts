@@ -43,9 +43,10 @@ export type GroupRenameRefusal = GroupNameRefusal | "STALE";
  * Why a group change found nothing to change, as a `NOT_FOUND`'s
  * `details.reason` (AT-9c, ADR-0143): no such group in the organization, no
  * such member of it, the group or the membership gone as an addition wrote,
- * or a removal of a member not in the group.
+ * a removal of a member not in the group, or taking back a permission the
+ * group does not give (AT-11c, ADR-0148).
  */
-export type GroupNotFoundReason = "GROUP" | "MEMBER" | "STALE" | "NOT_IN_GROUP";
+export type GroupNotFoundReason = "GROUP" | "MEMBER" | "STALE" | "NOT_IN_GROUP" | "NOT_GRANTED";
 
 /** What a refused group change was aimed at, for its audit entry. */
 interface RefusedTarget {
@@ -262,7 +263,11 @@ export class GroupService {
     return { granted: granted.outcome === "GRANTED" };
   }
 
-  /** Take a permission from a group. Revocation is prospective; nothing already done is undone. */
+  /**
+   * Take a permission from a group. Revocation is prospective; nothing already
+   * done is undone. Anything not found is `NOT_FOUND` with a
+   * {@link GroupNotFoundReason} as `details.reason`.
+   */
   async revokePermission(
     actorUserId: string,
     organizationId: string,
@@ -282,7 +287,7 @@ export class GroupService {
       await this.refuse(actor, "revoke_permission", reason, { groupId, ...refused });
     }
     if (revoked.outcome === "STALE") throw groupNotFound();
-    if (revoked.outcome === "NOT_GRANTED") throw new AppError("NOT_FOUND", "The group carries no such permission");
+    if (revoked.outcome === "NOT_GRANTED") throw notFound("The group carries no such permission", "NOT_GRANTED");
   }
 
   /**

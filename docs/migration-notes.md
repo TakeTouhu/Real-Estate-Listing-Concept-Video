@@ -2562,3 +2562,20 @@ two-step sign-in at their next page.
 **Rolling back.** To AT-11a's build: safe. The buttons and routes go. Grants
 given meanwhile stay, and stay in effect; an `OWNER` takes one back only
 through the database until AT-11b returns.
+
+## AT-11c — a group's permissions on the groups page
+
+**No migration** (ADR-0148). Migration 34 stays the last. The new
+repository read uses the primary key of `group_permissions`.
+
+**What changes at deploy.** Nothing in the schema or the data. Two routes,
+`POST /api/organizations/{id}/groups/{groupId}/permissions/grant` and
+`.../revoke`, write a group's permissions through `GroupService`, each with
+its Phase 6G audit entry, and the groups page shows them and offers them.
+Each member of a group given `permission.manage` or `billing.manage` is
+asked to set up two-step sign-in at their next page.
+
+**Rolling back.** To AT-11b's build: safe. The list, the forms and the
+routes go. Permissions given to groups meanwhile stay, and stay in effect;
+the groups page then offers Delete, Add and Remove as before, and the group
+service still refuses what the grant ceiling does not allow.

@@ -255,6 +255,13 @@ export function createPrismaGroupRepository(prisma: PrismaClient): GroupReposito
       return (await prisma.groupPermission.findMany({ where: { groupId, organizationId } })).map(toGroupPermission);
     },
 
+    async listPermissionsOfGroups(organizationId, groupIds) {
+      // By the primary key's leading column: the table has no index on the organization alone.
+      return (
+        await prisma.groupPermission.findMany({ where: { organizationId, groupId: { in: [...groupIds] } } })
+      ).map(toGroupPermission);
+    },
+
     async listPermissionsForMember(organizationId, userId) {
       return groupPermissionsForMember(prisma, organizationId, userId);
     },

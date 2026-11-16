@@ -47,7 +47,7 @@ is split further where it would exceed about 500 changed lines.
 | AT-8 | Change a member's role, remove a member (*split: AT-8a the role change, ADR-0139; AT-8b removal, ADR-0140*) | none |
 | AT-9 | Groups page (*split: AT-9a list and create, ADR-0141; AT-9b rename and delete, ADR-0142; AT-9c members, ADR-0143*) | none |
 | AT-10 | Property assignment on the Property page (*split: AT-10a changing it on the Property page, ADR-0144; AT-10b choosing it at creation, ADR-0145*) | none |
-| AT-11 | Individual and group permissions (*split: AT-11a a member's permissions page, ADR-0146; AT-11b individual grants, ADR-0147; AT-11c group permissions*) | none |
+| AT-11 | Individual and group permissions (*split: AT-11a a member's permissions page, ADR-0146; AT-11b individual grants, ADR-0147; AT-11c group permissions, ADR-0148*) | none |
 | AT-12 | Browser test and completion report | none |
 
 ## Defaults the product owner approved

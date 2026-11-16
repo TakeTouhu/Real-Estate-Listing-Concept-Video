@@ -1422,8 +1422,10 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       rename asks the permission first (ADR-0142). Only a crafted post
       reaches this, and the page never sends one. Asking the service first
       would audit it; it does not block the plan.
-- [ ] **Offer Delete only on groups the viewer may delete, once groups carry
-      permissions (AT-11).** The groups page's `mayDelete` is decided once
+- [x] **Offer Delete only on groups the viewer may delete, once groups carry
+      permissions (AT-11).** Done in AT-11c (ADR-0148 Decision 2): Delete,
+      Add and Remove are decided per group, under the grant ceiling of what
+      the group gives. The groups page's `mayDelete` was decided once
       for the organization: `group.manage` and the `OWNER` or `ADMIN` role
       (ADR-0141, ADR-0142). The grant ceiling can refuse an `ADMIN` one
       group's deletion when the group carries a permission the `ADMIN` may
@@ -1454,6 +1456,19 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       probe of a real member is audited. Refusing such a poster before the
       read, as one without `permission.manage` already is, would close it
       for every route. It does not block the plan.
+
+## Open in AT-11c — a group's permissions on the groups page
+
+- [ ] **Confirm that a member given `permission.manage` whose role reaches
+      no one may change the permissions of a group with no members.** The
+      group service asks the ceiling of each member a change reaches
+      (ADR-0061), so a `MANAGER`, `CREATOR`, `VIEWER` or `BILLING` member an
+      `OWNER` has given `permission.manage` reaches only a group with no
+      members, with what it holds, and the groups page offers exactly that
+      (ADR-0148). It reaches no member: whoever adds one later must pass the
+      ceiling on everything the group gives. Refusing them every group, as
+      a member's permissions page refuses them every member, would be a
+      one-line change in the service. It does not block the plan.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

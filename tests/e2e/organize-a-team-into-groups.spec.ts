@@ -3,12 +3,13 @@ import { signUpOwner } from "./support/owner";
 
 /**
  * Groups in a real browser (AT-9a, ADR-0141; AT-9b, ADR-0142; AT-9c,
- * ADR-0143): an owner follows the organization's Groups link, creates a group,
- * and sees it listed; a second group of the same name is refused and nothing
- * is added. The owner adds itself to the group and removes itself, then
- * renames the group and deletes it.
+ * ADR-0143; AT-11c, ADR-0148): an owner follows the organization's Groups
+ * link, creates a group, and sees it listed; a second group of the same name
+ * is refused and nothing is added. The owner gives the group a permission and
+ * takes it back, adds itself to the group and removes itself, then renames the
+ * group and deletes it.
  */
-test("an owner creates a group, changes its members, renames it and deletes it", async ({ page }) => {
+test("an owner creates a group, changes its permissions and members, renames it and deletes it", async ({ page }) => {
   const organizationName = `Shinjuku Homes ${Date.now()}`;
   await signUpOwner(page, organizationName);
   const card = page.locator(".card", { has: page.getByRole("heading", { name: `${organizationName} (OWNER)` }) });
@@ -26,6 +27,19 @@ test("an owner creates a group, changes its members, renames it and deletes it",
   await page.getByRole("button", { name: "Create group" }).click();
   await expect(page.getByRole("alert")).toHaveText("Another group of this organization already has that name.");
   await expect(page.getByRole("heading", { name: "Groups (1)" })).toBeVisible();
+
+  await expect(page.getByText("It gives its members no permissions.")).toBeVisible();
+  await page.locator('summary[aria-label="Give East office a permission…"]').click();
+  await page.getByLabel("Permission to give East office").selectOption("unit.view");
+  await page.getByRole("button", { name: "Give to group East office" }).click();
+  await expect(page.getByRole("status")).toHaveText("The group gives that permission now, to each of its members.");
+  await expect(page.getByText("It gives each of its members:")).toBeVisible();
+  await page.getByRole("button", { name: "Take back from East office the permission: See Units" }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "The group no longer gives that permission. A member keeps it only if their role, an individual grant or " +
+      "another group gives it.",
+  );
+  await expect(page.getByText("It gives its members no permissions.")).toBeVisible();
 
   await page.locator('summary[aria-label="Add member to East office…"]').click();
   // The owner is the organization's only member, so the only one to add.

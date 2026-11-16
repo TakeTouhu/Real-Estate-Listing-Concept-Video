@@ -1,14 +1,17 @@
 import { redirect } from "next/navigation";
 import {
   GROUP_NAME_MAX_LENGTH,
+  MFA_MANDATORY_PERMISSIONS,
   type GroupsOverview,
   type GroupsOverviewGroup,
   type GroupsOverviewMember,
+  type Permission,
 } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { GROUPS_ERRORS, GROUPS_NOTICES, getGroupsOverviewService, groupsError, groupsNotice } from "@/lib/groups";
 import { getIdentityServices } from "@/lib/identity";
+import { NOT_YET_USED, PERMISSION_NAMES, actsOnMembers } from "@/lib/permission-names";
 import { ROLE_NAMES } from "@/lib/role-names";
 
 export const dynamic = "force-dynamic";
@@ -16,12 +19,15 @@ export const dynamic = "force-dynamic";
 type Query = { notice?: string | string[]; error?: string | string[] };
 
 /**
- * An organization's groups and who belongs to each (AT-9a, ADR-0141), for a
- * holder of `group.view`. Viewing writes nothing. A holder of `group.manage`
- * creates and renames a group, and one who is also an `OWNER` or `ADMIN`
- * deletes one (AT-9b, ADR-0142); one who may also assign a member's role adds
- * them to a group or removes them (AT-9c, ADR-0143). Each route answers with a
- * code this page turns into a fixed sentence.
+ * An organization's groups, who belongs to each (AT-9a, ADR-0141) and the
+ * permissions each gives its members (AT-11c, ADR-0148), for a holder of
+ * `group.view`. Viewing writes nothing. A holder of `group.manage` creates and
+ * renames a group, and one who is also an `OWNER` or `ADMIN` deletes one
+ * (AT-9b, ADR-0142); one who may also assign a member's role adds them to a
+ * group or removes them (AT-9c, ADR-0143); a holder of `permission.manage`
+ * gives a group a permission or takes one back. Each is offered where the
+ * grant ceiling allows it on that group. Each route answers with a code this
+ * page turns into a fixed sentence.
  */
 export default async function GroupsPage({
   params,
@@ -97,9 +103,10 @@ export default async function GroupsPage({
                     ))}
                   </ul>
                 ) : null}
+                <GroupPermissions organizationId={organizationId} group={group} />
                 {group.addable.length > 0 ? <AddGroupMember organizationId={organizationId} group={group} /> : null}
                 {overview.mayManage ? <RenameGroup organizationId={organizationId} group={group} /> : null}
-                {overview.mayDelete ? <DeleteGroup organizationId={organizationId} group={group} /> : null}
+                {group.mayDelete ? <DeleteGroup organizationId={organizationId} group={group} /> : null}
               </li>
             ))}
           </ul>
@@ -138,7 +145,11 @@ function memberLine(member: GroupsOverviewMember): string {
 }
 
 /** Where a group's changes are posted. */
-function groupAction(organizationId: string, groupId: string, change: "rename" | "delete" | "members"): string {
+function groupAction(
+  organizationId: string,
+  groupId: string,
+  change: "rename" | "delete" | "members" | "permissions",
+): string {
   return `/api/organizations/${encodeURIComponent(organizationId)}/groups/${encodeURIComponent(groupId)}/${change}`;
 }
 
@@ -265,6 +276,103 @@ function RemoveGroupMember({
         <button type="submit" aria-label={`Remove from group ${group.name}: ${who}`} aria-describedby={effects}>
           Remove from group
         </button>
+      </form>
+    </details>
+  );
+}
+
+/** A permission as the page names it, saying so when nothing in VTaVision uses it yet (ADR-0146). */
+function permissionName(permission: Permission): string {
+  const unused = NOT_YET_USED.includes(permission) ? " (nothing in VTaVision uses it yet)" : "";
+  return `${PERMISSION_NAMES[permission]}${unused}`;
+}
+
+/**
+ * What a group gives each of its members (ADR-0061), with the form taking each
+ * back where the viewer may, and the form giving it another where there is one
+ * to give (ADR-0148).
+ */
+function GroupPermissions({ organizationId, group }: { organizationId: string; group: GroupsOverviewGroup }) {
+  const action = groupAction(organizationId, group.id, "permissions");
+  return (
+    <>
+      {group.permissions.length === 0 ? (
+        <p className="muted">It gives its members no permissions.</p>
+      ) : (
+        <>
+          <p>It gives each of its members:</p>
+          <ul>
+            {group.permissions.map((permission) => (
+              <li key={permission}>
+                {permissionName(permission)}
+                {group.revocable.includes(permission) ? (
+                  <form method="post" action={`${action}/revoke`}>
+                    <input type="hidden" name="permission" value={permission} />
+                    <button
+                      type="submit"
+                      aria-label={`Take back from ${group.name} the permission: ${PERMISSION_NAMES[permission]}`}
+                    >
+                      Take back
+                    </button>
+                  </form>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {group.givable.length > 0 ? <GiveGroupPermission action={`${action}/grant`} group={group} /> : null}
+    </>
+  );
+}
+
+/**
+ * The closed form that gives a group one of the permissions the viewer may
+ * give it. Opened, it says what giving brings before its list.
+ */
+function GiveGroupPermission({ action, group }: { action: string; group: GroupsOverviewGroup }) {
+  const notes = `give-${group.id}-notes`;
+  const mfa = group.givable.filter((permission) => MFA_MANDATORY_PERMISSIONS.includes(permission));
+  const quoted = mfa.map((permission) => `"${PERMISSION_NAMES[permission]}"`).join(" or ");
+  return (
+    <details>
+      <summary aria-label={`Give ${group.name} a permission…`}>Give a permission…</summary>
+      <form method="post" action={action}>
+        <p className="muted" id={notes}>
+          Each member of {group.name} will hold it, and so will anyone added to the group later. It never widens which
+          Properties they reach.
+          {group.givable.includes("property.create")
+            ? " \"Add Properties\" is never in effect for a Viewer or Billing member."
+            : null}
+          {mfa.length > 0 ? ` Whoever holds ${quoted} must use two-step sign-in.` : null}
+          {group.givable.some(actsOnMembers)
+            ? " Whatever a group gives, only an Owner or Admin can act on other members."
+            : null}
+        </p>
+        <label className="field" htmlFor={`give-${group.id}`}>
+          Permission
+        </label>
+        <select
+          id={`give-${group.id}`}
+          aria-label={`Permission to give ${group.name}`}
+          name="permission"
+          defaultValue=""
+          required
+        >
+          <option value="" disabled>
+            Choose a permission
+          </option>
+          {group.givable.map((permission) => (
+            <option key={permission} value={permission}>
+              {permissionName(permission)}
+            </option>
+          ))}
+        </select>
+        <p className="field">
+          <button type="submit" aria-label={`Give to group ${group.name}`} aria-describedby={notes}>
+            Give to group
+          </button>
+        </p>
       </form>
     </details>
   );

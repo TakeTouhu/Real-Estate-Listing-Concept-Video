@@ -415,3 +415,32 @@ describe.skipIf(!HAS_DB)("each check is judged on the group as the change commit
     expect(await auditRows("group.permission_granted")).toHaveLength(1);
   });
 });
+
+describe.skipIf(!HAS_DB)("listing several groups' permissions at once (AT-11c, ADR-0148)", () => {
+  it("lists the named groups' permissions, of this organization only, in one read", async () => {
+    await groups.grantPermission(OWNER, ORG, GROUP, "audit.view");
+    await groups.grantPermission(OWNER, ORG, GROUP, "unit.view");
+    await groups.grantPermission(OWNER, ORG, SECOND_GROUP, "video.view");
+    await groups.grantPermission(OWNER, OTHER_ORG, OTHER_GROUP, "audit.export");
+    const listed = async (organizationId: string, groupIds: readonly string[]) =>
+      (await deps.repos.groups.listPermissionsOfGroups(organizationId, groupIds))
+        .map(({ groupId, permission }) => `${groupId} ${permission}`)
+        .sort();
+    expect(await listed(ORG, [GROUP, SECOND_GROUP, OTHER_GROUP])).toEqual([
+      `${GROUP} audit.view`,
+      `${GROUP} unit.view`,
+      `${SECOND_GROUP} video.view`,
+    ]);
+    expect(await listed(ORG, [SECOND_GROUP])).toEqual([`${SECOND_GROUP} video.view`]);
+    expect(await listed(ORG, [])).toEqual([]);
+    expect(await listed(OTHER_ORG, [GROUP])).toEqual([]);
+    const [row] = await deps.repos.groups.listPermissionsOfGroups(ORG, [SECOND_GROUP]);
+    expect(row).toEqual({
+      groupId: SECOND_GROUP,
+      organizationId: ORG,
+      permission: "video.view",
+      grantedByUserId: OWNER,
+      grantedAt: expect.any(Date),
+    });
+  });
+});
