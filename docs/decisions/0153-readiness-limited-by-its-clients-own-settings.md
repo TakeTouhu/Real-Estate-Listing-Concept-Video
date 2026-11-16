@@ -177,9 +177,10 @@ records it.
   `docs/decisions/TODO.md`.
 - Three seconds is chosen, not derived. It is under the 5 that Prisma gives
   by default to open a connection, which a readiness request waited before
-  this change, and far over the 0.02 to 0.06 seconds a whole readiness
-  request took where it was measured. What watches readiness in production,
-  and with what limit of its own, is not known until part 2 of the plan
+  this change, and far over what a readiness request took when everything
+  answered: under 0.1 seconds where it was measured, once the development
+  server had compiled the route. What watches readiness in production, and
+  with what limit of its own, is not known until part 2 of the plan
   (`docs/decisions/TODO.md`).
 - With no `DATABASE_URL`, which a production start refuses (ADR-0151), the
   probe's client is a plain one, as before this change.
