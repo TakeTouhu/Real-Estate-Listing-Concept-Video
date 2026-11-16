@@ -1509,6 +1509,22 @@ blocks activation. The production email service is tracked below, under
       Decision 2 calls WaveSpeed the primary candidate. Part 2 of the plan
       builds result polling for the route the product owner confirms.
 
+## Open in RD-2b — how readiness is limited
+
+- [ ] **Give the readiness probe a limit of its own, or decide it has
+      none.** ADR-0152 Decision 2 leaves a probe with its client's limits
+      alone: a query on a connection the app holds waits for a database that
+      says nothing, and the request has no answer. Two ways are open. A
+      one-shot timer in the app's own code, which CLAUDE.md admits only by
+      explicit CTO authorization and the scheduler guard would have to name.
+      Or limits of the client's own, such as Prisma's `connect_timeout`,
+      `pool_timeout` and `socket_timeout` on a client that readiness alone
+      uses, which need no timer here but cost a second pool in each web
+      process, and answer for the database and not for the app's own
+      client: an app whose own pool has nothing to give would read ready.
+      The storage probe needs the same answer for each adapter. RD-2c is to
+      propose which.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of
