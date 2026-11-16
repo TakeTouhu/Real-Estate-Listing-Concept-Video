@@ -123,16 +123,19 @@ describe("the concrete fal status adapter has no production composition", () => 
     }
   });
 
-  it("adds no scheduler, cron, daemon or polling loop anywhere", () => {
+  it("names no timer or cron in any app's or package's sources, but the transport's one deadline", () => {
     // `AbortSignal.timeout` and the `timers` modules are `setTimeout` under other names
-    // (ADR-0152 Decision 2, ADR-0153 Decision 3).
+    // (ADR-0152 Decision 2, ADR-0153 Decision 3). The text is read whole and each name counted:
+    // with comments taken out first, whatever follows `//` or `/*` inside a string would go too.
     const timers = ["setInterval", "setTimeout", "AbortSignal.timeout", "timers", "node-cron", "cron.schedule"];
     const found = everySource().flatMap(({ name, text }) =>
-      timers.filter((banned) => code(text).includes(banned)).map((banned) => `${name}: ${banned}`),
+      timers
+        .map((banned) => ({ banned, times: text.split(banned).length - 1 }))
+        .filter(({ times }) => times > 0)
+        .map(({ banned, times }) => `${name}: ${banned} x${times}`),
     );
-    // The one timer is the transport's abort timer, which is a per-request
-    // deadline rather than a cadence.
-    expect(found).toEqual(["packages/video-providers/src/http.ts: setTimeout"]);
+    // The one timer is the transport's abort timer, a deadline for one request: named once, in one file.
+    expect(found).toEqual(["packages/video-providers/src/http.ts: setTimeout x1"]);
   });
 });
 

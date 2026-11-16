@@ -11,9 +11,9 @@ export const READINESS_STORAGE_KEY = "readiness/probe";
 /**
  * The seconds the readiness probe's database client gives a connection to
  * open and a query to be answered; it waits one second more for its one
- * connection. They are settings of the client's own, so a database that says
- * nothing ends the probe with no timer in the app's code (ADR-0153
- * Decision 1).
+ * connection. They are settings of the client's own: Prisma's engine keeps
+ * the deadlines that end the probe when a database says nothing, and none is
+ * set here (ADR-0153 Decision 1).
  */
 export const READINESS_DATABASE_LIMIT_SECONDS = 3;
 

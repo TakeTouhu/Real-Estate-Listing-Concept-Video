@@ -128,6 +128,24 @@ describe("buildReadiness", () => {
     }
   });
 
+  it("counts a database client that cannot be made as not answering", async () => {
+    const lines = logged();
+    exists.mockResolvedValue(false);
+    // What Node.js throws for an address that is not a URL: it carries the whole address.
+    clientSettings.mockImplementation(() => {
+      throw Object.assign(new TypeError("Invalid URL"), { code: "ERR_INVALID_URL", input: DATABASE_URL });
+    });
+    const readiness = await buildReadiness();
+
+    expect(readiness.status).toBe("degraded");
+    expect(readiness.checks.filter((check) => !check.ok)).toEqual([
+      { name: "database", ok: false, detail: "does not answer" },
+    ]);
+    expect(connect).not.toHaveBeenCalled();
+    expect(lines).toEqual([expect.objectContaining({ probe: "database", code: "ERR_INVALID_URL" })]);
+    expect(JSON.stringify([lines, readiness])).not.toContain("database.test");
+  });
+
   it("counts a storage adapter that refuses to be built as not answering", async () => {
     const lines = logged();
     queryRaw.mockResolvedValue([{ "?column?": 1 }]);

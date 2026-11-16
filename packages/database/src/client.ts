@@ -26,14 +26,21 @@ export function getPrismaClient(): PrismaClient {
  * query answered. The wait for the connection is given one second more, so
  * that a connection that cannot be opened in time is named as that (`P1001`)
  * and not as a pool with none to give (`P2024`). Whatever else the address
- * sets is kept. Prisma reads a limit of zero as none, so `seconds` is a whole
- * number of one or more.
+ * sets is kept, though it may be spelled otherwise (`/` in a value as `%2F`).
+ * Prisma reads a limit of zero as none, so `seconds` is a whole number of one
+ * or more.
  */
 export function limitedDatabaseUrl(url: string, seconds: number): string {
-  if (!Number.isInteger(seconds) || seconds < 1) {
+  if (!Number.isSafeInteger(seconds) || seconds < 1) {
     throw new RangeError("A limit is a whole number of seconds, one or more");
   }
-  const limited = new URL(url);
+  let limited: URL;
+  try {
+    limited = new URL(url);
+  } catch {
+    // Node.js's own error carries the whole address, its password too (`input`).
+    throw Object.assign(new TypeError("The database address is not a URL"), { code: "ERR_INVALID_URL" });
+  }
   const limits = { connection_limit: 1, connect_timeout: seconds, socket_timeout: seconds, pool_timeout: seconds + 1 };
   for (const [name, value] of Object.entries(limits)) limited.searchParams.set(name, String(value));
   return limited.toString();

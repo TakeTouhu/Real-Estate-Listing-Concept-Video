@@ -61,8 +61,10 @@ describe.skipIf(!DATABASE_URL)("the readiness probe's database client, limited b
   });
 
   it("gives up on a query the database has not answered, with P2010", async () => {
-    // Prisma's code for any raw query that failed. This one would be answered after three seconds.
+    // Prisma's code for any raw query that failed, so the time is held too: this one is answered after three seconds.
     // Last of the probe's own: the database goes on sleeping on the connection the client gave up on.
+    const asked = Date.now();
     expect(await failure(probe().$queryRaw`SELECT 1 FROM pg_sleep(3)`)).toBe("P2010");
+    expect(Date.now() - asked).toBeLessThan(2500);
   });
 });
