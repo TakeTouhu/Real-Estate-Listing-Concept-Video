@@ -2601,17 +2601,18 @@ deployment the two are the same.
 **Rolling back.** To AT-12's build: safe. Each service picks its adapters
 again in its own file.
 
-## RD-2 — a production start checked
+## RD-2a — a production start checked
 
 **No migration** (ADR-0151). Migration 34 stays the last.
 
 **What changes at deploy.** A production start of the web app (`next start`)
-now ends with exit code 1, listing every reason, unless its environment is
-valid, every adapter is a production one, an email adapter is chosen, and
+now ends with exit code 1 and its reasons on standard error, unless its
+environment is valid, every port's adapter is one production may use, and
 `DATABASE_URL`, `MFA_SECRET_KEY` and `APP_BASE_URL` are set. No production
-adapter exists until RD-3, RD-5 and RD-6, so no production start passes yet;
-nothing is deployed. `next dev`, the browser test and `next build` are
-unchanged. The readiness probe gains a `database` and a `storage` check.
+adapter exists for object storage, malware scanning or email until RD-3,
+RD-5 and RD-6, so no production start passes yet; nothing is deployed.
+`next dev`, the browser test and `next build` are unchanged.
 
 **Rolling back.** To RD-1's build: safe. A production start is no longer
-checked, and readiness stops asking the database and the storage.
+checked, and a misconfiguration again surfaces at the first request that
+meets it.

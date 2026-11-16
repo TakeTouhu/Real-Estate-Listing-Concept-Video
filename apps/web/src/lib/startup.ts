@@ -2,23 +2,33 @@ import type { ServerEnv } from "@app/shared";
 import { chooseWebAdapters, type WebAdapterChoice } from "./adapters";
 import { getServerEnv } from "./env";
 
-/**
- * The adapters that refuse production when built (ADR-0008, ADR-0085,
- * ADR-0126): a production start that chose one would fail at the first request
- * needing it, so it is refused at start instead (RD-2, ADR-0151). The offline
- * analysis and prompt moderation are not among them (ADR-0150 Decision 3).
- */
-const DEVELOPMENT_ADAPTERS = {
-  storage: ["shared-folder", "memory"],
-  malwareScanner: ["passthrough"],
-  email: ["outbox"],
-} as const satisfies { readonly [P in keyof WebAdapterChoice]?: readonly WebAdapterChoice[P][] };
+/** The adapters a production start may choose, for every port the web app has. */
+export type ProductionAdapters = { readonly [P in keyof WebAdapterChoice]: readonly WebAdapterChoice[P][] };
 
-const PORT_NAMES = {
+/**
+ * What production may run with (RD-2a, ADR-0151). Every port is listed, so an
+ * adapter or a port added to the choice is refused at a production start until
+ * it is allowed here.
+ */
+export const PRODUCTION_ADAPTERS: ProductionAdapters = {
+  // Each has development adapters only, which refuse production when built
+  // (ADR-0008, ADR-0085, ADR-0126). RD-3, RD-5 and RD-6 add production ones.
+  storage: [],
+  malwareScanner: [],
+  email: [],
+  // Not refused in production: no decision keeps them out (ADR-0150 Decision 3).
+  imageAnalysis: ["deterministic"],
+  promptModeration: ["offline"],
+};
+
+/** Each port by name, in the order its problem is reported. */
+const PORT_NAMES: Readonly<Record<keyof WebAdapterChoice, string>> = {
   storage: "object storage",
   malwareScanner: "malware scanning",
   email: "email",
-} as const satisfies Record<keyof typeof DEVELOPMENT_ADAPTERS, string>;
+  imageAnalysis: "image analysis",
+  promptModeration: "prompt moderation",
+};
 
 /**
  * The settings a production start needs beyond what the environment schema
@@ -31,19 +41,23 @@ const PRODUCTION_SETTINGS = ["DATABASE_URL", "MFA_SECRET_KEY", "APP_BASE_URL"] a
 
 /**
  * Why a production start of the web app is refused, one line each, or none
- * when it may start. Names ports, adapters and settings, never a value.
+ * when it may start. Names ports, adapters and settings; a setting is only
+ * asked whether it is set, so no line carries one's value.
  */
-export function productionStartProblems(env: ServerEnv): readonly string[] {
+export function productionStartProblems(
+  env: ServerEnv,
+  allowed: ProductionAdapters = PRODUCTION_ADAPTERS,
+): readonly string[] {
   const choice = chooseWebAdapters(env);
   const problems: string[] = [];
-  for (const port of Object.keys(DEVELOPMENT_ADAPTERS) as (keyof typeof DEVELOPMENT_ADAPTERS)[]) {
-    const adapters: readonly string[] = DEVELOPMENT_ADAPTERS[port];
-    if (adapters.includes(choice[port])) {
-      problems.push(`${PORT_NAMES[port]}: the development adapter "${choice[port]}" refuses production`);
-    }
-  }
-  if (choice.email === "none") {
-    problems.push("email: none is configured, so sign-up cannot send its verification link");
+  for (const port of Object.keys(PORT_NAMES) as (keyof WebAdapterChoice)[]) {
+    const adapters: readonly string[] = allowed[port];
+    if (adapters.includes(choice[port])) continue;
+    problems.push(
+      port === "email" && choice.email === "none"
+        ? "email: none is configured, so sign-up cannot send its verification link"
+        : `${PORT_NAMES[port]}: "${choice[port]}" is not a production adapter`,
+    );
   }
   for (const name of PRODUCTION_SETTINGS) {
     if (env[name] === undefined) problems.push(`${name} is not set`);
@@ -51,38 +65,52 @@ export function productionStartProblems(env: ServerEnv): readonly string[] {
   return problems;
 }
 
-/** How a start that is refused is reported and ended. */
+/** What a start check reads, and how a refused start is reported and ended. */
 export interface WebStart {
+  readonly loadEnv: () => ServerEnv;
+  readonly allowed: ProductionAdapters;
   readonly report: (message: string) => void;
   readonly exit: (code: number) => void;
 }
 
 const processStart: WebStart = {
+  loadEnv: getServerEnv,
+  allowed: PRODUCTION_ADAPTERS,
   report: (message) => console.error(message),
   exit: (code) => process.exit(code),
 };
 
+const REFUSED = "The web app cannot start in production";
+
 /**
  * Checked once as the web app's server starts (`src/instrumentation.ts`). A
- * production start with an invalid environment, a development adapter or a
- * missing setting reports why and ends the process: left running, Next.js
- * answers every request with an error instead. Nothing is checked outside
- * production, where `next dev` and the browser test choose development
- * adapters on purpose.
+ * production start with an invalid environment, an adapter production may not
+ * use or a missing setting reports why and ends the process: left running,
+ * Next.js answers every request with an error instead.
+ *
+ * A start is a production one when the ambient `NODE_ENV` or the configured
+ * one says so: neither can vouch for the other (ADR-0150 Decision 2). Any
+ * other start is left alone, as `next dev` and the browser test choose
+ * development adapters on purpose.
  */
-export function checkWebStart(loadEnv: () => ServerEnv = getServerEnv, start: WebStart = processStart): void {
-  if (process.env.NODE_ENV !== "production") return;
-  let problems: readonly string[];
+export function checkWebStart(start: WebStart = processStart): void {
+  const ambient = process.env.NODE_ENV === "production";
+  let env: ServerEnv;
   try {
-    problems = productionStartProblems(loadEnv());
+    env = start.loadEnv();
   } catch (error) {
-    // The schema's message lists each variable and what is wrong, never a value.
+    // No configured value can be read, so the ambient one decides alone.
+    // Elsewhere an invalid environment is reported where it is first read, as before.
+    if (!ambient) return;
+    // The schema's message names the invalid variables and what is wrong with each.
     const why = error instanceof Error ? error.message : "Its environment could not be read.";
-    start.report(`The web app cannot start in production. ${why}`);
+    start.report(`${REFUSED}. ${why}`);
     start.exit(1);
     return;
   }
+  if (!ambient && env.NODE_ENV !== "production") return;
+  const problems = productionStartProblems(env, start.allowed);
   if (problems.length === 0) return;
-  start.report(`The web app cannot start in production:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
+  start.report(`${REFUSED}:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
   start.exit(1);
 }

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { serverEnvSchema } from "./env";
+import { afterEach, describe, expect, it } from "vitest";
+import { loadServerEnv, resetServerEnvCache, serverEnvSchema } from "./env";
 
 const base = {
   SESSION_SECRET: "session-secret-abcdef123456",
@@ -114,5 +114,51 @@ describe("serverEnvSchema", () => {
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);
+  });
+});
+
+describe("loadServerEnv", () => {
+  afterEach(() => resetServerEnvCache());
+
+  const messageOf = (source: Record<string, string>): string => {
+    try {
+      loadServerEnv(source);
+    } catch (error) {
+      return error instanceof Error ? error.message : "";
+    }
+    return "";
+  };
+
+  it("names each invalid variable and what is wrong with it, and repeats none of their values", () => {
+    // Every setting that holds a secret, an address or a path, each invalid and each carrying a marker.
+    const invalid = {
+      NODE_ENV: "production",
+      DATABASE_URL: "marker-not-an-address",
+      SESSION_SECRET: "marker-short",
+      HEALTHCHECK_API_TOKEN: "marker-tiny",
+      STORAGE_SIGNING_SECRET: "marker-brief",
+      SHARED_STORAGE_DIR: "marker/relative",
+      EMAIL_OUTBOX_DIR: "marker/relative",
+      APP_BASE_URL: "http://marker.example.com/path",
+      MFA_SECRET_KEY: "marker-not-hex",
+      VIDEO_PROVIDER: "wavespeed",
+      WAVESPEED_API_KEY: "",
+      WAVESPEED_API_BASE_URL: "marker-not-an-address",
+      WAVESPEED_VIDEO_MODEL_ID: "marker/another-model",
+      WAVESPEED_WEBHOOK_SECRET: "",
+    };
+    const message = messageOf(invalid);
+    expect(message).toMatch(/^Invalid server environment configuration:\n {2}- /);
+    for (const name of Object.keys(invalid).filter((name) => name !== "NODE_ENV" && name !== "VIDEO_PROVIDER")) {
+      expect(message).toContain(`  - ${name}: `);
+    }
+    expect(message).not.toContain("marker");
+  });
+
+  it("repeats a value only where the setting takes one of a fixed list of words", () => {
+    const message = messageOf({ ...base, NODE_ENV: "staging", LOG_LEVEL: "loud" });
+    expect(message).toContain("  - NODE_ENV: Invalid enum value.");
+    expect(message).toContain("received 'staging'");
+    expect(message).toContain("received 'loud'");
   });
 });
