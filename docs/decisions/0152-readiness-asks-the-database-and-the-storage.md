@@ -4,9 +4,9 @@ Status: Accepted (RD-2b, 2026-11-16). The second part of the second milestone
 of production readiness, part 1, which the product owner approved on
 2026-11-16 (`/mnt/project-files/cto/production-readiness-proposal.md`; gap
 analysis `docs/production-readiness-gap-analysis.md`). RD-2a checked a
-production start (ADR-0151). RD-2 is now in three parts for size: RD-2c is to
-propose how readiness is limited, and to make it report a start that RD-2a
-could not check.
+production start (ADR-0151). RD-2 is in parts for size: RD-2c is to propose
+how readiness is limited, and a part after it is to make readiness report a
+start that RD-2a could not check.
 
 Builds on: ADR-0065 Decision 17 (readiness reports whether the MFA key is
 set), ADR-0150 (the web app's adapters chosen in one place).
@@ -51,7 +51,9 @@ says nothing leaves the request waiting. That was measured with a frozen
 database, below. A host lost without closing its connections is the same
 case until the connection itself gives up, and was not measured.
 
-Measured on a running app, with every PostgreSQL process stopped (SIGSTOP):
+Measured twice on the development server (`next dev`) against PostgreSQL 16,
+with no time limit set in `DATABASE_URL` and every PostgreSQL process stopped
+(SIGSTOP):
 
 | The request's query | Readiness |
 | --- | --- |
@@ -66,20 +68,22 @@ limits, and neither the shared folder nor the in-memory adapter sets one.
 Whatever asks for readiness must set a limit of its own and read no answer
 as not ready.
 
-A first version of this change gave a probe five seconds by a timer in the
-app's own code. CLAUDE.md admits none without explicit CTO authorization:
-ADR-0054 Decision 7 records that production code constructs none, and the
-guard in `queue-status-dormancy.test.ts` names its one exception, the
-transport's per-request deadline. This change adds no timer, and the guard
-now refuses `AbortSignal.timeout` as it does `setTimeout`. RD-2c is to
-propose how readiness is limited, as a decision of its own.
+A first version of this change gave a probe five seconds by
+`AbortSignal.timeout`, a timer in the app's own code. CLAUDE.md admits none
+without explicit CTO authorization: ADR-0054 Decision 7 records that
+production code constructs none, and the guard in
+`queue-status-dormancy.test.ts` names its one exception, the transport's
+per-request deadline. That guard did not name `AbortSignal.timeout`, so the
+first version passed it. This change adds no timer, and the guard now
+refuses `AbortSignal.timeout` as it does `setTimeout`. RD-2c is to propose
+how readiness is limited, as a decision of its own.
 
 ## Decision 3 — A probe that did not answer is logged by a code
 
 The web app logs each probe that did not answer as a warning with the
 component `readiness`, the probe's name and one code: the error's own code
-when it is a single word of capitals, digits and underscores, as Prisma's,
-Node.js's and the storage adapters' are (`P1001`, `EACCES`,
+when it is a single word of capitals, digits and underscores, as Prisma's
+and the storage adapters' are (`P1001`, `CONFIGURATION_ERROR`,
 `INTERNAL_ERROR`), and `UNEXPECTED` otherwise. The error's message is never
 logged.
 
@@ -108,15 +112,17 @@ down with readiness.
 - New: `apps/web/src/lib/readiness.ts` and its test, the route's test
   `tests/api/health-ready-route.test.ts`,
   `tests/integration/readiness-database-code.db.test.ts` and
-  `tests/e2e/readiness.spec.ts`. Changed: `apps/web/src/lib/health.ts` and the
-  readiness route's import.
+  `tests/e2e/readiness.spec.ts`. Changed: `apps/web/src/lib/health.ts` and
+  its test, and the readiness route's import.
 - Until readiness is limited, whatever watches it must set a limit of its
   own. The question is recorded in `docs/decisions/TODO.md`.
-- The scheduler guard refuses `AbortSignal.timeout` in production sources.
+- The scheduler guard refuses `AbortSignal.timeout` in the sources it reads:
+  the web app, the worker, and the database, storage and video-provider
+  packages.
 - A development machine with no database now reads `degraded` on readiness,
   where it read `ready`. Liveness, sign-in and every page are as before.
 - The browser test reads readiness from its own PostgreSQL database and
   shared folder.
 - No page, permission, migration or audit action changes.
-- RD-3 adds Google Cloud Storage as a storage adapter. Its `exists` is then
-  what readiness asks, with no change here.
+- RD-3 is to add Google Cloud Storage as a storage adapter. Its `exists`
+  would then be what readiness asks, with no change here.

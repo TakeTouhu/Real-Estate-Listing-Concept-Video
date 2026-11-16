@@ -1519,8 +1519,11 @@ blocks activation. The production email service is tracked below, under
       explicit CTO authorization and the scheduler guard would have to name.
       Or limits of the client's own, such as Prisma's `connect_timeout`,
       `pool_timeout` and `socket_timeout` on a client that readiness alone
-      uses, which need no timer here. The storage probe needs the same
-      answer for each adapter. RD-2c decides.
+      uses, which need no timer here but cost a second pool in each web
+      process, and answer for the database and not for the app's own
+      client: an app whose own pool has nothing to give would read ready.
+      The storage probe needs the same answer for each adapter. RD-2c is to
+      propose which.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

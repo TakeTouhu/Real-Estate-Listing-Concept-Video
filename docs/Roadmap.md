@@ -1053,10 +1053,10 @@ adds the database and the object storage to readiness.
 **RD-2b — readiness asks the database and the storage** (ADR-0152, no
 migration): the readiness probe asks the database for one query and the
 chosen object storage about one key, and reports whether each answered, never
-what it threw. It sets no time limit of its own yet. Liveness loads none of
-the database, storage, provider or log code. RD-2 is now in three parts for
-size: RD-2c is to propose how readiness is limited, and to make it report a
-start that RD-2a could not check.
+what it threw. It sets no time limit of its own. Liveness loads none of the
+database, storage, provider or log code. RD-2 is now in four parts for size:
+RD-2c is to propose how readiness is limited, and RD-2d is to make it report
+a start that RD-2a could not check.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —

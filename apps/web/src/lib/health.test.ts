@@ -28,8 +28,11 @@ const IMPORT_STATEMENT = /^import\b[\w\s{},*$]*["'][^"'\n]*["'];?/gm;
 const TYPES_ALONE = /^import type\s*[{*]/;
 /** White space and comments, which may stand between "from" and the module a re-export names. */
 const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|//.*)*`;
-/** Anything else that can load a module: the words for it anywhere, or a re-export. */
-const LOADS = new RegExp(String.raw`import|require|getBuiltinModule|\bfrom${GAP}["']`, "i");
+/**
+ * Anything else that can load a module: the words for it, or a re-export. Whole
+ * words, so a comment may say "imports only types" and a type may be `Required`.
+ */
+const LOADS = new RegExp(String.raw`\bimport\b|require(?![a-z])|getBuiltinModule|\bfrom${GAP}["']`, "i");
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -46,7 +49,8 @@ describe("buildLiveness", () => {
     /** A file's import statements, once nothing else in it is seen to load a module. */
     const imports = (file: string) => {
       const source = readFileSync(join(__dirname, file), "utf8");
-      expect(source.replace(IMPORT_STATEMENT, "")).not.toMatch(LOADS);
+      // The hits themselves, so a failure names what was found.
+      expect(source.replace(IMPORT_STATEMENT, "").match(new RegExp(LOADS.source, "gi")) ?? []).toEqual([]);
       return source.match(IMPORT_STATEMENT) ?? [];
     };
     // The compiler erases an import of types alone, so this module loads no other.
@@ -67,6 +71,10 @@ describe("buildLiveness", () => {
       'require.context("x");',
     ];
     for (const source of hidden) expect(source.replace(IMPORT_STATEMENT, "")).toMatch(LOADS);
+    // Ordinary words that only contain those letters are not taken for loading.
+    for (const plain of ["This module imports only types.", "No authentication required.", "Required<Inputs>"]) {
+      expect(plain).not.toMatch(LOADS);
+    }
     // A default import named "type" loads its module.
     for (const loading of ['import type  from "x";', 'import type , { a } from "x";']) {
       expect(loading).not.toMatch(TYPES_ALONE);

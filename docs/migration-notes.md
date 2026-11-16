@@ -2633,11 +2633,11 @@ database does not answer `SELECT 1`, or the chosen object storage does not
 answer whether one key holds an object. Readiness sets no time limit of its
 own (ADR-0152 Decision 2). When the database client has to open a
 connection, a database that is down or cannot be reached reads `503`, at
-once or after about 5 seconds. When it sends the query on a connection it
-holds, a database that says nothing leaves the request waiting. Whatever
-watches readiness must set a limit of its own and read no answer as not
-ready. It sends the operator's token, as before. The probes write no row and
-no object.
+once or after about 5 seconds; when it waits for a connection from its pool,
+after about 10. When it sends the query on a connection it holds, a database
+that says nothing leaves the request waiting. Whatever watches readiness
+must set a limit of its own and read no answer as not ready. It sends the
+operator's token, as before. The probes write no row and no object.
 
 **On a development machine.** With no database running, readiness reads
 `degraded` where it read `ready`. Nothing else changes.

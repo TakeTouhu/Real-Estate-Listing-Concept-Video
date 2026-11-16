@@ -34,7 +34,8 @@ beforeEach(() => {
 
 describe("GET /api/health/ready", () => {
   it("asks nothing of a request without the operator's token", async () => {
-    for (const authorization of [undefined, "Bearer not-the-token", `Bearer ${NEARLY}`, `Basic ${TOKEN}`, TOKEN]) {
+    const refused = [undefined, "Bearer ", "Bearer not-the-token", `Bearer ${NEARLY}`, `Basic ${TOKEN}`, TOKEN];
+    for (const authorization of refused) {
       const response = await ask(authorization);
       expect(response.status).toBe(401);
       expect(await response.json()).toMatchObject({ error: { code: "UNAUTHENTICATED" } });
