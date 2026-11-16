@@ -29,8 +29,8 @@ production scheduler activation and live Stripe charges stay BLOCKED
 | Malware scanning | `PassthroughMalwareScanner`, which knows only the EICAR test file, refused in production (ADR-0054 Decision 5) | `@app/storage` `scanner.ts` |
 | Email | the development outbox (ADR-0126), refused in production; with none, sign-up cannot send its verification link (ADR-0129) | `apps/web/src/lib/mailer.ts` |
 | Rate limiting | none, beyond locking an MFA sign-in after five wrong codes | |
-| Start-up checks | the environment schema refuses the development folders in production; an adapter refuses only when first built; `MFA_SECRET_KEY` is optional | `@app/shared` `env.ts` |
-| Readiness | a provider self-check and whether the MFA key is set; not the database or storage | `apps/web/src/lib/health.ts` |
+| Start-up checks | the environment schema refuses the development folders in production; an adapter refuses only when first built; `MFA_SECRET_KEY` is optional (*a production start is checked since RD-2, ADR-0151*) | `@app/shared` `env.ts` |
+| Readiness | a provider self-check and whether the MFA key is set; not the database or storage (*both since RD-2, ADR-0151*) | `apps/web/src/lib/health.ts` |
 | Same-origin check | on 20 of the 45 route files with a mutating handler; sign-in, sign-up, password reset, email verification, MFA, organization creation, uploads, analysis review, storyboard and video projects rely on `SameSite=Lax` alone (the entry in `docs/decisions/TODO.md` still names two routes) | `apps/web/src/lib/same-origin.ts` |
 | Security headers | none app-wide; the download route sets its own `Content-Security-Policy` and `nosniff` | `apps/web/src/app/api/storage/download/route.ts` |
 | Container images | none; `infra/` holds a README only | |

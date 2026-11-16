@@ -1,9 +1,11 @@
+import { getPrismaClient } from "@app/database";
 import type { ServerEnv } from "@app/shared";
 import {
   createVideoProvider,
   type ProviderGenerationInput,
   type VideoGenerationProvider,
 } from "@app/video-providers";
+import { getWebAdapters } from "./adapters";
 import { getServerEnv } from "./env";
 
 export const SERVICE_NAME = "real-estate-virtual-tour-ai-web";
@@ -31,18 +33,47 @@ export interface Readiness {
   readonly checks: readonly ReadinessCheck[];
 }
 
+/**
+ * What readiness asks of the services the web app depends on (RD-2,
+ * ADR-0151). Each resolves when its service answers and throws when it does
+ * not; neither changes anything.
+ */
+export interface ReadinessProbes {
+  /** The database answers a query. */
+  readonly database: () => Promise<void>;
+  /** The object storage answers whether a key holds an object. */
+  readonly storage: () => Promise<void>;
+  /** The storage adapter the web app chose (ADR-0150), reported beside it. */
+  readonly storageAdapter: string;
+}
+
+/** A key no one writes, asked about only to see the storage answer. */
+export const READINESS_STORAGE_KEY = "readiness/probe";
+
 export function buildLiveness(now: () => Date = () => new Date()): Liveness {
   return { status: "ok", service: SERVICE_NAME, version: SERVICE_VERSION, time: now().toISOString() };
+}
+
+/** Whether a probe answers, never what it threw: an error can name a host or a path. */
+async function answers(probe: () => Promise<void>): Promise<boolean> {
+  try {
+    await probe();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Pure readiness computation. Runs an offline provider self-check (a cost
  * estimate — no network) to confirm the adapter boundary is wired correctly,
- * and checks that MFA is configured.
+ * checks that MFA is configured, and asks the database and the object storage
+ * to answer (ADR-0151).
  */
 export async function computeReadiness(
   env: ServerEnv,
   provider: VideoGenerationProvider,
+  probes: ReadinessProbes,
   now: () => Date = () => new Date(),
 ): Promise<Readiness> {
   const checks: ReadinessCheck[] = [];
@@ -74,6 +105,11 @@ export async function computeReadiness(
   const mfaKeySet = env.MFA_SECRET_KEY !== undefined;
   checks.push({ name: "mfa", ok: mfaKeySet, detail: mfaKeySet ? "key set" : "MFA_SECRET_KEY not set" });
 
+  const [database, storage] = await Promise.all([answers(probes.database), answers(probes.storage)]);
+  checks.push({ name: "database", ok: database, detail: database ? "answers" : "does not answer" });
+  const storageDetail = `adapter=${probes.storageAdapter}`;
+  checks.push({ name: "storage", ok: storage, detail: `${storageDetail}, ${storage ? "answers" : "does not answer"}` });
+
   const ok = checks.every((c) => c.ok);
   return {
     status: ok ? "ready" : "degraded",
@@ -85,9 +121,19 @@ export async function computeReadiness(
   };
 }
 
-/** Wire the real configured environment and provider for the readiness check. */
+/** Wire the real configured environment, provider, database and storage for the readiness check. */
 export async function buildReadiness(): Promise<Readiness> {
   const env = getServerEnv();
   const provider = createVideoProvider(env);
-  return computeReadiness(env, provider);
+  const adapters = getWebAdapters();
+  return computeReadiness(env, provider, {
+    database: async () => {
+      await getPrismaClient().$queryRaw`SELECT 1`;
+    },
+    // Building the adapter is part of the check: a development adapter refuses production.
+    storage: async () => {
+      await adapters.storage().exists(READINESS_STORAGE_KEY);
+    },
+    storageAdapter: adapters.choice.storage,
+  });
 }

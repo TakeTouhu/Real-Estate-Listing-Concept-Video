@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { serverEnvSchema } from "@app/shared";
 import { FakeVideoProvider } from "@app/video-providers";
-import { buildLiveness, computeReadiness } from "./health";
+import { buildLiveness, computeReadiness, type ReadinessProbes } from "./health";
 
 const env = serverEnvSchema.parse({
   SESSION_SECRET: "session-secret-abcdef123456",
@@ -9,6 +9,12 @@ const env = serverEnvSchema.parse({
   STORAGE_SIGNING_SECRET: "storage-signing-secret-abc",
   MFA_SECRET_KEY: "11".repeat(32),
 });
+
+const answering: ReadinessProbes = {
+  database: () => Promise.resolve(),
+  storage: () => Promise.resolve(),
+  storageAdapter: "memory",
+};
 
 describe("buildLiveness", () => {
   it("returns ok with service metadata", () => {
@@ -20,7 +26,7 @@ describe("buildLiveness", () => {
 
 describe("computeReadiness", () => {
   it("reports ready when the provider adapter self-check passes", async () => {
-    const readiness = await computeReadiness(env, new FakeVideoProvider());
+    const readiness = await computeReadiness(env, new FakeVideoProvider(), answering);
     expect(readiness.status).toBe("ready");
     expect(readiness.provider).toBe("fake");
     expect(readiness.checks[0]).toMatchObject({ name: "video-provider-adapter", ok: true });
@@ -29,22 +35,66 @@ describe("computeReadiness", () => {
   it("reports degraded when the provider self-check throws", async () => {
     const failing = new FakeVideoProvider();
     failing.estimateCost = () => Promise.reject(new Error("nope"));
-    const readiness = await computeReadiness(env, failing);
+    const readiness = await computeReadiness(env, failing, answering);
     expect(readiness.status).toBe("degraded");
     expect(readiness.checks[0]?.ok).toBe(false);
   });
 
   it("reports whether the MFA key is set, and degraded without it (ADR-0065 Decision 17)", async () => {
-    const ready = await computeReadiness(env, new FakeVideoProvider());
+    const ready = await computeReadiness(env, new FakeVideoProvider(), answering);
     expect(ready.checks.find((check) => check.name === "mfa")).toEqual({ name: "mfa", ok: true, detail: "key set" });
     expect(JSON.stringify(ready)).not.toContain("11".repeat(32));
 
-    const withoutKey = await computeReadiness({ ...env, MFA_SECRET_KEY: undefined }, new FakeVideoProvider());
+    const withoutKey = await computeReadiness(
+      { ...env, MFA_SECRET_KEY: undefined },
+      new FakeVideoProvider(),
+      answering,
+    );
     expect(withoutKey.status).toBe("degraded");
     expect(withoutKey.checks.find((check) => check.name === "mfa")).toEqual({
       name: "mfa",
       ok: false,
       detail: "MFA_SECRET_KEY not set",
+    });
+  });
+  it("asks the database and the storage to answer (ADR-0151)", async () => {
+    const ready = await computeReadiness(env, new FakeVideoProvider(), answering);
+    expect(ready.checks.find((check) => check.name === "database")).toEqual({
+      name: "database",
+      ok: true,
+      detail: "answers",
+    });
+    expect(ready.checks.find((check) => check.name === "storage")).toEqual({
+      name: "storage",
+      ok: true,
+      detail: "adapter=memory, answers",
+    });
+  });
+
+  it("reports degraded when either does not answer, and never what it threw", async () => {
+    const secret = "postgresql://user:password@db.internal:5432/app";
+    for (const failing of ["database", "storage"] as const) {
+      const probes = { ...answering, [failing]: () => Promise.reject(new Error(secret)) };
+      const readiness = await computeReadiness(env, new FakeVideoProvider(), probes);
+      expect(readiness.status).toBe("degraded");
+      expect(readiness.checks.find((check) => check.name === failing)?.ok).toBe(false);
+      expect(readiness.checks.filter((check) => !check.ok).map((check) => check.name)).toEqual([failing]);
+      expect(JSON.stringify(readiness)).not.toContain("password");
+    }
+  });
+
+  it("counts a probe that throws before answering as not answering", async () => {
+    const probes: ReadinessProbes = {
+      ...answering,
+      storage: () => {
+        throw new Error("refused to build");
+      },
+    };
+    const readiness = await computeReadiness(env, new FakeVideoProvider(), probes);
+    expect(readiness.checks.find((check) => check.name === "storage")).toEqual({
+      name: "storage",
+      ok: false,
+      detail: "adapter=memory, does not answer",
     });
   });
 });
