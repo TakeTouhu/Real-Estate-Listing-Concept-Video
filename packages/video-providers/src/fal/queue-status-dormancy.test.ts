@@ -66,6 +66,14 @@ function productionSources(): { name: string; text: string }[] {
     .flatMap(sourceFiles);
 }
 
+/** The sources of every app and package, whichever exist: the scheduler guard reads them all (ADR-0153). */
+function everySource(): { name: string; text: string }[] {
+  return ["apps", "packages"]
+    .flatMap((group) => readdirSync(join(REPO_ROOT, group)).map((member) => join(REPO_ROOT, group, member, "src")))
+    .filter((dir) => existsSync(dir))
+    .flatMap(sourceFiles);
+}
+
 /** Comments stripped, so prose naming a symbol is not mistaken for using it. */
 function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
@@ -116,18 +124,15 @@ describe("the concrete fal status adapter has no production composition", () => 
   });
 
   it("adds no scheduler, cron, daemon or polling loop anywhere", () => {
-    for (const { name, text } of [
-      ...productionSources(),
-      ...sourceFiles(join(REPO_ROOT, "packages", "video-providers", "src")),
-    ]) {
-      // `AbortSignal.timeout` is `setTimeout` under another name (ADR-0152 Decision 2).
-      for (const banned of ["setInterval", "setTimeout(", "AbortSignal.timeout", "node-cron", "cron.schedule"]) {
-        // `setTimeout` is permitted only in the transport's abort timer, which
-        // is a per-request deadline rather than a cadence.
-        if (banned === "setTimeout(" && name.endsWith("src/http.ts")) continue;
-        expect(`${name}:${banned}: ${code(text).includes(banned)}`).toBe(`${name}:${banned}: false`);
-      }
-    }
+    // `AbortSignal.timeout` and the `timers` modules are `setTimeout` under other names
+    // (ADR-0152 Decision 2, ADR-0153 Decision 4).
+    const timers = ["setInterval", "setTimeout", "AbortSignal.timeout", "timers", "node-cron", "cron.schedule"];
+    const found = everySource().flatMap(({ name, text }) =>
+      timers.filter((banned) => code(text).includes(banned)).map((banned) => `${name}: ${banned}`),
+    );
+    // The one timer is the transport's abort timer, which is a per-request
+    // deadline rather than a cadence.
+    expect(found).toEqual(["packages/video-providers/src/http.ts: setTimeout"]);
   });
 });
 
