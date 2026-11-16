@@ -16,38 +16,13 @@ import {
   createDevelopmentEmailOutbox,
   createSharedFolderStorage,
 } from "@app/storage";
+import { chooseWebAdapters, type WebAdapterChoice } from "./adapter-choice";
 import { getServerEnv } from "./env";
 
 /**
- * Every adapter the web app runs with, chosen in this one place from its
- * environment (RD-1, ADR-0150). A production adapter is one more choice here,
- * with no change to the services, routes or pages that use the port.
+ * The web app's adapters, as its environment chooses them (`adapter-choice.ts`;
+ * RD-1, ADR-0150). Each is built when first asked for, then kept.
  */
-export interface WebAdapterChoice {
-  /** The folder shared with the worker (ADR-0085), or this process's own memory (ADR-0008). */
-  readonly storage: "shared-folder" | "memory";
-  /** The test scanner, which knows only the EICAR test file (ADR-0008). */
-  readonly malwareScanner: "passthrough";
-  /** The development outbox (ADR-0126), or none: then no email is sent (ADR-0129). */
-  readonly email: "outbox" | "none";
-  /** The offline analysis (ADR-0009). */
-  readonly imageAnalysis: "deterministic";
-  /** The offline check of a prompt against the preservation rules (ADR-0014). */
-  readonly promptModeration: "offline";
-}
-
-/** Which adapter serves each port, from the environment alone. Constructs nothing. */
-export function chooseWebAdapters(env: ServerEnv): WebAdapterChoice {
-  return {
-    storage: env.SHARED_STORAGE_DIR !== undefined ? "shared-folder" : "memory",
-    malwareScanner: "passthrough",
-    email: env.EMAIL_OUTBOX_DIR !== undefined ? "outbox" : "none",
-    imageAnalysis: env.ANALYSIS_PROVIDER,
-    promptModeration: "offline",
-  };
-}
-
-/** The web app's adapters. Each is built when first asked for, then kept. */
 export interface WebAdapters {
   readonly choice: WebAdapterChoice;
   readonly storage: () => ObjectStorage;

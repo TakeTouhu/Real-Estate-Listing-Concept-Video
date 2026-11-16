@@ -248,7 +248,9 @@ describe("who uses it", () => {
     expect(scanned).toContain("apps/worker/src/bootstrap.ts");
     const names = ["DevelopmentEmailOutbox", "EMAIL_OUTBOX_DIR", "EmailSender", "outgoingEmail("];
     const users = files.filter(({ text }) => names.some((name) => text.includes(name)));
+    // The choice only asks whether the folder is named (ADR-0151 Decision 5).
     expect(users.map(({ name }) => name).sort()).toEqual([
+      "apps/web/src/lib/adapter-choice.ts",
       "apps/web/src/lib/adapters.ts",
       "apps/web/src/lib/mailer.ts",
     ]);

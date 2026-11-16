@@ -56,7 +56,8 @@ export const serverEnvSchema = z
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 
     // PostgreSQL connection string for Prisma (Phase 1). Optional at build/test
-    // time; required at runtime for database-backed features.
+    // time; required at runtime for database-backed features, and a production
+    // start of the web app refuses without it (ADR-0151).
     DATABASE_URL: z.string().url().optional(),
 
     // Session signing secret for the web session cookie.
@@ -88,12 +89,14 @@ export const serverEnvSchema = z
     // The web app's own address, which every link it emails starts with
     // (ADR-0129): an http(s) origin with no path, query or fragment, https in
     // production. Never taken from a request. Optional because the worker
-    // shares this schema and emails nothing; unset, the web app emails no link.
+    // shares this schema and emails nothing; unset, the web app emails no link,
+    // and a production start of the web app refuses (ADR-0151).
     APP_BASE_URL: z.string().url().optional(),
 
     // AES-256-GCM key sealing MFA secrets at rest: 32 bytes as 64 hex
     // characters (ADR-0065). Optional because the worker shares this schema
-    // and never needs it; the web app fails closed without it (Decision 14).
+    // and never needs it; the web app fails closed without it (Decision 14),
+    // and a production start of the web app refuses (ADR-0151).
     MFA_SECRET_KEY: z
       .string()
       .regex(/^[0-9a-fA-F]{64}$/, "MFA_SECRET_KEY must be 32 bytes as 64 hex characters")

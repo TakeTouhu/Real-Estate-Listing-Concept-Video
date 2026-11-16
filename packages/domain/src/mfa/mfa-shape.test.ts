@@ -12,8 +12,8 @@ import { describe, expect, it } from "vitest";
  *    `lib/auth.ts` resolves a session, so no route or page can skip the code
  *    step. `AuthService` still knows nothing of MFA.
  * 3. **Set-up first** (MFA-3). A sign-in that must set MFA up reaches only the
- *    security page and the two set-up routes; the readiness probe says only
- *    whether the key is set.
+ *    security page and the two set-up routes; the readiness probe and the
+ *    production start check (ADR-0151) say only whether the key is set.
  * 4. **One more migration** (MFA-4): one `organizations` column, off for every
  *    existing organization, changed through one web route.
  */
@@ -98,8 +98,22 @@ describe("boundary", () => {
 
   it("builds the MFA service and reads its key in one web module, and nowhere in the worker", () => {
     expect(matching("apps/web", /new MfaService|createMfaSecretCipher/)).toEqual(["apps/web/src/lib/mfa.ts"]);
-    expect(matching("apps/web", /MFA_SECRET_KEY/).sort()).toEqual(["apps/web/src/lib/health.ts", "apps/web/src/lib/mfa.ts"]);
+    // Readiness and the production start check (ADR-0151) only ask whether it is set.
+    expect(matching("apps/web", /MFA_SECRET_KEY/).sort()).toEqual([
+      "apps/web/src/lib/health.ts",
+      "apps/web/src/lib/mfa.ts",
+      "apps/web/src/lib/startup.ts",
+    ]);
     expect(matching("apps/worker", /Mfa|mfa|MFA_SECRET_KEY/)).toEqual([]);
+  });
+
+  it("lets the production start check ask only whether the key is set (ADR-0151)", () => {
+    const startup = code(readFileSync(join(REPO_ROOT, "apps/web/src/lib/startup.ts"), "utf8"));
+    // Named once, in the list of settings a production start needs, each asked only whether it is set.
+    expect(startup.match(/MFA_SECRET_KEY/g)).toHaveLength(1);
+    expect(startup.match(/\benv\[/g)).toHaveLength(1);
+    expect(startup).toMatch(/env\[name\] === undefined/);
+    expect(startup).not.toMatch(/\benv\.(?!NODE_ENV\b)/);
   });
 
   it("lets the readiness probe report only whether the key is set", () => {

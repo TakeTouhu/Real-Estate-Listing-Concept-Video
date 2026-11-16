@@ -1041,7 +1041,7 @@ describe("the worker's existing seams, over the folder", () => {
 
 describe("where it is opened", () => {
   it("is opened in production code only by the web app's adapters and the development pipeline", () => {
-    // The web app's side is opened where its adapters are chosen (ADR-0150), the
+    // The web app's side is opened where its adapters are built (ADR-0150), the
     // worker's by the development pipeline's assembly (GS-9b, ADR-0106).
     // Anything else that opens the folder gets that review too.
     const repo = join(__dirname, "..", "..", "..");

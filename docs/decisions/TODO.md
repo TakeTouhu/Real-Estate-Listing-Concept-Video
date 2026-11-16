@@ -199,7 +199,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       or unscanned prohibited input is never sent to the AI Provider.
 - [ ] Extend the production-safety guard to boot-time validation of the whole
       adapter set, so a misconfigured production deployment fails before serving
-      any traffic rather than on first use (Phase 7 hardening).
+      any traffic rather than on first use (Phase 7 hardening). *Done for the
+      web app in RD-2a (ADR-0151): a production start is ended when a port's
+      adapter is not one production may use. The worker has no production
+      runtime yet; its start is checked with it, in part 2 of the production
+      readiness plan.*
 - [ ] Move image processing off the upload-completion request path into the
       async worker once the queue lands in Phase 4.
 - [ ] **Publish the `phase-*-complete` annotated tags to the remote.** Still
@@ -2259,7 +2263,9 @@ them is **built**. Each item below records the settled decision and what remains
       someone with MFA on cannot finish signing in, and since MFA-3 no one who
       must use MFA can sign in (ADR-0065 Decision 14). The readiness probe
       reports the missing key since MFA-3 (Decision 17); what remains is
-      deciding whether the web app should refuse to start without it. (7)
+      deciding whether the web app should refuse to start without it. *Settled
+      by the product owner on 2026-11-16 with the production readiness plan,
+      and done in RD-2a (ADR-0151): a production start refuses without it.* (7)
       Whether members should be told, other than at their next request, when an
       organization turns on its MFA requirement; there is no email-sending
       service (MFA-4).
