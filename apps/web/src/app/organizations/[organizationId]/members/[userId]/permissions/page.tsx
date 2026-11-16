@@ -154,16 +154,25 @@ function Change({
 }) {
   const name = PERMISSION_NAMES[row.permission];
   const limit = roleLimit(row.permission, member.role);
+  const mfa = MFA_MANDATORY_PERMISSIONS.includes(row.permission);
+  // What giving brings besides the permission, read with the button too.
+  const notes = `give-${row.permission}-notes`;
   return (
     <>
       {offersToGive(row) ? (
         <form method="post" action={`${action}/grant`}>
           <input type="hidden" name="permission" value={row.permission} />
-          {MFA_MANDATORY_PERMISSIONS.includes(row.permission) ? (
-            <span className="muted">Whoever holds it must use two-step sign-in. </span>
+          {mfa || limit !== undefined ? (
+            <span className="muted" id={notes}>
+              {mfa ? "Whoever holds it must use two-step sign-in. " : null}
+              {limit === undefined ? null : `${limit} `}
+            </span>
           ) : null}
-          {limit === undefined ? null : <span className="muted">{limit} </span>}
-          <button type="submit" aria-label={`Give ${member.email} the permission: ${name}`}>
+          <button
+            type="submit"
+            aria-label={`Give ${member.email} the permission: ${name}`}
+            aria-describedby={mfa || limit !== undefined ? notes : undefined}
+          >
             Give
           </button>
         </form>

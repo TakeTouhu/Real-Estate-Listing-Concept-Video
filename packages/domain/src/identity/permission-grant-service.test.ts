@@ -206,6 +206,44 @@ describe("grant", () => {
   });
 });
 
+describe("a permission the deployment withholds (ADR-0147)", () => {
+  const withholding = () => new PermissionGrantService(fx.deps, { withheld: ["disclosure.none"] });
+
+  it("refuses an OWNER giving it, and audits that it is withheld", async () => {
+    await expect(withholding().grant(fx.ownerId, fx.orgId, fx.ids.ADMIN, "disclosure.none")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(await grantsOf(fx.ids.ADMIN)).toEqual([]);
+    expect(audits("permission.grant_refused").map(({ metadata }) => metadata)).toEqual([
+      {
+        operation: "grant",
+        reason: "withheld",
+        actorRole: "OWNER",
+        targetUserId: fx.ids.ADMIN,
+        targetRole: "ADMIN",
+        permission: "disclosure.none",
+      },
+    ]);
+  });
+
+  it("refuses anyone past the ceiling for that reason first", async () => {
+    await expect(withholding().grant(fx.ids.ADMIN, fx.orgId, fx.ids.CREATOR, "disclosure.none")).rejects.toThrow();
+    await expect(withholding().grant(fx.ids.VIEWER, fx.orgId, fx.ids.CREATOR, "disclosure.none")).rejects.toThrow();
+    expect(audits("permission.grant_refused").map(({ metadata }) => metadata["reason"])).toEqual([
+      "protected",
+      "lacks_permission_manage",
+    ]);
+  });
+
+  it("gives everything else, and takes back a grant of it made before", async () => {
+    await withholding().grant(fx.ownerId, fx.orgId, fx.ids.CREATOR, "audit.view");
+    await fx.grants.grant(fx.ownerId, fx.orgId, fx.ids.CREATOR, "disclosure.none");
+    await withholding().revoke(fx.ownerId, fx.orgId, fx.ids.CREATOR, "disclosure.none");
+    expect(await grantsOf(fx.ids.CREATOR)).toEqual(["audit.view"]);
+    expect(audits("permission.grant_refused")).toEqual([]);
+  });
+});
+
 describe("revoke", () => {
   it("lets an OWNER take billing.manage back from an ADMIN, prospectively and audited", async () => {
     await fx.grants.grant(fx.ownerId, fx.orgId, fx.ids.ADMIN, "billing.manage");

@@ -328,6 +328,15 @@ describe("giving and taking back individual permissions (AT-11b, ADR-0147)", () 
     expect(said("billing.manage")).toBe("Whoever holds it must use two-step sign-in. Give");
     expect(said("member.manage")).toBe("Their role lets them invite or remove no one. Give");
     expect(said("billing.view")).toBe("Give");
+    // A screen reader reads the notes with the button.
+    const describedBy = (label: string) => {
+      const id = screen.getByRole("button", { name: `Give manager@example.com the permission: ${label}` })
+        .getAttribute("aria-describedby");
+      return id === null ? null : document.getElementById(id)?.textContent?.trim();
+    };
+    expect(describedBy("Buy Units")).toBe("Whoever holds it must use two-step sign-in.");
+    expect(describedBy("Invite and remove members")).toBe("Their role lets them invite or remove no one.");
+    expect(describedBy("See the plan's billing details on the Units page")).toBeNull();
   });
 
   it("offers an Admin only what the ceiling allows it, and nothing at all for an Owner", async () => {
@@ -351,6 +360,7 @@ describe("giving and taking back individual permissions (AT-11b, ADR-0147)", () 
   });
 
   it("offers nothing to a viewer without permission.manage, nor on the viewer's own page as an Admin", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.MANAGER, "audit.view");
     await renderAs("BILLING", ids.MANAGER);
     expect(changes()).toEqual([]);
     cleanup();
@@ -362,9 +372,16 @@ describe("giving and taking back individual permissions (AT-11b, ADR-0147)", () 
     await renderAs("OWNER", ids.ADMIN);
     expect(changes()).toEqual(["grant billing.manage"]);
     cleanup();
-    await answering("OWNER", ids.ADMIN, { "disclosure.none": { effective: true, granted: true, mayRevoke: true } });
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.ADMIN, "disclosure.none");
     render(await page(ids.ADMIN));
     expect(changes()).toEqual(["revoke disclosure.none", "grant billing.manage"]);
+  });
+
+  it("offers an Owner only to take back its own individual grant, and says what giving does", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.OWNER, "disclosure.none");
+    await renderAs("OWNER", ids.OWNER);
+    expect(changes()).toEqual(["revoke disclosure.none"]);
+    expect(screen.getByText(/^You can give them a permission they do not have, or take back one given/)).toBeTruthy();
   });
 
   it("says what a route sent back, and nothing for a code it does not know", async () => {
@@ -376,7 +393,7 @@ describe("giving and taking back individual permissions (AT-11b, ADR-0147)", () 
     cleanup();
     render(await page(ids.CREATOR, { error: "not-granted" }));
     expect(screen.getByRole("alert").textContent).toBe(
-      "They no longer hold that permission individually: it was taken back meanwhile.",
+      "They do not hold that permission individually, so there was nothing to take back.",
     );
     cleanup();
     render(await page(ids.CREATOR, { notice: "constructor", error: "role-changed" }));

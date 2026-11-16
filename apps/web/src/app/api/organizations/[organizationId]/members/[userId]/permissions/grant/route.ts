@@ -10,9 +10,9 @@ export const dynamic = "force-dynamic";
 /**
  * Give a member a permission individually, from their permissions page
  * (ADR-0147). Field: `permission`. The grant service decides
- * (`permission.manage`, the grant ceiling) and audits it (ADR-0058). The
- * answer is that page with a fixed notice or error, or the members page when
- * there is no such member.
+ * (`permission.manage`, the grant ceiling, what is withheld here) and audits
+ * it (ADR-0058). The answer is that page with a fixed notice or error, or the
+ * members page when there is no such member.
  */
 export async function POST(
   request: Request,

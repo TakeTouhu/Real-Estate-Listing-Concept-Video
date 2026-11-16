@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse, formOf, formString } from "@/lib/http";
-import { revokeMemberPermission, memberPermissionsPage } from "@/lib/member-permissions";
+import { memberPermissionsPage, revokeMemberPermission } from "@/lib/member-permissions";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -11,8 +11,9 @@ export const dynamic = "force-dynamic";
  * Take back a permission a member was given individually, from their
  * permissions page (ADR-0147). Field: `permission`. The grant service decides
  * (`permission.manage`, the grant ceiling) and audits it (ADR-0058). The
- * answer is that page with a fixed notice or error, or the members page when
- * there is no such member.
+ * answer is that page with a fixed notice or error; a grant or member no
+ * longer there is the same `not-granted`, and the page then shows which. Only
+ * an id longer than any account's answers with the members page.
  */
 export async function POST(
   request: Request,

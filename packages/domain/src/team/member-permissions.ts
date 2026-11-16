@@ -35,7 +35,8 @@ export interface MemberPermission {
   readonly groupNames: readonly string[] | null;
   /**
    * Whether the viewer may give it to the member individually: the member holds no such grant, and the viewer's
-   * `permission.manage` and the grant ceiling allow it, as `PermissionGrantService.grant` decides (ADR-0058).
+   * `permission.manage` and the grant ceiling allow it, as `PermissionGrantService.grant` decides (ADR-0058),
+   * before any permission a deployment withholds (ADR-0147).
    */
   readonly mayGrant: boolean;
   /** Whether the viewer may take back the member's individual grant of it: they hold one, and the ceiling allows it. */

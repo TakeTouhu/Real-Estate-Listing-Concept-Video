@@ -45,7 +45,7 @@ export const MEMBER_PERMISSIONS_ERRORS = {
   permission: "That permission cannot be given or taken back here.",
   "may-not-grant": "You cannot give that member that permission.",
   "may-not-revoke": "You cannot take that permission back from that member.",
-  "not-granted": "They no longer hold that permission individually: it was taken back meanwhile.",
+  "not-granted": "They do not hold that permission individually, so there was nothing to take back.",
   "grant-failed": "Something went wrong. Check below whether they have that permission.",
   "revoke-failed": "Something went wrong. Check below whether they still hold that permission individually.",
 } as const;
@@ -101,9 +101,13 @@ function getMemberPermissionsLogger(): Pick<Logger, "error"> {
 
 const errorCode = (error: unknown) => (error instanceof AppError ? error.code : "UNEXPECTED");
 
-/** Grants and their revocation (ADR-0058), asked only by the two functions below. */
+/**
+ * Grants and their revocation (ADR-0058), asked only by the two functions
+ * below, withholding what the page does not give (ADR-0147): giving one is
+ * refused and audited like any other refusal.
+ */
 function getPermissionGrantService(): PermissionGrantService {
-  return new PermissionGrantService(getIdentityServices().deps);
+  return new PermissionGrantService(getIdentityServices().deps, { withheld: NOT_GIVEN_HERE });
 }
 
 const isMemberId = (userId: string) => userId.length > 0 && userId.length <= MEMBER_ID_MAX_LENGTH;
@@ -111,8 +115,8 @@ const isMemberId = (userId: string) => userId.length > 0 && userId.length <= MEM
 /**
  * Give a member `permission` individually, as their permissions page asks
  * (ADR-0147). The grant service decides (`permission.manage`, the grant
- * ceiling) and audits it, refusals included. An id longer than any account's,
- * a permission that is not one, and one not given here are refused before
+ * ceiling, what is withheld here) and audits a member's refusal. An id longer
+ * than any account's, and a permission that is not one, are refused before
  * the service is asked, so they never reach the audit log. A failure that is
  * not a refusal is logged by its error code alone.
  */
@@ -124,7 +128,7 @@ export async function grantMemberPermission(
   log: Pick<Logger, "error"> = getMemberPermissionsLogger(),
 ): Promise<MemberPermissionsOutcome> {
   if (!isMemberId(memberUserId)) return { gone: true };
-  if (!isPermission(permission) || NOT_GIVEN_HERE.includes(permission)) return { error: "permission" };
+  if (!isPermission(permission)) return { error: "permission" };
   try {
     await getPermissionGrantService().grant(actorUserId, organizationId, memberUserId, permission);
     return { notice: "granted" };

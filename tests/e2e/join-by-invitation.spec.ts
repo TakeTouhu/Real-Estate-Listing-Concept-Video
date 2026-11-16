@@ -15,7 +15,7 @@ import { newEmail, newPassword, provisionPremiumPlan, signUpOwner } from "./supp
  * (AT-11b, ADR-0147), and finally removes the colleague, whose page no longer
  * lists the organization (AT-8b, ADR-0140).
  */
-test("a colleague opens an emailed invitation, signs up, verifies, joins, gets another role and is removed", async ({
+test("a colleague joins from an emailed invitation, gets another role and a permission, and is removed", async ({
   page,
   browser,
 }) => {

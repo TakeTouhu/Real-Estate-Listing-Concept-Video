@@ -122,7 +122,7 @@ async function signIn(name: string): Promise<void> {
 const posting = (
   change: "grant" | "revoke",
   userId: string,
-  fields: Record<string, string>,
+  fields: Record<string, string> | [string, string][],
   organizationId = orgId,
   headers: Record<string, string> = { origin: SITE },
 ) =>
@@ -201,16 +201,41 @@ describe("giving a member a permission", () => {
     expect(audited("permission.grant_refused").map(({ metadata }) => metadata["reason"])).toEqual([reason]);
   });
 
-  it.each([[""], ["member.views"], ["MEMBER.VIEW"], ["constructor"], ["disclosure.none"]])(
+  it.each([[""], ["member.views"], ["MEMBER.VIEW"], ["constructor"]])(
     "refuses %o without asking the service",
     async (permission) => {
       const entries = deps.repos.auditLogs.all().length;
       expect(landing(await giving(ids.CREATOR!, permission), ids.CREATOR!)).toBe("error=permission");
-      expect(landing(await posting("grant", ids.CREATOR!, {}), ids.CREATOR!)).toBe("error=permission");
       expect(await grantsOf(ids.CREATOR!)).toEqual([]);
       expect(deps.repos.auditLogs.all()).toHaveLength(entries);
     },
   );
+
+  it("refuses a form without a permission without asking the service", async () => {
+    const entries = deps.repos.auditLogs.all().length;
+    expect(landing(await posting("grant", ids.CREATOR!, {}), ids.CREATOR!)).toBe("error=permission");
+    expect(deps.repos.auditLogs.all()).toHaveLength(entries);
+  });
+
+  it("gives the first permission a form names", async () => {
+    const fields: [string, string][] = [
+      ["permission", "audit.view"],
+      ["permission", "billing.manage"],
+    ];
+    expect(landing(await posting("grant", ids.CREATOR!, fields), ids.CREATOR!)).toBe("notice=granted");
+    expect(await grantsOf(ids.CREATOR!)).toEqual(["audit.view"]);
+  });
+
+  it("refuses an owner disclosure.none, which is not given here yet, and audits it", async () => {
+    expect(landing(await giving(ids.ADMIN!, "disclosure.none"), ids.ADMIN!)).toBe("error=may-not-grant");
+    await signIn("team.admin");
+    expect(landing(await giving(ids.CREATOR!, "disclosure.none"), ids.CREATOR!)).toBe("error=may-not-grant");
+    expect([await grantsOf(ids.ADMIN!), await grantsOf(ids.CREATOR!)]).toEqual([[], []]);
+    expect(audited("permission.grant_refused").map(({ metadata }) => metadata["reason"])).toEqual([
+      "withheld",
+      "protected",
+    ]);
+  });
 
   it("finds no member who is unknown, an outsider, or of another organization", async () => {
     const outsider = await register("outsider");
