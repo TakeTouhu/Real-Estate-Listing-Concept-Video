@@ -1,10 +1,17 @@
 import { redirect } from "next/navigation";
-import type { MemberPermissions, Scope } from "@app/domain";
+import { MFA_MANDATORY_PERMISSIONS, type MemberPermission, type MemberPermissions, type Scope } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
-import { getMemberPermissionsService } from "@/lib/member-permissions";
-import { NOT_YET_USED, PERMISSION_AREAS, PERMISSION_NAMES, permissionAnswer } from "@/lib/permission-names";
+import {
+  MEMBER_PERMISSIONS_ERRORS,
+  MEMBER_PERMISSIONS_NOTICES,
+  getMemberPermissionsService,
+  memberPermissionsError,
+  memberPermissionsNotice,
+  offersToGive,
+} from "@/lib/member-permissions";
+import { NOT_YET_USED, PERMISSION_AREAS, PERMISSION_NAMES, permissionAnswer, roleLimit } from "@/lib/permission-names";
 import { ROLE_NAMES } from "@/lib/role-names";
 
 export const dynamic = "force-dynamic";
@@ -16,20 +23,30 @@ const REACH: Record<Scope, string> = {
   OWN: "the Properties they are responsible for",
 };
 
+type Query = { notice?: string | string[]; error?: string | string[] };
+
 /**
  * What one member of an organization may do, and where each permission comes
  * from: their role, an individual grant or their groups (AT-11a, ADR-0146).
  * For a holder of `member.view`, who reaches it from the members page.
- * Viewing writes nothing.
+ * Viewing writes nothing. A viewer the grant ceiling allows gives the member
+ * a permission they cannot use yet, and takes back one given individually
+ * (AT-11b, ADR-0147); the routes answer with a code this page turns into a
+ * fixed sentence.
  */
 export default async function MemberPermissionsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ organizationId: string; userId: string }>;
+  searchParams?: Promise<Query>;
 }) {
   const current = await getCurrentUser();
   if (!current) redirect("/login");
   const { organizationId, userId } = await params;
+  const query = (await searchParams) ?? {};
+  const notice = memberPermissionsNotice(query.notice);
+  const failure = memberPermissionsError(query.error);
   const membersPage = `/organizations/${encodeURIComponent(organizationId)}/members`;
 
   let view: MemberPermissions;
@@ -54,11 +71,25 @@ export default async function MemberPermissionsPage({
   const memberships = await getIdentityServices().organizations.listForUser(current.user.id);
   const name = memberships.find(({ organization }) => organization.id === organizationId)?.organization.name;
   const { member } = view;
+  const action = `/api/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(
+    member.userId,
+  )}/permissions`;
+  const changes = view.permissions.some((row) => offersToGive(row) || row.mayRevoke);
 
   return (
     <section>
       <h1>Permissions</h1>
       {name ? <p className="muted">{name}</p> : null}
+      {notice ? (
+        <p className="status-ok" role="status">
+          {MEMBER_PERMISSIONS_NOTICES[notice]}
+        </p>
+      ) : null}
+      {failure ? (
+        <p className="status-bad" role="alert">
+          {MEMBER_PERMISSIONS_ERRORS[failure]}
+        </p>
+      ) : null}
       <div className="card">
         <h2>
           {member.name}
@@ -73,6 +104,13 @@ export default async function MemberPermissionsPage({
           or Billing member can never add Properties, however it is given. Their permissions over Properties, photos
           and videos apply to {REACH[view.scope]}, which their role decides.
         </p>
+        {changes ? (
+          <p className="muted">
+            You can give them a permission they do not have, or take back one given to them individually. One from
+            their role or groups changes only with their role or groups. A permission given individually never widens
+            which Properties they reach, and stays if their role changes.
+          </p>
+        ) : null}
       </div>
       {PERMISSION_AREAS.map((area) => (
         <div className="card" key={area.title}>
@@ -87,6 +125,7 @@ export default async function MemberPermissionsPage({
                   {NOT_YET_USED.includes(row.permission) ? (
                     <span className="muted"> Nothing in VTaVision uses it yet.</span>
                   ) : null}
+                  <Change action={action} member={member} row={row} />
                 </li>
               ))}
           </ul>
@@ -96,6 +135,57 @@ export default async function MemberPermissionsPage({
         <a href={membersPage}>Back to members</a>
       </p>
     </section>
+  );
+}
+
+/**
+ * The forms of one permission: giving it, when the page offers to, and taking
+ * back the member's individual grant of it, when the viewer may. Giving says
+ * what holding it brings beyond the permission itself.
+ */
+function Change({
+  action,
+  member,
+  row,
+}: {
+  action: string;
+  member: MemberPermissions["member"];
+  row: MemberPermission;
+}) {
+  const name = PERMISSION_NAMES[row.permission];
+  const limit = roleLimit(row.permission, member.role);
+  const mfa = MFA_MANDATORY_PERMISSIONS.includes(row.permission);
+  // What giving brings besides the permission, read with the button too.
+  const notes = `give-${row.permission}-notes`;
+  return (
+    <>
+      {offersToGive(row) ? (
+        <form method="post" action={`${action}/grant`}>
+          <input type="hidden" name="permission" value={row.permission} />
+          {mfa || limit !== undefined ? (
+            <span className="muted" id={notes}>
+              {mfa ? "Whoever holds it must use two-step sign-in. " : null}
+              {limit === undefined ? null : `${limit} `}
+            </span>
+          ) : null}
+          <button
+            type="submit"
+            aria-label={`Give ${member.email} the permission: ${name}`}
+            aria-describedby={mfa || limit !== undefined ? notes : undefined}
+          >
+            Give
+          </button>
+        </form>
+      ) : null}
+      {row.mayRevoke ? (
+        <form method="post" action={`${action}/revoke`}>
+          <input type="hidden" name="permission" value={row.permission} />
+          <button type="submit" aria-label={`Take back from ${member.email} the permission: ${name}`}>
+            Take back
+          </button>
+        </form>
+      ) : null}
+    </>
   );
 }
 

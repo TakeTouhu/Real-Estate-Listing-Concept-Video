@@ -51,6 +51,10 @@ async function row(viewer: Role, member: Role, permission: Permission): Promise<
 }
 
 const none = { fromRole: false, granted: false, groupCount: 0, groupNames: [] };
+/** What an `OWNER` may do with a permission a member holds no individual grant of, but one: give it. */
+const givable = { mayGrant: true, mayRevoke: false };
+/** What an `OWNER` may do with an individual grant a member holds: take it back. */
+const revocable = { mayGrant: false, mayRevoke: true };
 
 describe("a member's permissions", () => {
   it("names the member and lists every permission a member can hold, in vocabulary order", async () => {
@@ -70,11 +74,13 @@ describe("a member's permissions", () => {
       effective: true,
       ...none,
       fromRole: true,
+      ...givable,
     });
     expect(view.permissions.find((p) => p.permission === "billing.manage")).toEqual({
       permission: "billing.manage",
       effective: false,
       ...none,
+      ...givable,
     });
   });
 
@@ -98,6 +104,7 @@ describe("a member's permissions", () => {
       granted: true,
       groupCount: 2,
       groupNames: ["East", "West"],
+      ...revocable,
     });
     expect(await row("OWNER", "CREATOR", "group.view")).toMatchObject({ effective: true, groupNames: ["East"] });
     expect(await row("OWNER", "CREATOR", "billing.view")).toEqual({
@@ -105,15 +112,17 @@ describe("a member's permissions", () => {
       effective: true,
       ...none,
       granted: true,
+      ...revocable,
     });
     expect(await row("OWNER", "CREATOR", "property.view")).toEqual({
       permission: "property.view",
       effective: true,
       ...none,
       fromRole: true,
+      ...givable,
     });
     const audit = await row("OWNER", "CREATOR", "audit.view");
-    expect(audit).toEqual({ permission: "audit.view", effective: false, ...none });
+    expect(audit).toEqual({ permission: "audit.view", effective: false, ...none, ...givable });
   });
 
   it("shows property.create a group gives a VIEWER, which is never in effect for one", async () => {
@@ -125,6 +134,9 @@ describe("a member's permissions", () => {
       granted: false,
       groupCount: 1,
       groupNames: ["East"],
+      // Never granted to a VIEWER (ADR-0058).
+      mayGrant: false,
+      mayRevoke: false,
     });
     expect(await row("OWNER", "CREATOR", "property.create")).toMatchObject({ effective: true, fromRole: true });
   });
@@ -152,7 +164,7 @@ describe("a member's permissions", () => {
     await elsewhere.grantPermission(ids.outsider, other, id, "member.view");
     await elsewhere.addMember(ids.outsider, other, id, ids.CREATOR);
     const here = await row("OWNER", "CREATOR", "member.view");
-    expect(here).toEqual({ permission: "member.view", effective: false, ...none });
+    expect(here).toEqual({ permission: "member.view", effective: false, ...none, ...givable });
     expect((await service.view(ids.outsider, other, ids.CREATOR)).permissions).toContainEqual(
       expect.objectContaining({ permission: "member.view", effective: true, groupNames: ["Elsewhere"] }),
     );
@@ -190,4 +202,76 @@ describe("who sees a member's permissions", () => {
     vi.spyOn(deps.repos.users, "findById").mockResolvedValueOnce(null);
     await expect(service.view(ids.OWNER, orgId, ids.ADMIN)).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+});
+
+describe("which individual grants the viewer may give or take back (AT-11b, ADR-0147)", () => {
+  it("lets an ADMIN give only what it holds, to MANAGER, CREATOR and VIEWER members, nothing protected", async () => {
+    expect(await row("ADMIN", "MANAGER", "member.manage")).toMatchObject(givable);
+    expect(await row("ADMIN", "VIEWER", "audit.export")).toMatchObject(givable);
+    for (const permission of ["permission.manage", "billing.manage", "disclosure.none"] as const) {
+      expect(await row("ADMIN", "CREATOR", permission)).toMatchObject({ mayGrant: false, mayRevoke: false });
+    }
+    for (const member of ["OWNER", "ADMIN", "BILLING"] as const) {
+      expect(await row("ADMIN", member, "audit.view")).toMatchObject({ mayGrant: false, mayRevoke: false });
+    }
+  });
+
+  it("lets no one without permission.manage, nor a MANAGER given it, give or take back anything", async () => {
+    const grants = new PermissionGrantService(deps);
+    await grants.grant(ids.OWNER, orgId, ids.CREATOR, "audit.view");
+    await grants.grant(ids.OWNER, orgId, ids.MANAGER, "permission.manage");
+    for (const viewer of ["BILLING", "MANAGER"] as const) {
+      const { permissions } = await service.view(ids[viewer], orgId, ids.CREATOR);
+      expect(permissions.filter(({ mayGrant, mayRevoke }) => mayGrant || mayRevoke)).toEqual([]);
+    }
+  });
+
+  it("never offers property.create to a VIEWER, yet takes back a grant of it made before a role change", async () => {
+    await new PermissionGrantService(deps).grant(ids.OWNER, orgId, ids.CREATOR, "property.create");
+    await deps.repos.memberships.changeRole(orgId, ids.CREATOR, "CREATOR", "VIEWER", {
+      organizationId: orgId,
+      actorUserId: ids.OWNER,
+      action: "member.role_changed",
+      resourceType: "membership",
+      resourceId: ids.CREATOR,
+      metadata: {},
+    });
+    expect(await row("OWNER", "CREATOR", "property.create")).toMatchObject({ effective: false, ...revocable });
+    expect(await row("OWNER", "VIEWER", "property.create")).toMatchObject({ mayGrant: false, mayRevoke: false });
+  });
+
+  /**
+   * For every viewer and member, whether the page says a grant may be given
+   * or taken back is what the grant service then does with it.
+   */
+  it.each(["OWNER", "ADMIN", "MANAGER", "BILLING"] as const)(
+    "says what the grant service allows a %s, for every member and permission",
+    async (viewer) => {
+      const grants = new PermissionGrantService(deps);
+      await grants.grant(ids.OWNER, orgId, ids.MANAGER, "permission.manage");
+      const succeeds = (change: Promise<unknown>) =>
+        change.then(
+          () => true,
+          () => false,
+        );
+      for (const member of ["OWNER", "ADMIN", "MANAGER", "CREATOR", "VIEWER", "BILLING"] as const) {
+        const giving = (await service.view(ids[viewer], orgId, ids[member])).permissions;
+        for (const { permission, mayGrant, granted } of giving) {
+          if (granted) continue;
+          const given = await succeeds(grants.grant(ids[viewer], orgId, ids[member], permission));
+          expect([permission, given]).toEqual([permission, mayGrant]);
+          if (given) await grants.revoke(ids.OWNER, orgId, ids[member], permission);
+        }
+        // Every individual grant an OWNER may make, then what the viewer may take back of them.
+        for (const { permission } of giving) await succeeds(grants.grant(ids.OWNER, orgId, ids[member], permission));
+        const taking = (await service.view(ids[viewer], orgId, ids[member])).permissions;
+        for (const { permission, mayRevoke, granted } of taking.filter((p) => p.granted)) {
+          const taken = await succeeds(grants.revoke(ids[viewer], orgId, ids[member], permission));
+          expect([permission, taken, granted]).toEqual([permission, mayRevoke, true]);
+          if (taken) await grants.grant(ids.OWNER, orgId, ids[member], permission);
+        }
+        expect(taking.filter((p) => !p.granted).every(({ mayRevoke }) => !mayRevoke)).toBe(true);
+      }
+    },
+  );
 });

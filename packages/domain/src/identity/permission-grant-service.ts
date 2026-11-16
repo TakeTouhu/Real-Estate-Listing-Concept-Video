@@ -18,9 +18,16 @@ import type { Membership, PermissionGrant } from "./types";
  *
  * A grant answers *what* a member may do, never *which* rows it reaches: Scope
  * stays fixed by role.
+ *
+ * A deployment may withhold permissions it does not grant yet (ADR-0147):
+ * giving one is then refused and audited too, after `permission.manage` and
+ * the ceiling, so a member past the ceiling is still refused for that reason.
  */
 export class PermissionGrantService {
-  constructor(private readonly deps: IdentityServiceDeps) {}
+  constructor(
+    private readonly deps: IdentityServiceDeps,
+    private readonly options: PermissionGrantOptions = {},
+  ) {}
 
   /** Grant `permission` to a member. Granting one it already holds changes nothing. */
   async grant(
@@ -86,6 +93,9 @@ export class PermissionGrantService {
     if (!target) throw new AppError("NOT_FOUND", "Membership not found");
     const refusal = grantRefusal(operation, actor.role, actor.permissions, target.role, permission);
     if (refusal !== null) await this.refuse(actor, operation, targetUserId, target.role, permission, refusal);
+    if (operation === "grant" && this.options.withheld?.includes(permission)) {
+      await this.refuse(actor, operation, targetUserId, target.role, permission, "withheld");
+    }
     return { actor, target };
   }
 
@@ -95,7 +105,7 @@ export class PermissionGrantService {
     targetUserId: string,
     targetRole: Role | null,
     permission: Permission,
-    reason: GrantRefusal | "lacks_permission_manage",
+    reason: GrantRefusal | "lacks_permission_manage" | "withheld",
   ): Promise<never> {
     await recordAudit(this.deps, {
       organizationId: actor.organizationId,
@@ -107,6 +117,16 @@ export class PermissionGrantService {
     });
     throw new AppError("FORBIDDEN", `Role ${actor.role} may not ${operation} '${permission}' here`);
   }
+}
+
+/** How a deployment narrows what may be granted, within the ceiling. */
+export interface PermissionGrantOptions {
+  /**
+   * Permissions no one is given here yet, an `OWNER` included: giving one is
+   * refused and audited as `withheld`. Taking back a grant of one is not
+   * affected.
+   */
+  readonly withheld?: readonly Permission[];
 }
 
 /** The audit entry a grant change commits with it. */

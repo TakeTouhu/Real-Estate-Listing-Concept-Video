@@ -4,6 +4,7 @@ import type { IdentityServiceDeps } from "../identity/ports";
 import {
   GRANTABLE_PERMISSIONS,
   effectivePermissions,
+  grantRefusal,
   hasPermission,
   scopeForRole,
   type Permission,
@@ -13,7 +14,8 @@ import {
 
 /**
  * What one member of an organization may do, and where each permission comes
- * from, as a holder of `member.view` sees it (AT-11a, ADR-0146).
+ * from, as a holder of `member.view` sees it (AT-11a, ADR-0146), and which
+ * individual grants the viewer may give or take back (AT-11b, ADR-0147).
  *
  * **Read only.** Viewing writes nothing and audits nothing, as a `member.view`
  * listing never has.
@@ -31,6 +33,14 @@ export interface MemberPermission {
   readonly groupCount: number;
   /** Those groups' names, by name, for a viewer holding `group.view`; `null` for anyone else. */
   readonly groupNames: readonly string[] | null;
+  /**
+   * Whether the viewer may give it to the member individually: the member holds no such grant, and the viewer's
+   * `permission.manage` and the grant ceiling allow it, as `PermissionGrantService.grant` decides (ADR-0058),
+   * before any permission a deployment withholds (ADR-0147).
+   */
+  readonly mayGrant: boolean;
+  /** Whether the viewer may take back the member's individual grant of it: they hold one, and the ceiling allows it. */
+  readonly mayRevoke: boolean;
 }
 
 export interface MemberPermissions {
@@ -80,6 +90,9 @@ export class MemberPermissionsService {
       carried.flatMap((rows) => rows.map(({ permission }) => permission)),
     );
     const namesShown = actor.permissions.includes("group.view");
+    const manages = actor.permissions.includes("permission.manage");
+    const allows = (operation: "grant" | "revoke", permission: Permission) =>
+      manages && grantRefusal(operation, actor.role, actor.permissions, membership.role, permission) === null;
     return {
       member: {
         userId: memberUserId,
@@ -91,13 +104,16 @@ export class MemberPermissionsService {
       scope: scopeForRole(membership.role),
       permissions: GRANTABLE_PERMISSIONS.map((permission) => {
         const giving = own.filter((_, index) => carried[index]?.some((row) => row.permission === permission));
+        const held = granted.includes(permission);
         return {
           permission,
           effective: effective.includes(permission),
           fromRole: hasPermission(membership.role, permission),
-          granted: granted.includes(permission),
+          granted: held,
           groupCount: giving.length,
           groupNames: namesShown ? giving.map(({ name }) => name) : null,
+          mayGrant: !held && allows("grant", permission),
+          mayRevoke: held && allows("revoke", permission),
         };
       }),
     };

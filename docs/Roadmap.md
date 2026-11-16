@@ -968,6 +968,15 @@ the groups named only for a viewer holding `group.view`. A holder of
 `member.view` sees it; viewing writes nothing. Permissions nothing in the
 product uses yet say so. A browser test opens an owner's own permissions.
 
+**AT-11b — giving and taking back individual permissions** (ADR-0147, no
+migration): a member's permissions page offers a holder of
+`permission.manage` to give each permission the member cannot use now, and
+to take back each one given individually, as `PermissionGrantService` and
+its ceiling allow; refusals stay audited. Two same-origin form posts answer
+with the page and a fixed code. `disclosure.none` is not offered before
+Mode C. The browser test of joining by invitation gives the new colleague a
+permission and takes it back.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
