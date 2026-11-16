@@ -977,6 +977,16 @@ with the page and a fixed code. `disclosure.none` is not offered before
 Mode C. The browser test of joining by invitation gives the new colleague a
 permission and takes it back.
 
+**AT-11c — a group's permissions** (ADR-0148, no migration): the groups page
+shows what each group gives its members, and offers a holder of
+`permission.manage` to give a group a permission and take one back, as
+`GroupService` and its ceiling allow for the viewer and every member;
+refusals stay audited. Delete, and whom the page offers to add or remove,
+are now decided per group, under the ceiling of what the group gives. Two
+same-origin form posts answer with the groups page and a fixed code. The
+browser test of groups gives a group a permission and takes it back. AT-11
+is complete.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

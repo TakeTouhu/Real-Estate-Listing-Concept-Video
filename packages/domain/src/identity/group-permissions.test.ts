@@ -216,6 +216,7 @@ describe("giving a group a permission and taking it away", () => {
     await expect(fx.groups.revokePermission(fx.ownerId, fx.orgId, group.id, "audit.view")).rejects.toMatchObject({
       code: "NOT_FOUND",
       message: "The group carries no such permission",
+      details: { reason: "NOT_GRANTED" },
     });
     expect(audits("group.permission_revoked")).toEqual([]);
   });

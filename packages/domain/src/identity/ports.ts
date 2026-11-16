@@ -390,6 +390,11 @@ export interface GroupRepository {
   ): Promise<GroupMemberRemoval>;
   /** A group's permissions, in no particular order. */
   listPermissions(organizationId: string, groupId: string): Promise<GroupPermission[]>;
+  /**
+   * The permissions of the organization's groups among `groupIds`, in one
+   * read, in no particular order (AT-11c, ADR-0148).
+   */
+  listPermissionsOfGroups(organizationId: string, groupIds: readonly string[]): Promise<GroupPermission[]>;
   /** Every permission a member holds through the groups it belongs to, each once. */
   listPermissionsForMember(organizationId: string, userId: string): Promise<Permission[]>;
   /**

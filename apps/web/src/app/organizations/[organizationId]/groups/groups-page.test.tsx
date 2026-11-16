@@ -11,21 +11,31 @@ import {
   createMfaSecretCipher,
   systemMfaRandom,
   totpStep,
+  type GroupsOverviewGroup,
+  type Permission,
   type Role,
 } from "@app/domain";
 import { createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { AppError, hotp } from "@app/shared";
 
 /**
- * The groups page (AT-9a, ADR-0141): a holder of `group.view` sees the groups
- * and who belongs to each; anyone else is refused alike. A holder of
- * `group.manage` creates and renames a group, and one who is also an `OWNER`
- * or `ADMIN` deletes one (AT-9b, ADR-0142). The page says what a fixed code in
- * its address names, and nothing else. The dashboard links each organization
- * to it.
+ * The groups page (AT-9a, ADR-0141): a holder of `group.view` sees the groups,
+ * who belongs to each and what each gives its members (AT-11c, ADR-0148);
+ * anyone else is refused alike. A holder of `group.manage` creates and renames
+ * a group, and one who is also an `OWNER` or `ADMIN` deletes one (AT-9b,
+ * ADR-0142); a holder of `permission.manage` gives a group a permission or
+ * takes one back, where the overview says it may. The page says what a fixed
+ * code in its address names, and nothing else. The dashboard links each
+ * organization to it.
  */
 const PASSWORD = "password-123456";
 const WENT_WRONG = "Something went wrong.";
+/** What the form giving East a permission always says first. */
+const REACH =
+  "Each member of East will hold it, and so will anyone added to the group later. It applies to the Properties " +
+  "their role reaches, and giving never widens them: an Owner, Admin or Billing member reaches every Property of " +
+  "the organization, a Manager the Properties of the groups they belong to, and a Creator or Viewer the Properties " +
+  "they are responsible for.";
 const KEY = "56".repeat(32);
 
 const cookie = vi.hoisted(() => ({ value: undefined as string | undefined }));
@@ -122,9 +132,22 @@ async function joined(name: string, role: Role): Promise<string> {
   return userId;
 }
 
-async function group(name: string, memberIds: readonly string[] = []): Promise<void> {
+async function group(
+  name: string,
+  memberIds: readonly string[] = [],
+  permissions: readonly Permission[] = [],
+): Promise<string> {
   const created = await groups.create(ownerId, orgId, name);
   for (const userId of memberIds) await groups.addMember(ownerId, orgId, created.id, userId);
+  for (const permission of permissions) await groups.grantPermission(ownerId, orgId, created.id, permission);
+  return created.id;
+}
+
+/** A group as the overview gives it, with nothing to change unless `shown` says so. */
+function shownGroup(
+  shown: Partial<GroupsOverviewGroup> & Pick<GroupsOverviewGroup, "id" | "name">,
+): GroupsOverviewGroup {
+  return { members: [], addable: [], permissions: [], givable: [], revocable: [], mayDelete: false, ...shown };
 }
 
 /** The create form: where and how it posts, and its name field. */
@@ -186,6 +209,33 @@ function removeForm(who: string, group: string): string | null {
   return `${form.getAttribute("method")} ${form.getAttribute("action")} (${fields}) ${said}`;
 }
 
+/** A group's give form: where it posts, its list, labelled and named, what it offers, and its button's description. */
+function giveForm(group: string): string | null {
+  const button = screen.queryByRole("button", { name: `Give to group ${group}` });
+  if (button === null) return null;
+  const form = button.closest("form")!;
+  const list = form.querySelector("select")!;
+  const label = `${form.querySelector(`label[for="${list.id}"]`)?.textContent} (${list.getAttribute("aria-label")})`;
+  const offered = [...list.options].map(({ value, textContent, disabled }) =>
+    disabled ? `${textContent} (none)` : `${textContent} = ${value}`,
+  );
+  const said = document.getElementById(button.getAttribute("aria-describedby") ?? "")?.textContent;
+  const attributes = `${label}: name=${list.name} value=${list.value} required=${list.required}`;
+  const where = `${form.getAttribute("method")} ${form.getAttribute("action")}`;
+  return `${where} (${attributes}) ${offered.join(" | ")} -- ${said}`;
+}
+
+/** A group's take-back forms, each as where it posts and the permission it carries. */
+function takeBackForms(group: string): string[] {
+  return screen
+    .queryAllByRole("button", { name: new RegExp(`^Take back from ${group} the permission: `) })
+    .map((button) => {
+      const form = button.closest("form")!;
+      const carried = form.querySelector<HTMLInputElement>('input[type="hidden"][name="permission"]')?.value;
+      return `${form.getAttribute("method")} ${form.getAttribute("action")} ${carried}`;
+    });
+}
+
 describe("the groups page", () => {
   it("sends a signed-out visitor to sign in", async () => {
     await expect(GroupsPage({ params: Promise.resolve({ organizationId: orgId }) })).rejects.toThrow(
@@ -226,12 +276,14 @@ describe("the groups page", () => {
     expect(text).toContain("Studio Kanda");
     expect(text).toContain("A Manager reaches the Properties assigned to the groups they belong to.");
     expect(screen.getByRole("heading", { name: "Groups (3)" })).toBeTruthy();
+    const none = "It gives its members no permissions.";
+    const owner = "Aiko Owner · owner@example.com · Owner";
     expect(screen.getAllByRole("listitem").map((item) => item.textContent?.replace(/\s+/g, " "))).toEqual([
-      "East · 2 membersAiko Owner · owner@example.com · OwnerKen MANAGER · ken.manager@example.com · Manager",
+      `East · 2 members${owner}Ken MANAGER · ken.manager@example.com · Manager${none}`,
       "Aiko Owner · owner@example.com · Owner",
       "Ken MANAGER · ken.manager@example.com · Manager",
-      "Empty · 0 members",
-      "West · 2 membersAiko Owner · owner@example.com · OwnerSora Creator · sora.creator@example.com · Creator",
+      `Empty · 0 members${none}`,
+      `West · 2 members${owner}Sora Creator · sora.creator@example.com · Creator${none}`,
       "Aiko Owner · owner@example.com · Owner",
       "Sora Creator · sora.creator@example.com · Creator",
     ]);
@@ -246,8 +298,8 @@ describe("the groups page", () => {
     // The overview's own tests hold when it gives one: to a viewer holding member.view too.
     await signInAs("MANAGER");
     const member = { userId: ownerId, name: "Aiko Owner", email: null, role: "OWNER" as const, mayRemove: false };
-    const groupsShown = [{ id: "grp_1", name: "East", members: [member], addable: [] }];
-    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: false, mayDelete: false }) };
+    const groupsShown = [shownGroup({ id: "grp_1", name: "East", members: [member] })];
+    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: false }) };
     const text = await renderGroups();
     expect(text).toContain("East · 1 memberAiko Owner · Owner");
     expect(text).not.toContain("owner@example.com");
@@ -273,7 +325,7 @@ describe("the groups page", () => {
   it("offers the form to whoever the overview says may manage groups, as a manager granted group.manage", async () => {
     // The overview's own tests hold that such a grant is what it says (ADR-0058).
     await signInAs("MANAGER");
-    overview.value = { overview: () => Promise.resolve({ groups: [], mayManage: true, mayDelete: false }) };
+    overview.value = { overview: () => Promise.resolve({ groups: [], mayManage: true }) };
     await renderGroups();
     expect(createForm()).toBe(`post /api/organizations/${orgId}/groups (name=name maxLength=100 required=true)`);
   });
@@ -301,11 +353,11 @@ describe("the groups page", () => {
     expect(document.querySelectorAll("details[open]")).toHaveLength(0);
   });
 
-  it("offers renaming to whoever may manage groups, and deleting only to whoever the overview says may", async () => {
+  it("offers renaming to whoever may manage groups, and deleting only where the overview says it may", async () => {
     // A manager granted group.manage: the overview's own tests hold it may not delete (ADR-0052 Decision 11).
     await signInAs("MANAGER");
-    const groupsShown = [{ id: "grp_1", name: "East", members: [], addable: [] }];
-    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true, mayDelete: false }) };
+    const groupsShown = [shownGroup({ id: "grp_1", name: "East" })];
+    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true }) };
     await renderGroups();
     expect(renameForm("East")).toMatch(`post /api/organizations/${orgId}/groups/grp_1/rename (from=East;`);
     expect(deleteForm("East")).toBeNull();
@@ -339,8 +391,8 @@ describe("the groups page", () => {
   it("offers no add form when the overview gives no one to add, and names a member without an address", async () => {
     await signInAs("OWNER");
     const member = { userId: ownerId, name: "Aiko Owner", email: null, role: "OWNER" as const, mayRemove: true };
-    const groupsShown = [{ id: "grp_1", name: "East", members: [member], addable: [] }];
-    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true, mayDelete: true }) };
+    const groupsShown = [shownGroup({ id: "grp_1", name: "East", members: [member], mayDelete: true })];
+    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true }) };
     await renderGroups();
     expect(addForm("East")).toBeNull();
     expect(removeForm("Aiko Owner", "East")).toMatch(`/groups/grp_1/members/${ownerId}/remove (0) Aiko Owner will`);
@@ -350,14 +402,86 @@ describe("the groups page", () => {
     await signInAs("OWNER");
     const member = { userId: "usr/1?y", name: "Mio", email: null, role: "VIEWER" as const };
     const groupsShown = [
-      { id: "grp/1?x", name: "East", members: [{ ...member, mayRemove: true }], addable: [{ ...member, name: "Rin" }] },
+      shownGroup({
+        id: "grp/1?x",
+        name: "East",
+        members: [{ ...member, mayRemove: true }],
+        addable: [{ ...member, name: "Rin" }],
+        permissions: ["unit.view"],
+        givable: ["video.view"],
+        revocable: ["unit.view"],
+        mayDelete: true,
+      }),
     ];
-    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true, mayDelete: true }) };
+    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true }) };
     await renderGroups();
     expect(renameForm("East")).toMatch(`/groups/grp%2F1%3Fx/rename (`);
     expect(deleteForm("East")).toMatch(`/groups/grp%2F1%3Fx/delete (`);
     expect(addForm("East")).toMatch(`/groups/grp%2F1%3Fx/members (`);
     expect(removeForm("Mio", "East")).toMatch(`/groups/grp%2F1%3Fx/members/usr%2F1%3Fy/remove (`);
+    expect(giveForm("East")).toMatch(`/groups/grp%2F1%3Fx/permissions/grant (`);
+    expect(takeBackForms("East")).toEqual([
+      `post /api/organizations/${orgId}/groups/grp%2F1%3Fx/permissions/revoke unit.view`,
+    ]);
+  });
+
+  it("shows what each group gives its members, by name, and a manager nothing to change", async () => {
+    await group("East", [ownerId], ["video.download", "audit.view", "unit.view", "property.create"]);
+    await signInAs("MANAGER");
+    const text = await renderGroups();
+    expect(text).toContain(
+      "East · 1 memberAiko Owner · owner@example.com · OwnerIt gives each of its members:" +
+        "Add Properties (never in effect for a Viewer or Billing member)Download videos" +
+        "See UnitsSee the audit log (nothing in VTaVision uses it yet)",
+    );
+    expect(giveForm("East")).toBeNull();
+    expect(takeBackForms("East")).toEqual([]);
+  });
+
+  it("lets an owner take back what a group gives, and give it another, saying what that brings", async () => {
+    const east = await group("East", [ownerId], ["unit.view", "billing.manage"]);
+    await signInAs("OWNER");
+    await renderGroups();
+    const path = `/api/organizations/${orgId}/groups/${east}/permissions`;
+    expect(takeBackForms("East")).toEqual([`post ${path}/revoke unit.view`, `post ${path}/revoke billing.manage`]);
+    expect(screen.getByRole("button", { name: "Take back from East the permission: Buy Units" }).textContent).toBe(
+      "Take back",
+    );
+    const form = giveForm("East");
+    const list = "Permission (Permission to give to East): name=permission value= required=true";
+    expect(form).toMatch(`post ${path}/grant (${list})`);
+    expect(form).toContain("Choose a permission (none) | See the organization (nothing in VTaVision uses it yet) = ");
+    expect(form).toContain(" | Add Properties = property.create | ");
+    expect(form).not.toContain("disclosure.none");
+    expect(form).not.toContain("= unit.view");
+    expect(form?.split(" -- ")[1]?.replace(/\s+/g, " ")).toBe(
+      `${REACH} "Add Properties" is never in effect for a Viewer or Billing member. Whoever holds ` +
+        "\"Change members' roles and permissions, and groups' permissions\" must use two-step sign-in. Whatever a " +
+        "group gives, only an Owner or Admin can act on other members.",
+    );
+    const summary = `summary[aria-label="Give a permission to East…"]`;
+    expect(screen.getByText("Give a permission…", { selector: summary })).toBeTruthy();
+    expect(document.querySelectorAll("details[open]")).toHaveLength(0);
+  });
+
+  it("says only what applies to what may be given", async () => {
+    await signInAs("ADMIN");
+    const groupsShown = [shownGroup({ id: "grp_1", name: "East", givable: ["video.view", "unit.view"] })];
+    overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true }) };
+    await renderGroups();
+    expect(giveForm("East")?.split(" -- ")[1]?.replace(/\s+/g, " ")).toBe(REACH);
+  });
+
+  it("offers an admin no change of what a group with an owner gives, nor deleting it once it gives any", async () => {
+    const creatorId = await joined("Sora Creator", "CREATOR");
+    await group("Owners", [ownerId, creatorId], ["unit.view"]);
+    await signInAs("ADMIN");
+    await renderGroups();
+    expect(giveForm("Owners")).toBeNull();
+    expect(takeBackForms("Owners")).toEqual([]);
+    expect(deleteForm("Owners")).toBeNull();
+    // The admin holds what the group gives, so it may still remove the creator.
+    expect(removeForm("Sora Creator (sora.creator@example.com)", "Owners")).not.toBeNull();
   });
 
   it("links to the members page", async () => {
@@ -395,6 +519,31 @@ describe("the groups page", () => {
     [{ error: "add-group-member-failed" }, "alert", `${WENT_WRONG} Check below whether the member was added.`],
     [{ error: "may-not-remove-group-member" }, "alert", "You cannot remove that member from this group."],
     [{ error: "remove-group-member-failed" }, "alert", `${WENT_WRONG} Check below whether the member was removed.`],
+    [{ notice: "group-permission-granted" }, "status", "The group gives that permission now, to each of its members."],
+    [
+      { notice: "group-permission-revoked" },
+      "status",
+      "The group no longer gives that permission. A member keeps it only if their role, an individual grant or " +
+        "another group gives it.",
+    ],
+    [{ error: "group-permission" }, "alert", "That permission cannot be given to a group or taken back here."],
+    [{ error: "may-not-grant-group-permission" }, "alert", "You cannot give that permission to this group."],
+    [{ error: "may-not-revoke-group-permission" }, "alert", "You cannot take that permission back from this group."],
+    [
+      { error: "group-permission-not-granted" },
+      "alert",
+      "The group does not give that permission, so there was nothing to take back.",
+    ],
+    [
+      { error: "grant-group-permission-failed" },
+      "alert",
+      `${WENT_WRONG} Check below whether the group gives that permission.`,
+    ],
+    [
+      { error: "revoke-group-permission-failed" },
+      "alert",
+      `${WENT_WRONG} Check below whether the group still gives that permission.`,
+    ],
   ] as const)("says what %o names", async (query, role, sentence) => {
     await signInAs("OWNER");
     await renderGroups(query);

@@ -121,6 +121,14 @@ export function roleLimit(permission: Permission, role: Role): string | undefine
   return role === "OWNER" || role === "ADMIN" ? undefined : BEYOND_THE_ROLE[permission];
 }
 
+/**
+ * Whether `permission` is one with which only an `OWNER` or `ADMIN` reaches
+ * other members: `member.manage`, `group.manage` or `permission.manage`.
+ */
+export function actsOnMembers(permission: Permission): boolean {
+  return BEYOND_THE_ROLE[permission] !== undefined;
+}
+
 /** `items` as a sentence lists them: "a", "a and b", "a, b and c". */
 function listed(items: readonly string[]): string {
   return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;

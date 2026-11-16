@@ -2,6 +2,7 @@ import {
   GROUP_NAME_MAX_LENGTH,
   GroupService,
   GroupsOverviewService,
+  isPermission,
   type GroupNameRefusal,
   type GroupNotFoundReason,
   type GroupRenameRefusal,
@@ -15,15 +16,19 @@ import { codeOf } from "./page-codes";
 let overview: GroupsOverviewService | undefined;
 
 /**
- * An organization's groups and their members (ADR-0141). Server-only. It reads
- * the groups, their members and the members' accounts, and writes nothing.
+ * An organization's groups, their members (ADR-0141) and their permissions
+ * (ADR-0148). Server-only. It reads the groups, their members, their
+ * permissions and the members' accounts, and writes nothing.
  */
 export function getGroupsOverviewService(): GroupsOverviewService {
   overview ??= new GroupsOverviewService(getIdentityServices().deps);
   return overview;
 }
 
-/** Groups and their changes (ADR-0060), each audited with what it changed or why it was refused. */
+/**
+ * Groups, their members and their permissions (ADR-0060, ADR-0061), each
+ * change audited with what it changed or why it was refused.
+ */
 function getGroupService(): GroupService {
   return new GroupService(getIdentityServices().deps);
 }
@@ -39,6 +44,10 @@ export const GROUPS_NOTICES = {
   "group-deleted": "The group was deleted.",
   "group-member-added": "The member is in the group.",
   "group-member-removed": "The member was removed from the group. They stay in the organization with their role.",
+  "group-permission-granted": "The group gives that permission now, to each of its members.",
+  "group-permission-revoked":
+    "The group no longer gives that permission. A member keeps it only if their role, an individual grant or " +
+    "another group gives it.",
 } as const;
 
 export const GROUPS_ERRORS = {
@@ -59,6 +68,12 @@ export const GROUPS_ERRORS = {
   "add-group-member-failed": "Something went wrong. Check below whether the member was added.",
   "may-not-remove-group-member": "You cannot remove that member from this group.",
   "remove-group-member-failed": "Something went wrong. Check below whether the member was removed.",
+  "group-permission": "That permission cannot be given to a group or taken back here.",
+  "may-not-grant-group-permission": "You cannot give that permission to this group.",
+  "may-not-revoke-group-permission": "You cannot take that permission back from this group.",
+  "group-permission-not-granted": "The group does not give that permission, so there was nothing to take back.",
+  "grant-group-permission-failed": "Something went wrong. Check below whether the group gives that permission.",
+  "revoke-group-permission-failed": "Something went wrong. Check below whether the group still gives that permission.",
 } as const;
 
 export type GroupsNotice = keyof typeof GROUPS_NOTICES;
@@ -116,9 +131,10 @@ const NOT_FOUND_ANSWERS: Record<GroupNotFoundReason, GroupsError> = {
   MEMBER: "group-member-gone",
   STALE: "group-members-changed",
   NOT_IN_GROUP: "not-in-group",
+  NOT_GRANTED: "group-permission-not-granted",
 };
 
-/** What a membership change's `NOT_FOUND` says, by its reason, or `null` for any other error. */
+/** What a group change's `NOT_FOUND` says, by its reason, or `null` for any other error. */
 function notFoundOf(error: unknown): GroupsError | null {
   if (!(error instanceof AppError) || error.code !== "NOT_FOUND") return null;
   const reason = error.details?.["reason"];
@@ -271,5 +287,62 @@ export async function removeGroupMember(
     if (missing !== null) return { error: missing };
     log.error("A member could not be removed from a group", { code: errorCode(error) });
     return { error: "remove-group-member-failed" };
+  }
+}
+
+/**
+ * Give a group `permission`, which each of its members then holds, as the
+ * groups page asks (AT-11c, ADR-0148). The group service decides
+ * (`permission.manage`, the group, the grant ceiling for the viewer and for
+ * every member's role) and audits a member's refusal. Giving one the group
+ * already gives changes nothing and says the same. A permission that is not
+ * one is refused before the service is asked, so it never reaches the audit
+ * log; one no group may carry is asked, so its refusal is audited. A failure
+ * that is not a refusal is logged by its error code alone.
+ */
+export async function grantGroupPermission(
+  actorUserId: string,
+  organizationId: string,
+  groupId: string,
+  permission: string,
+  log: Pick<Logger, "error"> = getGroupsLogger(),
+): Promise<GroupsOutcome> {
+  if (!isGroupId(groupId)) return { error: "group-gone" };
+  if (!isPermission(permission)) return { error: "group-permission" };
+  try {
+    await getGroupService().grantPermission(actorUserId, organizationId, groupId, permission);
+    return { notice: "group-permission-granted" };
+  } catch (error) {
+    if (isCode(error, "FORBIDDEN")) return { error: "may-not-grant-group-permission" };
+    if (isCode(error, "NOT_FOUND")) return { error: "group-gone" };
+    log.error("A permission could not be given to a group", { code: errorCode(error) });
+    return { error: "grant-group-permission-failed" };
+  }
+}
+
+/**
+ * Take `permission` back from a group, as the groups page asks (AT-11c,
+ * ADR-0148). The group service decides and audits it, as for giving; a
+ * permission the group does not give is `NOT_FOUND` with its own reason. A
+ * failure that is not a refusal is logged by its error code alone.
+ */
+export async function revokeGroupPermission(
+  actorUserId: string,
+  organizationId: string,
+  groupId: string,
+  permission: string,
+  log: Pick<Logger, "error"> = getGroupsLogger(),
+): Promise<GroupsOutcome> {
+  if (!isGroupId(groupId)) return { error: "group-gone" };
+  if (!isPermission(permission)) return { error: "group-permission" };
+  try {
+    await getGroupService().revokePermission(actorUserId, organizationId, groupId, permission);
+    return { notice: "group-permission-revoked" };
+  } catch (error) {
+    if (isCode(error, "FORBIDDEN")) return { error: "may-not-revoke-group-permission" };
+    const missing = notFoundOf(error);
+    if (missing !== null) return { error: missing };
+    log.error("A permission could not be taken back from a group", { code: errorCode(error) });
+    return { error: "revoke-group-permission-failed" };
   }
 }

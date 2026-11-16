@@ -605,6 +605,11 @@ class InMemoryGroupRepository implements GroupRepository {
       [...this.permissions.values()].filter((p) => p.groupId === groupId && p.organizationId === organizationId),
     );
   }
+  listPermissionsOfGroups(organizationId: string, groupIds: readonly string[]): Promise<GroupPermission[]> {
+    return Promise.resolve(
+      [...this.permissions.values()].filter((p) => p.organizationId === organizationId && groupIds.includes(p.groupId)),
+    );
+  }
   listPermissionsForMember(organizationId: string, userId: string): Promise<Permission[]> {
     const groupIds = new Set(
       [...this.members.values()]
