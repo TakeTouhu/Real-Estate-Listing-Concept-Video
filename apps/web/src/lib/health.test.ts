@@ -3,13 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serverEnvSchema } from "@app/shared";
 import { FakeVideoProvider } from "@app/video-providers";
-import {
-  buildLiveness,
-  computeReadiness,
-  READINESS_PROBE_LIMIT_MS,
-  ReadinessProbeTimeout,
-  type ReadinessInputs,
-} from "./health";
+import { buildLiveness, computeReadiness, type ReadinessInputs } from "./health";
 
 const env = serverEnvSchema.parse({
   SESSION_SECRET: "session-secret-abcdef123456",
@@ -28,6 +22,13 @@ const answering: ReadinessInputs = {
 const check = (readiness: Awaited<ReturnType<typeof computeReadiness>>, name: string) =>
   readiness.checks.find((one) => one.name === name);
 
+/** White space and block comments, which may stand between the parts of an import. */
+const GAP = String.raw`\s*(?:/\*[\s\S]*?\*/\s*)*`;
+/** An import statement that starts its line, up to the module it names. */
+const IMPORT_STATEMENT = /^import\b[\w\s{},*$]*["'][^"'\n]*["'];?/gm;
+/** Anything else that loads a module: a re-export, an import further in, `import()` or `require()`. */
+const LOADS = new RegExp(String.raw`\b(?:from|import)${GAP}["']|\b(?:import|require)${GAP}\(`);
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -40,20 +41,23 @@ describe("buildLiveness", () => {
   });
 
   it("is in a module that imports only types, and is all the liveness route loads (ADR-0152 Decision 4)", () => {
+    /** A file's import statements, once nothing else in it is seen to load a module. */
     const imports = (file: string) => {
       const source = readFileSync(join(__dirname, file), "utf8");
-      // Nothing is loaded by a call or a re-export, so the import lines are all there is.
-      expect(source).not.toMatch(/\b(?:require|import)\s*\(|^export\b.*\bfrom\b/m);
-      return source.match(/^import\b.*$/gm) ?? [];
+      expect(source.replace(IMPORT_STATEMENT, "")).not.toMatch(LOADS);
+      return source.match(IMPORT_STATEMENT) ?? [];
     };
     // The compiler erases an import of types alone, so this module loads no other.
     const own = imports("health.ts");
     expect(own.length).toBeGreaterThan(0);
-    for (const line of own) expect(line).toMatch(/^import type\b/);
+    for (const statement of own) expect(statement).toMatch(/^import type\s+(?!from\b)/);
     expect(imports("../app/api/health/route.ts")).toEqual([
       'import { NextResponse } from "next/server";',
       'import { buildLiveness } from "@/lib/health";',
     ]);
+    // What a scan line by line would miss is seen.
+    const hidden = ['export {\n  a,\n} from "x";', '  import "x";', 'import /* c */ ("x");', 'const x = require("x");'];
+    for (const source of hidden) expect(source.replace(IMPORT_STATEMENT, "")).toMatch(LOADS);
   });
 });
 
@@ -118,50 +122,27 @@ describe("computeReadiness", () => {
     expect(check(readiness, "database")?.ok).toBe(true);
   });
 
-  it("gives each probe five seconds (ADR-0152 Decision 2)", async () => {
-    const limit = vi.spyOn(AbortSignal, "timeout");
-    await computeReadiness(env, new FakeVideoProvider(), answering);
-    expect(READINESS_PROBE_LIMIT_MS).toBe(5_000);
-    expect(limit.mock.calls).toEqual([[5_000], [5_000]]);
+  it("asks both at the same time", async () => {
+    let answer = (): void => undefined;
+    const database = vi.fn(() => new Promise<void>((resolve) => (answer = resolve)));
+    const storage = vi.fn(() => Promise.resolve());
+    const pending = computeReadiness(env, new FakeVideoProvider(), { ...answering, database, storage });
+    await new Promise((resolve) => setImmediate(resolve));
+    // The storage is asked while the database has not answered yet.
+    expect(database).toHaveBeenCalledTimes(1);
+    expect(storage).toHaveBeenCalledTimes(1);
+    answer();
+    expect((await pending).status).toBe("ready");
   });
 
-  it("counts a probe that has not answered by then as not answering, and waits for it no longer", async () => {
-    // The database's limit and then the storage's, each ended here by hand.
-    const limits: AbortController[] = [];
-    vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
-      limits.push(new AbortController());
-      return limits.at(-1)!.signal;
+  it("answers degraded all the same when no one can be told of the failure", async () => {
+    const failed = vi.fn(() => {
+      throw new Error("the log is closed");
     });
-    const failed = vi.fn();
-    const never = () => new Promise<void>(() => undefined);
-    const pending = computeReadiness(env, new FakeVideoProvider(), { ...answering, database: never, failed });
-    let settled = false;
-    void pending.then(() => (settled = true));
-
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(settled).toBe(false);
-    limits[0]?.abort();
-    const readiness = await pending;
-
+    const database = () => Promise.reject(new Error("unreachable"));
+    const readiness = await computeReadiness(env, new FakeVideoProvider(), { ...answering, database, failed });
     expect(readiness.status).toBe("degraded");
     expect(check(readiness, "database")).toEqual({ name: "database", ok: false, detail: "does not answer" });
-    // The storage answered at once, within its own limit.
-    expect(check(readiness, "storage")?.ok).toBe(true);
-    expect(failed.mock.calls).toEqual([["database", expect.any(ReadinessProbeTimeout)]]);
-    expect(new ReadinessProbeTimeout().code).toBe("TIMEOUT");
-  });
-
-  it("is not told of a limit that passes after its probe answered", async () => {
-    const limits: AbortController[] = [];
-    vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
-      limits.push(new AbortController());
-      return limits.at(-1)!.signal;
-    });
-    const failed = vi.fn();
-    const readiness = await computeReadiness(env, new FakeVideoProvider(), { ...answering, failed });
-    for (const limit of limits) limit.abort();
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(readiness.status).toBe("ready");
-    expect(failed).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledTimes(1);
   });
 });

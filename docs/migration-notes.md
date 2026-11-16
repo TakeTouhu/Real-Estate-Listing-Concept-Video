@@ -2630,8 +2630,11 @@ meets it.
 
 **What changes at deploy.** `GET /api/health/ready` answers `503` when the
 database does not answer `SELECT 1`, or the chosen object storage does not
-answer whether one key holds an object, each within 5 seconds. Whatever
-watches readiness must send the operator's token, as before. The probes
+answer whether one key holds an object. Readiness sets no time limit of its
+own: a database that cannot be reached reads `503` at once or after about 5
+seconds, and one that keeps its connections and says nothing leaves the
+request waiting. Whatever watches readiness must set its own limit, read no
+answer as not ready, and send the operator's token, as before. The probes
 write no row and no object.
 
 **On a development machine.** With no database running, readiness reads

@@ -1,14 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@app/shared";
+import { NonProductionAdapterError } from "@app/storage";
 import { buildReadiness, probeFailureCode, READINESS_STORAGE_KEY } from "./readiness";
 
 const connect = vi.hoisted(() => vi.fn());
 const queryRaw = vi.hoisted(() => vi.fn());
 const exists = vi.hoisted(() => vi.fn());
+/** What building the storage adapter throws, when it refuses to be built. */
+const refusal = vi.hoisted(() => ({ value: undefined as Error | undefined }));
 
 vi.mock("@app/database", () => ({ getPrismaClient: () => ({ $connect: connect, $queryRaw: queryRaw }) }));
 vi.mock("./adapters", () => ({
-  getWebAdapters: () => ({ choice: { storage: "shared-folder" }, storage: () => ({ exists }) }),
+  getWebAdapters: () => ({
+    choice: { storage: "shared-folder" },
+    storage: () => {
+      if (refusal.value) throw refusal.value;
+      return { exists };
+    },
+  }),
 }));
 vi.mock("./env", async () => {
   const { serverEnvSchema } = await import("@app/shared");
@@ -24,7 +33,15 @@ vi.mock("./env", async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   for (const mock of [connect, queryRaw, exists]) mock.mockReset();
+  refusal.value = undefined;
 });
+
+/** The lines the web app logged, as it writes them: one JSON object a line. */
+function logged(): Record<string, unknown>[] {
+  const lines: Record<string, unknown>[] = [];
+  vi.spyOn(console, "log").mockImplementation((line: string) => void lines.push(JSON.parse(line)));
+  return lines;
+}
 
 describe("probeFailureCode", () => {
   it("gives an error's own code when it is one plain word", () => {
@@ -72,8 +89,7 @@ describe("buildReadiness", () => {
   });
 
   it("logs a probe that did not answer by its code alone", async () => {
-    const lines: string[] = [];
-    vi.spyOn(console, "log").mockImplementation((line: string) => void lines.push(line));
+    const lines = logged();
     const unreachable = "Can't reach database server at db.internal:5432 for user app-user";
     connect.mockRejectedValue(Object.assign(new Error(unreachable), { errorCode: "P1001" }));
     exists.mockRejectedValue(new Error("EACCES: permission denied, stat '/srv/shared/readiness/probe'"));
@@ -82,12 +98,31 @@ describe("buildReadiness", () => {
     expect(readiness.status).toBe("degraded");
     expect(queryRaw).not.toHaveBeenCalled();
     expect(readiness.checks.filter((check) => !check.ok).map((check) => check.name)).toEqual(["database", "storage"]);
-    expect(lines.map((line) => JSON.parse(line) as Record<string, unknown>)).toEqual([
-      expect.objectContaining({ level: "warn", component: "readiness", probe: "database", code: "P1001" }),
-      expect.objectContaining({ level: "warn", component: "readiness", probe: "storage", code: "UNEXPECTED" }),
-    ]);
+    // One line a probe, in whichever order the two failed.
+    expect(lines).toHaveLength(2);
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ level: "warn", component: "readiness", probe: "database", code: "P1001" }),
+        expect.objectContaining({ level: "warn", component: "readiness", probe: "storage", code: "UNEXPECTED" }),
+      ]),
+    );
     for (const part of ["db.internal", "app-user", "/srv/shared", "EACCES"]) {
-      expect(lines.join("\n") + JSON.stringify(readiness)).not.toContain(part);
+      expect(JSON.stringify([lines, readiness])).not.toContain(part);
     }
+  });
+
+  it("counts a storage adapter that refuses to be built as not answering", async () => {
+    const lines = logged();
+    queryRaw.mockResolvedValue([{ "?column?": 1 }]);
+    // What a development adapter throws when it is built in production. It has no code.
+    refusal.value = new NonProductionAdapterError("SharedFolderObjectStorage", "a folder", "a production adapter");
+    const readiness = await buildReadiness();
+
+    expect(readiness.status).toBe("degraded");
+    expect(readiness.checks.filter((check) => !check.ok)).toEqual([
+      { name: "storage", ok: false, detail: "adapter=shared-folder, does not answer" },
+    ]);
+    expect(exists).not.toHaveBeenCalled();
+    expect(lines).toEqual([expect.objectContaining({ probe: "storage", code: "UNEXPECTED" })]);
   });
 });

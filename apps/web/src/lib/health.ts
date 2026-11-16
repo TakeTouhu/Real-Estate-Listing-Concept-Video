@@ -36,7 +36,7 @@ export type ReadinessProbe = "database" | "storage";
 /**
  * What readiness asks of the web app's surroundings (RD-2b, ADR-0152). Each
  * probe resolves when its service answers and throws when it does not;
- * neither changes anything.
+ * neither writes a row or an object.
  */
 export interface ReadinessInputs {
   /** The database answers a query. */
@@ -52,37 +52,24 @@ export interface ReadinessInputs {
   readonly failed?: (probe: ReadinessProbe, error: unknown) => void;
 }
 
-/** How long a probe may take before it counts as not answering. */
-export const READINESS_PROBE_LIMIT_MS = 5_000;
-
-/** A probe that had not answered within its limit. */
-export class ReadinessProbeTimeout extends Error {
-  readonly code = "TIMEOUT";
-
-  constructor() {
-    super("The probe did not answer within its limit");
-  }
-}
-
 export function buildLiveness(now: () => Date = () => new Date()): Liveness {
   return { status: "ok", service: SERVICE_NAME, version: SERVICE_VERSION, time: now().toISOString() };
 }
 
-/** Whether a probe answers within its limit. Never what it threw. */
+/**
+ * Whether a probe answers. Never what it threw. Readiness sets no limit of its
+ * own: a probe ends when its client answers or gives up (ADR-0152 Decision 2).
+ */
 async function answers(probe: ReadinessProbe, inputs: ReadinessInputs): Promise<boolean> {
-  // The platform's one-shot deadline. Nothing here schedules anything itself, and nothing recurs.
-  const limit = AbortSignal.timeout(READINESS_PROBE_LIMIT_MS);
   try {
-    await Promise.race([
-      // Started inside the race, so a probe that throws before it returns is caught as well.
-      (async () => inputs[probe]())(),
-      new Promise<never>((_, reject) => {
-        limit.addEventListener("abort", () => reject(new ReadinessProbeTimeout()), { once: true });
-      }),
-    ]);
+    await inputs[probe]();
     return true;
   } catch (error) {
-    inputs.failed?.(probe, error);
+    try {
+      inputs.failed?.(probe, error);
+    } catch {
+      // Readiness answers whether or not anyone could be told of the failure.
+    }
     return false;
   }
 }

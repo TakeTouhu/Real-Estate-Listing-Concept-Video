@@ -38,7 +38,7 @@ export async function buildReadiness(): Promise<Readiness> {
       await client.$connect();
       await client.$queryRaw`SELECT 1`;
     },
-    // Building the adapter is part of the question: a development adapter refuses production.
+    // Building the adapter is part of the question: one that refuses to be built does not answer.
     storage: async () => {
       await adapters.storage().exists(READINESS_STORAGE_KEY);
     },

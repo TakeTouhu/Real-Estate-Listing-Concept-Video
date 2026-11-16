@@ -4,8 +4,9 @@ Status: Accepted (RD-2b, 2026-11-16). The second part of the second milestone
 of production readiness, part 1, which the product owner approved on
 2026-11-16 (`/mnt/project-files/cto/production-readiness-proposal.md`; gap
 analysis `docs/production-readiness-gap-analysis.md`). RD-2a checked a
-production start (ADR-0151). RD-2 is now in three parts for size: RD-2c makes
-readiness report a start that RD-2a could not check.
+production start (ADR-0151). RD-2 is now in three parts for size: RD-2c gives
+a probe a time limit and makes readiness report a start that RD-2a could not
+check.
 
 Builds on: ADR-0065 Decision 17 (readiness reports whether the MFA key is
 set), ADR-0150 (the web app's adapters chosen in one place).
@@ -36,22 +37,25 @@ Readiness reports that a service did not answer and never what it threw: an
 error can name a host, a user or a path. The route stays behind the
 operator's token, which it checks before it asks anything.
 
-## Decision 2 — A probe has five seconds
+## Decision 2 — Readiness sets no time limit of its own in this change
 
-A probe that has not answered within 5 seconds counts as not answering, and
-readiness answers without it. Whatever asks for readiness is itself timed, and
-a probe that waits on a silent host would otherwise turn "not ready" into no
-answer at all.
+A probe ends when its client answers or gives up. Prisma gives up on a
+connection it cannot open after 5 seconds. A query it has already sent waits
+for the database, with no limit set.
 
-The limit is `AbortSignal.timeout`, the platform's one-shot deadline for one
-request. The code schedules nothing itself: no `setTimeout`, no interval and
-no loop. The repository's guard against schedulers
-(`queue-status-dormancy.test.ts`) therefore stands as it is, with no new
-exception, and nothing here can become a cadence (ADR-0054 Decision 7).
+So a database that is down, refuses the sign-in or cannot be reached reads
+`503`, at once or after about 5 seconds. A database that keeps its
+connections and says nothing leaves a request waiting: with PostgreSQL frozen
+under a running app, the first request had no answer after 20 seconds, and
+the next, which needed a new connection, read `503` after 5. Whatever asks
+for readiness is itself timed, and reads no answer as not ready.
 
-Five seconds is a starting value for a local network, not a measured one,
-and no setting changes it. A probe that ran out of time is not cancelled: its
-query ends by the client's own limits.
+A limit of readiness's own needs a timer, which this repository admits only
+by a decision that names it: ADR-0054 Decision 7 records that production
+code constructs none, and the guard in `queue-status-dormancy.test.ts` names
+its one exception, the transport's per-request deadline. This change adds no
+timer and leaves the guard as it is. RD-2c proposes the limit as a decision
+of its own.
 
 ## Decision 3 — A probe that did not answer is logged by a code
 
@@ -59,15 +63,16 @@ The web app logs each probe that did not answer as a warning with the
 component `readiness`, the probe's name and one code: the error's own code
 when it is a single word of capitals, digits and underscores, as Prisma's,
 Node.js's and the storage adapters' are (`P1001`, `ECONNREFUSED`,
-`INTERNAL_ERROR`), `TIMEOUT` when the five seconds ran out, and `UNEXPECTED`
-otherwise. The error's message is never logged.
+`INTERNAL_ERROR`), and `UNEXPECTED` otherwise. The error's message is never
+logged.
 
 Prisma 5.22 gives a first connection that fails inside a query no code at
 all. Asked to connect, it names the reason: `P1000` for a refused sign-in,
 `P1001` for a database it cannot reach, `P1003` for one that does not exist.
 So the probe asks it to connect before the query, which does nothing once
 connected. A database lost after that fails the query itself, with `P1017`
-or `P1001`.
+or `P1001`. A test in the database suite holds `P1001` against the installed
+Prisma.
 
 ## Decision 4 — Liveness loads none of it
 
@@ -79,9 +84,12 @@ down with readiness.
 
 ## Consequences
 
-- New: `apps/web/src/lib/readiness.ts` and its test,
+- New: `apps/web/src/lib/readiness.ts` and its test, the route's test
+  `tests/api/health-ready-route.test.ts`,
+  `tests/integration/readiness-database-code.db.test.ts` and
   `tests/e2e/readiness.spec.ts`. Changed: `apps/web/src/lib/health.ts` and the
   readiness route's import.
+- Until RD-2c, whatever watches readiness sets the only time limit.
 - A development machine with no database now reads `degraded` on readiness,
   where it read `ready`. Liveness, sign-in and every page are as before.
 - The browser test reads readiness from its own PostgreSQL database and
