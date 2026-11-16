@@ -34,6 +34,10 @@ organization: the set-up page says MFA is not available, and the readiness
 probe reports `degraded`. Keep it once set: a different key cannot open MFA
 secrets sealed under the old one.
 
+The readiness probe also reports `degraded` while the database or the object
+storage does not answer (RD-2b, ADR-0152), so it reads `ready` only with
+PostgreSQL running.
+
 Set `DATABASE_URL` to a local PostgreSQL instance (Phase 1). Keep
 `VIDEO_PROVIDER=fake` unless you are deliberately exercising the real provider.
 

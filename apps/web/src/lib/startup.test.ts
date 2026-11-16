@@ -113,8 +113,11 @@ describe("productionStartProblems", () => {
   });
 });
 
-/** A module named by an import, a re-export, a dynamic `import()` or a `require()`, in any kind of quotes. */
-const IMPORTED = /(?:\bfrom\s*|\bimport\s*\(?\s*(?:\/\*[\s\S]*?\*\/\s*)*|\brequire\s*\(\s*)["'`]([^"'`]+)["'`]/g;
+/**
+ * A module named by an import, a re-export, a dynamic `import()` or a `require()`. Only the last two
+ * take backquotes, so a comment that names a file after "from" or "import" is not read as one.
+ */
+const IMPORTED = /\b(?:(?:from|import)\s*["']|(?:import|require)\s*\(\s*(?:\/\*[\s\S]*?\*\/\s*)*["'`])([^"'`]+)["'`]/g;
 
 describe("what the start hook loads", () => {
   it("imports the check, the choice of adapters and the environment, and no adapter (ADR-0151 Decision 5)", () => {

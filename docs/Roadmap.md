@@ -1050,6 +1050,13 @@ its start hook there. The choice of adapters moves to its own module, so the
 check reads it without loading an adapter. RD-2 is split in two for size;
 RD-2b adds the database and the object storage to readiness.
 
+**RD-2b — readiness asks the database and the storage** (ADR-0152, no
+migration): the readiness probe asks the database for one query and the
+chosen object storage about one key, gives each five seconds, and reports
+whether each answered, never what it threw. Liveness loads none of this.
+RD-2 is now in three parts for size: RD-2c makes readiness report a start
+that RD-2a could not check.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

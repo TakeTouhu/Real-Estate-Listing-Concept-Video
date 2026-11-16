@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { bearerFrom, verifyOperatorToken } from "@/lib/auth";
-import { buildReadiness } from "@/lib/health";
+import { buildReadiness } from "@/lib/readiness";
 
 // Authenticated readiness probe. Requires a valid operator bearer token.
 export const dynamic = "force-dynamic";

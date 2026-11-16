@@ -2623,3 +2623,19 @@ each development adapter refuses production when first built.
 **Rolling back.** To RD-1's build: safe. A production start is no longer
 checked, and a misconfiguration again surfaces at the first request that
 meets it.
+
+## RD-2b — readiness asks the database and the storage
+
+**No migration** (ADR-0152). Migration 34 stays the last.
+
+**What changes at deploy.** `GET /api/health/ready` answers `503` when the
+database does not answer `SELECT 1`, or the chosen object storage does not
+answer whether one key holds an object, each within 5 seconds. Whatever
+watches readiness must send the operator's token, as before. The probes
+write no row and no object.
+
+**On a development machine.** With no database running, readiness reads
+`degraded` where it read `ready`. Nothing else changes.
+
+**Rolling back.** To RD-2a's build: safe. Readiness again reports the
+provider self-check and the MFA key alone.
