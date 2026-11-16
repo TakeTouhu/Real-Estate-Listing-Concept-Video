@@ -58,7 +58,8 @@ export function buildLiveness(now: () => Date = () => new Date()): Liveness {
 
 /**
  * Whether a probe answers. Never what it threw. Readiness sets no limit of its
- * own: a probe ends when its client answers or gives up (ADR-0152 Decision 2).
+ * own: a probe ends when its client answers or gives up (ADR-0152 Decision 2),
+ * and each client is to end its own question (ADR-0153).
  */
 async function answers(probe: ReadinessProbe, inputs: ReadinessInputs): Promise<boolean> {
   try {

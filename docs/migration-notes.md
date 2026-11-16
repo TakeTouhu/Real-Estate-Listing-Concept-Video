@@ -2644,3 +2644,27 @@ operator's token, as before. The probes write no row and no object.
 
 **Rolling back.** To RD-2a's build: safe. Readiness again reports the
 provider self-check and the MFA key alone.
+
+## RD-2c — readiness limited by its clients' own settings
+
+**No migration** (ADR-0153). Migration 34 stays the last.
+
+**What changes at deploy.** Each web process holds one more database
+connection, which its readiness probe alone uses: count it against the
+database's connection limit. It is opened when readiness is first asked,
+for the address in `DATABASE_URL` with `connection_limit=1`,
+`connect_timeout=3`, `socket_timeout=3` and `pool_timeout=4` replacing
+whatever the address sets for those four. The web app's own client is as
+before.
+
+`GET /api/health/ready` now answers `503` after 3 or 4 seconds when the
+database says nothing, where it could wait without end. Each step has its
+own limit, so at the very most a probe takes 10 seconds. Whatever watches
+readiness keeps a limit of its own and reads no answer as not ready, as
+before. The storage check has its adapter's limits alone (ADR-0153
+Decision 2).
+
+**On a development machine.** Nothing to do.
+
+**Rolling back.** To RD-2b's build: safe. Readiness again asks the web
+app's own database client, with no limit of its own.

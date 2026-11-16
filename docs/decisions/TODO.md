@@ -1511,7 +1511,7 @@ blocks activation. The production email service is tracked below, under
 
 ## Open in RD-2b — how readiness is limited
 
-- [ ] **Give the readiness probe a limit of its own, or decide it has
+- [x] **Give the readiness probe a limit of its own, or decide it has
       none.** ADR-0152 Decision 2 leaves a probe with its client's limits
       alone: a query on a connection the app holds waits for a database that
       says nothing, and the request has no answer. Two ways are open. A
@@ -1523,7 +1523,29 @@ blocks activation. The production email service is tracked below, under
       process, and answer for the database and not for the app's own
       client: an app whose own pool has nothing to give would read ready.
       The storage probe needs the same answer for each adapter. RD-2c is to
-      propose which.
+      propose which. *Decided in RD-2c (ADR-0153): limits of the client's
+      own, on a client that readiness alone uses. What it leaves open is
+      below.*
+
+## Open in RD-2c — what the readiness limit leaves open
+
+- [ ] **Limit the Google Cloud Storage adapter's `exists`.** Readiness asks
+      the chosen storage adapter about one key, with that adapter's limits
+      alone (ADR-0153 Decision 2), so an `exists` that never ended would
+      leave the readiness request without an answer. The two development
+      adapters ask over no network. RD-3 adds the first production adapter:
+      it is to decide how its `exists` is ended, within the rule on timers,
+      and to measure it against a stand-in that says nothing.
+- [ ] **Decide whether the web app's own database client is limited.** It
+      keeps Prisma's defaults: 5 seconds to open a connection, 10 to wait
+      for one from its pool, and no limit on a query it has sent (ADR-0152
+      Decision 2). A request whose query the database never answers
+      therefore waits until whatever is in front of the web app gives it up.
+      Readiness no longer waits with it, and does not see it either: an app
+      whose own pool has no connection to give reads `ready` (ADR-0153
+      Decision 1). A limit would be set in the deployment's `DATABASE_URL`
+      or in the database, and belongs with the deployment, in part 2 of the
+      production readiness plan.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

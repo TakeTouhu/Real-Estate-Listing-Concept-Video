@@ -57,22 +57,6 @@ function logged(): Record<string, unknown>[] {
   return lines;
 }
 
-/** An answer that comes when the test gives it. */
-function held(): { readonly answer: Promise<unknown>; give(value: unknown): void; refuse(error: unknown): void } {
-  let give!: (value: unknown) => void;
-  let refuse!: (error: unknown) => void;
-  const answer = new Promise<unknown>((resolve, reject) => {
-    give = resolve;
-    refuse = reject;
-  });
-  return { answer, give, refuse };
-}
-
-/** Everything that can run before any I/O has run: each caller has asked, or waits. */
-const settled = () => new Promise<void>((resolve) => setImmediate(resolve));
-
-const asksOf = () => [connect, queryRaw, exists].map((mock) => mock.mock.calls.length);
-
 describe("probeFailureCode", () => {
   it("gives an error's own code when it is one plain word", () => {
     expect(probeFailureCode(Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" }))).toBe("ECONNREFUSED");
@@ -157,47 +141,5 @@ describe("buildReadiness", () => {
     ]);
     expect(exists).not.toHaveBeenCalled();
     expect(lines).toEqual([expect.objectContaining({ probe: "storage", code: "UNEXPECTED" })]);
-  });
-
-  it("keeps one question to each service in flight, and gives its answer to all who asked", async () => {
-    const [database, storage] = [held(), held()];
-    queryRaw.mockReturnValueOnce(database.answer);
-    exists.mockReturnValueOnce(storage.answer);
-    const asked = [buildReadiness(), buildReadiness(), buildReadiness()];
-    await settled();
-    expect(asksOf()).toEqual([1, 1, 1]);
-
-    database.give([{ "?column?": 1 }]);
-    storage.give(false);
-    expect((await Promise.all(asked)).map((readiness) => readiness.status)).toEqual(["ready", "ready", "ready"]);
-    expect(asksOf()).toEqual([1, 1, 1]);
-
-    // An answered question is not kept: whoever asks next asks the services again.
-    await buildReadiness();
-    expect(asksOf()).toEqual([2, 2, 2]);
-  });
-
-  it("gives a shared question's failure to all who asked, and asks again afterwards", async () => {
-    const lines = logged();
-    const database = held();
-    queryRaw.mockReturnValueOnce(database.answer);
-    exists.mockResolvedValue(false);
-    const asked = [buildReadiness(), buildReadiness()];
-    await settled();
-    database.refuse({ code: "P2010" });
-
-    for (const readiness of await Promise.all(asked)) {
-      expect(readiness.checks.filter((check) => !check.ok).map((check) => check.name)).toEqual(["database"]);
-    }
-    expect(queryRaw).toHaveBeenCalledTimes(1);
-    // Each request that was not answered logs its own line.
-    expect(lines.map((line) => [line.probe, line.code])).toEqual([
-      ["database", "P2010"],
-      ["database", "P2010"],
-    ]);
-
-    queryRaw.mockResolvedValue([{ "?column?": 1 }]);
-    expect((await buildReadiness()).status).toBe("ready");
-    expect(queryRaw).toHaveBeenCalledTimes(2);
   });
 });

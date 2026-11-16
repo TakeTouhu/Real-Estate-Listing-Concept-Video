@@ -125,7 +125,7 @@ describe("the concrete fal status adapter has no production composition", () => 
 
   it("adds no scheduler, cron, daemon or polling loop anywhere", () => {
     // `AbortSignal.timeout` and the `timers` modules are `setTimeout` under other names
-    // (ADR-0152 Decision 2, ADR-0153 Decision 4).
+    // (ADR-0152 Decision 2, ADR-0153 Decision 3).
     const timers = ["setInterval", "setTimeout", "AbortSignal.timeout", "timers", "node-cron", "cron.schedule"];
     const found = everySource().flatMap(({ name, text }) =>
       timers.filter((banned) => code(text).includes(banned)).map((banned) => `${name}: ${banned}`),

@@ -32,42 +32,27 @@ export function probeFailureCode(error: unknown): string {
 }
 
 /**
- * Those who ask while a question is pending share its answer, so readiness
- * keeps one question to a service in flight however many ask (ADR-0153
- * Decision 2).
- */
-function oneInFlight(ask: () => Promise<void>): () => Promise<void> {
-  let pending: Promise<void> | undefined;
-  return () =>
-    (pending ??= ask().finally(() => {
-      pending = undefined;
-    }));
-}
-
-const askDatabase = oneInFlight(async () => {
-  const client = getReadinessPrismaClient(getServerEnv().DATABASE_URL, READINESS_DATABASE_LIMIT_SECONDS);
-  // Prisma gives a first connection that fails a code (`P1000`, `P1001`, `P1003`) only when
-  // it is asked to connect, which does nothing once it has.
-  await client.$connect();
-  await client.$queryRaw`SELECT 1`;
-});
-
-// Building the adapter is part of the question: one that refuses to be built does not answer.
-const askStorage = oneInFlight(async () => {
-  await getWebAdapters().storage().exists(READINESS_STORAGE_KEY);
-});
-
-/**
  * Readiness of the running web app, from its configured environment, provider,
  * database and storage (ADR-0152, ADR-0153). Kept apart from `health.ts`, so
  * the liveness route loads none of them.
  */
 export async function buildReadiness(): Promise<Readiness> {
   const env = getServerEnv();
+  const adapters = getWebAdapters();
   return computeReadiness(env, createVideoProvider(env), {
-    database: askDatabase,
-    storage: askStorage,
-    storageAdapter: getWebAdapters().choice.storage,
+    database: async () => {
+      // A client of the probe's own, which ends each of its questions itself (ADR-0153 Decision 1).
+      const client = getReadinessPrismaClient(env.DATABASE_URL, READINESS_DATABASE_LIMIT_SECONDS);
+      // Prisma gives a first connection that fails a code (`P1000`, `P1001`, `P1003`) only when
+      // it is asked to connect, which does nothing once it has.
+      await client.$connect();
+      await client.$queryRaw`SELECT 1`;
+    },
+    // Building the adapter is part of the question: one that refuses to be built does not answer.
+    storage: async () => {
+      await adapters.storage().exists(READINESS_STORAGE_KEY);
+    },
+    storageAdapter: adapters.choice.storage,
     failed: (probe, error) => {
       logger ??= createLogger({ base: { component: "readiness" } });
       logger.warn("A readiness probe did not answer", { probe, code: probeFailureCode(error) });

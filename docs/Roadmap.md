@@ -1058,6 +1058,15 @@ database, storage, provider or log code. RD-2 is now in four parts for size:
 RD-2c is to propose how readiness is limited, and RD-2d is to make it report
 a start that RD-2a could not check.
 
+**RD-2c — readiness limited by its clients' own settings** (ADR-0153, no
+migration): the readiness probe asks the database through a Prisma client of
+its own, with one connection and limits the client keeps, so a database that
+says nothing reads `503` after 3 or 4 seconds with no timer in the app's
+code. The storage probe keeps its adapter's limits; RD-3 is to limit the
+Google Cloud Storage adapter's. The scheduler guard now reads every app's
+and package's sources. RD-2d is to make readiness report a start that RD-2a
+could not check.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
