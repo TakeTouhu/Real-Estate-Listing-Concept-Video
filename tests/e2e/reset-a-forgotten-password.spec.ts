@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { E2E_BASE_URL } from "./support/environment";
+import { pageAlert } from "./support/hydration";
 import { passwordResetLink } from "./support/outbox";
 import { newPassword, signUpPerson } from "./support/owner";
 
@@ -48,7 +49,7 @@ test("a person resets a forgotten password from an emailed link, and every sign-
   await page.reload();
   await expect(page).toHaveURL(/\/login$/);
   await signIn(page, person.email, person.password);
-  await expect(page.getByRole("alert")).toHaveText("Invalid email or password");
+  await expect(pageAlert(page)).toHaveText("Invalid email or password");
   await signIn(page, person.email, password);
   await expect(page.getByRole("heading", { name: "Organizations" })).toBeVisible();
   await expect(page.getByText(`(${person.email})`)).toBeVisible();
