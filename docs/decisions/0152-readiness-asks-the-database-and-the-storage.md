@@ -4,9 +4,9 @@ Status: Accepted (RD-2b, 2026-11-16). The second part of the second milestone
 of production readiness, part 1, which the product owner approved on
 2026-11-16 (`/mnt/project-files/cto/production-readiness-proposal.md`; gap
 analysis `docs/production-readiness-gap-analysis.md`). RD-2a checked a
-production start (ADR-0151). RD-2 is now in three parts for size: RD-2c gives
-a probe a time limit and makes readiness report a start that RD-2a could not
-check.
+production start (ADR-0151). RD-2 is now in three parts for size: RD-2c is to
+propose how readiness is limited, and to make it report a start that RD-2a
+could not check.
 
 Builds on: ADR-0065 Decision 17 (readiness reports whether the MFA key is
 set), ADR-0150 (the web app's adapters chosen in one place).
@@ -39,30 +39,47 @@ operator's token, which it checks before it asks anything.
 
 ## Decision 2 — Readiness sets no time limit of its own in this change
 
-A probe ends when its client answers or gives up. Prisma gives up on a
-connection it cannot open after 5 seconds. A query it has already sent waits
-for the database, with no limit set.
+A probe ends when its client answers or gives up. By default Prisma gives up
+on a connection it cannot open after 5 seconds, and on waiting for one from
+its pool after 10; a `DATABASE_URL` can change both. A query it has already
+sent waits for the database, with no limit set.
 
-So a database that is down, refuses the sign-in or cannot be reached reads
-`503`, at once or after about 5 seconds. A database that keeps its
-connections and says nothing leaves a request waiting: with PostgreSQL frozen
-under a running app, the first request had no answer after 20 seconds, and
-the next, which needed a new connection, read `503` after 5. Whatever asks
-for readiness is itself timed, and reads no answer as not ready.
+So when Prisma has to open a connection, a database that is down, refuses
+the sign-in or cannot be reached reads `503`, at once or after about 5
+seconds. When it sends the query on a connection it holds, a database that
+says nothing leaves the request waiting. That was measured with a frozen
+database, below. A host lost without closing its connections is the same
+case until the connection itself gives up, and was not measured.
 
-A limit of readiness's own needs a timer, which this repository admits only
-by a decision that names it: ADR-0054 Decision 7 records that production
-code constructs none, and the guard in `queue-status-dormancy.test.ts` names
-its one exception, the transport's per-request deadline. This change adds no
-timer and leaves the guard as it is. RD-2c proposes the limit as a decision
-of its own.
+Measured on a running app, with every PostgreSQL process stopped (SIGSTOP):
+
+| The request's query | Readiness |
+| --- | --- |
+| goes out on a connection used just before | no answer after 60 seconds |
+| finds its connection idle for 25 seconds | `503` after 10 seconds, `P2024` |
+| waits for a pool of one (`connection_limit=1`), whose connection is in use | `503` after 10 seconds, `P2024` |
+| needs a new connection | `503` after 5 seconds, `P1001` |
+
+The second row reads as Prisma testing an idle connection before it uses it,
+inside the pool's wait. The storage probe likewise has only its adapter's
+limits, and neither the shared folder nor the in-memory adapter sets one.
+Whatever asks for readiness must set a limit of its own and read no answer
+as not ready.
+
+A first version of this change gave a probe five seconds by a timer in the
+app's own code. CLAUDE.md admits none without explicit CTO authorization:
+ADR-0054 Decision 7 records that production code constructs none, and the
+guard in `queue-status-dormancy.test.ts` names its one exception, the
+transport's per-request deadline. This change adds no timer, and the guard
+now refuses `AbortSignal.timeout` as it does `setTimeout`. RD-2c is to
+propose how readiness is limited, as a decision of its own.
 
 ## Decision 3 — A probe that did not answer is logged by a code
 
 The web app logs each probe that did not answer as a warning with the
 component `readiness`, the probe's name and one code: the error's own code
 when it is a single word of capitals, digits and underscores, as Prisma's,
-Node.js's and the storage adapters' are (`P1001`, `ECONNREFUSED`,
+Node.js's and the storage adapters' are (`P1001`, `EACCES`,
 `INTERNAL_ERROR`), and `UNEXPECTED` otherwise. The error's message is never
 logged.
 
@@ -71,8 +88,12 @@ all. Asked to connect, it names the reason: `P1000` for a refused sign-in,
 `P1001` for a database it cannot reach, `P1003` for one that does not exist.
 So the probe asks it to connect before the query, which does nothing once
 connected. A database lost after that fails the query itself, with `P1017`
-or `P1001`. A test in the database suite holds `P1001` against the installed
-Prisma.
+or `P1001`, unless it says nothing (Decision 2).
+
+A test in the database suite holds two of these against the installed
+Prisma, for a database nothing listens for: no code inside a query, and
+`P1001` when asked to connect. `P1000`, `P1003`, `P1017` and `P2024` were
+read from a running app.
 
 ## Decision 4 — Liveness loads none of it
 
@@ -89,7 +110,9 @@ down with readiness.
   `tests/integration/readiness-database-code.db.test.ts` and
   `tests/e2e/readiness.spec.ts`. Changed: `apps/web/src/lib/health.ts` and the
   readiness route's import.
-- Until RD-2c, whatever watches readiness sets the only time limit.
+- Until readiness is limited, whatever watches it must set a limit of its
+  own. The question is recorded in `docs/decisions/TODO.md`.
+- The scheduler guard refuses `AbortSignal.timeout` in production sources.
 - A development machine with no database now reads `degraded` on readiness,
   where it read `ready`. Liveness, sign-in and every page are as before.
 - The browser test reads readiness from its own PostgreSQL database and

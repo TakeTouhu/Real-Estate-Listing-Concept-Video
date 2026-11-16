@@ -16,7 +16,9 @@ Two more entries in `checks`, after `video-provider-adapter` and `mfa`:
 
 Any check failing makes `status` `degraded` and the answer `503`, as before.
 No detail carries what a probe threw. Readiness sets no time limit of its own
-(ADR-0152 Decision 2): a probe ends when its client answers or gives up.
+(ADR-0152 Decision 2): a probe ends when its client answers or gives up, and
+a database that keeps its connections and says nothing can leave the request
+with no answer. Whatever asks must set a limit of its own.
 
 The body, without its `service`, `version`, `time` and `provider`:
 

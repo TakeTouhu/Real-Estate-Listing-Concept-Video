@@ -1055,8 +1055,8 @@ migration): the readiness probe asks the database for one query and the
 chosen object storage about one key, and reports whether each answered, never
 what it threw. It sets no time limit of its own yet. Liveness loads none of
 the database, storage, provider or log code. RD-2 is now in three parts for
-size: RD-2c gives a probe a time limit and makes readiness report a start
-that RD-2a could not check.
+size: RD-2c is to propose how readiness is limited, and to make it report a
+start that RD-2a could not check.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —

@@ -22,12 +22,14 @@ const answering: ReadinessInputs = {
 const check = (readiness: Awaited<ReturnType<typeof computeReadiness>>, name: string) =>
   readiness.checks.find((one) => one.name === name);
 
-/** White space and block comments, which may stand between the parts of an import. */
-const GAP = String.raw`\s*(?:/\*[\s\S]*?\*/\s*)*`;
 /** An import statement that starts its line, up to the module it names. */
 const IMPORT_STATEMENT = /^import\b[\w\s{},*$]*["'][^"'\n]*["'];?/gm;
-/** Anything else that loads a module: a re-export, an import further in, `import()` or `require()`. */
-const LOADS = new RegExp(String.raw`\b(?:from|import)${GAP}["']|\b(?:import|require)${GAP}\(`);
+/** An import of types alone, which the compiler erases. */
+const TYPES_ALONE = /^import type\s*[{*]/;
+/** White space and comments, which may stand between "from" and the module a re-export names. */
+const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|//.*)*`;
+/** Anything else that can load a module: the words for it anywhere, or a re-export. */
+const LOADS = new RegExp(String.raw`import|require|getBuiltinModule|\bfrom${GAP}["']`, "i");
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -50,14 +52,25 @@ describe("buildLiveness", () => {
     // The compiler erases an import of types alone, so this module loads no other.
     const own = imports("health.ts");
     expect(own.length).toBeGreaterThan(0);
-    for (const statement of own) expect(statement).toMatch(/^import type\s+(?!from\b)/);
+    for (const statement of own) expect(statement).toMatch(TYPES_ALONE);
     expect(imports("../app/api/health/route.ts")).toEqual([
       'import { NextResponse } from "next/server";',
       'import { buildLiveness } from "@/lib/health";',
     ]);
-    // What a scan line by line would miss is seen.
-    const hidden = ['export {\n  a,\n} from "x";', '  import "x";', 'import /* c */ ("x");', 'const x = require("x");'];
+    // What a scan line by line, or of calls alone, would miss is seen.
+    const hidden = [
+      'export {\n  a,\n} from "x";',
+      'export { a } from // why\n"x";',
+      '  import "x";',
+      'import { a } from // why\n"x";',
+      'import /* c */ ("x");',
+      'require.context("x");',
+    ];
     for (const source of hidden) expect(source.replace(IMPORT_STATEMENT, "")).toMatch(LOADS);
+    // A default import named "type" loads its module.
+    for (const loading of ['import type  from "x";', 'import type , { a } from "x";']) {
+      expect(loading).not.toMatch(TYPES_ALONE);
+    }
   });
 });
 
@@ -123,15 +136,15 @@ describe("computeReadiness", () => {
   });
 
   it("asks both at the same time", async () => {
-    let answer = (): void => undefined;
-    const database = vi.fn(() => new Promise<void>((resolve) => (answer = resolve)));
-    const storage = vi.fn(() => Promise.resolve());
+    const answer: (() => void)[] = [];
+    const asked = () => vi.fn(() => new Promise<void>((resolve) => void answer.push(resolve)));
+    const [database, storage] = [asked(), asked()];
     const pending = computeReadiness(env, new FakeVideoProvider(), { ...answering, database, storage });
     await new Promise((resolve) => setImmediate(resolve));
-    // The storage is asked while the database has not answered yet.
+    // Each is asked while the other has not answered.
     expect(database).toHaveBeenCalledTimes(1);
     expect(storage).toHaveBeenCalledTimes(1);
-    answer();
+    for (const one of answer) one();
     expect((await pending).status).toBe("ready");
   });
 

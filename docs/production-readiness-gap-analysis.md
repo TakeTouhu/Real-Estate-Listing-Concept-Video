@@ -45,7 +45,7 @@ changed lines.
 | PR | What | Migration |
 | --- | --- | --- |
 | RD-1 | The web app's adapters chosen in one place (ADR-0150) | none |
-| RD-2 | Boot-time check of adapters and secrets (*RD-2a, ADR-0151*); readiness checks the database and storage (*RD-2b, ADR-0152*); a time limit for those checks, and a start RD-2a could not check (*RD-2c*) | none |
+| RD-2 | Boot-time check of adapters and secrets (*RD-2a, ADR-0151*); readiness checks the database and storage (*RD-2b, ADR-0152*); how those checks are limited, and a start RD-2a could not check (*RD-2c*) | none |
 | RD-3 | Google Cloud Storage adapter for the web storage port, tested on an emulator | none |
 | RD-4 | Google Cloud Storage for the worker's copy and deliverable writes | none |
 | RD-5 | ClamAV scanner, with ClamAV in CI | none |

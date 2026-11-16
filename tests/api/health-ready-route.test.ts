@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * wiring and readiness itself are stubbed.
  */
 const TOKEN = "healthcheck-token-abcdef123456";
+/** As long as the token, and wrong in its last character. */
+const NEARLY = `${TOKEN.slice(0, -1)}7`;
 
 const buildReadiness = vi.hoisted(() => vi.fn());
 
@@ -32,7 +34,7 @@ beforeEach(() => {
 
 describe("GET /api/health/ready", () => {
   it("asks nothing of a request without the operator's token", async () => {
-    for (const authorization of [undefined, "Bearer not-the-token", `Basic ${TOKEN}`, TOKEN, "Bearer "]) {
+    for (const authorization of [undefined, "Bearer not-the-token", `Bearer ${NEARLY}`, `Basic ${TOKEN}`, TOKEN]) {
       const response = await ask(authorization);
       expect(response.status).toBe(401);
       expect(await response.json()).toMatchObject({ error: { code: "UNAUTHENTICATED" } });

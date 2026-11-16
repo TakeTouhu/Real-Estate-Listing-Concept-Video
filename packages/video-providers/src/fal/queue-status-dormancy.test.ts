@@ -120,7 +120,8 @@ describe("the concrete fal status adapter has no production composition", () => 
       ...productionSources(),
       ...sourceFiles(join(REPO_ROOT, "packages", "video-providers", "src")),
     ]) {
-      for (const banned of ["setInterval", "setTimeout(", "node-cron", "cron.schedule"]) {
+      // `AbortSignal.timeout` is `setTimeout` under another name (ADR-0152 Decision 2).
+      for (const banned of ["setInterval", "setTimeout(", "AbortSignal.timeout", "node-cron", "cron.schedule"]) {
         // `setTimeout` is permitted only in the transport's abort timer, which
         // is a per-request deadline rather than a cadence.
         if (banned === "setTimeout(" && name.endsWith("src/http.ts")) continue;
