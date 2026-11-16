@@ -40,8 +40,8 @@ server process ends with exit code 1, and the `next dev` command with 0.
 | `ProductionAdapters` | for every port of `WebAdapterChoice`, the adapters a production start may choose |
 | `PRODUCTION_ADAPTERS` | today's list: `deterministic` image analysis and `offline` prompt moderation; none yet for storage, malware scanning or email |
 | `productionStartProblems(env, allowed?)` | every adapter and setting problem of a production start, one line each; empty when it may start |
-| `WebStart` | what a start check reads and how a refused start ends: `loadEnv()`, `allowed`, `report(message)`, `exit(code)` |
-| `checkWebStart(start?)` | when the ambient or the configured `NODE_ENV` is `production`: reports and ends a start that has any problem, or that only one of the two calls production |
+| `WebStart` | how a start check reads its environment and how a refused start ends: `loadEnv()`, `report(message)`, `exit(code)` |
+| `checkWebStart(start?, allowed?)` | when the ambient or the configured `NODE_ENV` is `production`: reports and ends a start that has any problem, or that only one of the two calls production |
 
 ### Moved: `apps/web/src/lib/adapter-choice.ts`
 

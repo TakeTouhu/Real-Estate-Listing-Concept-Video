@@ -41,12 +41,11 @@ const allowingTodays: ProductionAdapters = {
 const served: ServerEnv = { ...production, EMAIL_OUTBOX_DIR: "/tmp/outbox" };
 
 /** A start that records what it reported and how it ended. */
-function recorded(loadEnv: () => ServerEnv, allowed: ProductionAdapters = PRODUCTION_ADAPTERS) {
+function recorded(loadEnv: () => ServerEnv) {
   const reports: string[] = [];
   const exits: number[] = [];
   const start: WebStart = {
     loadEnv,
-    allowed,
     report: (message) => reports.push(message),
     exit: (code) => exits.push(code),
   };
@@ -114,8 +113,8 @@ describe("productionStartProblems", () => {
   });
 });
 
-/** A module named by an import, a re-export, a dynamic `import()` or a `require()`, in either kind of quotes. */
-const IMPORTED = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\(\s*)["']([^"']+)["']/g;
+/** A module named by an import, a re-export, a dynamic `import()` or a `require()`, in any kind of quotes. */
+const IMPORTED = /(?:\bfrom\s*|\bimport\s*\(?\s*(?:\/\*[\s\S]*?\*\/\s*)*|\brequire\s*\(\s*)["'`]([^"'`]+)["'`]/g;
 
 describe("what the start hook loads", () => {
   it("imports the check, the choice of adapters and the environment, and no adapter (ADR-0151 Decision 5)", () => {
@@ -155,9 +154,10 @@ describe("checkWebStart", () => {
     expect([reports, exits]).toEqual([[], []]);
   });
 
-  it("reports every problem in one message and ends a production start", () => {
+  it("reports every problem in one message and ends a production start, judged by PRODUCTION_ADAPTERS", () => {
     vi.stubEnv("NODE_ENV", "production");
     const { start, reports, exits } = recorded(() => production);
+    // Given no list of its own, as the start hook gives none.
     checkWebStart(start);
     expect(exits).toEqual([1]);
     expect(reports).toEqual([
@@ -171,8 +171,8 @@ describe("checkWebStart", () => {
   it("checks a start only one NODE_ENV calls production, and refuses it for that (ADR-0151 Decision 1)", () => {
     const refused = (ambient: string, env: ServerEnv, allowed?: ProductionAdapters): string[] => {
       vi.stubEnv("NODE_ENV", ambient);
-      const { start, reports, exits } = recorded(() => env, allowed);
-      checkWebStart(start);
+      const { start, reports, exits } = recorded(() => env);
+      checkWebStart(start, allowed);
       expect(exits).toEqual([1]);
       return reports.join("\n").split("\n").slice(1);
     };
@@ -227,8 +227,8 @@ describe("checkWebStart", () => {
 
   it("lets a production start go on when nothing is wrong", () => {
     vi.stubEnv("NODE_ENV", "production");
-    const { start, reports, exits } = recorded(() => served, allowingTodays);
-    checkWebStart(start);
+    const { start, reports, exits } = recorded(() => served);
+    checkWebStart(start, allowingTodays);
     expect([reports, exits]).toEqual([[], []]);
   });
 });

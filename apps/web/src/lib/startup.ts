@@ -66,17 +66,15 @@ export function productionStartProblems(
   return problems;
 }
 
-/** What a start check reads, and how a refused start is reported and ended. */
+/** How a start check reads its environment, and how a refused start is reported and ended. */
 export interface WebStart {
   readonly loadEnv: () => ServerEnv;
-  readonly allowed: ProductionAdapters;
   readonly report: (message: string) => void;
   readonly exit: (code: number) => void;
 }
 
 const processStart: WebStart = {
   loadEnv: getServerEnv,
-  allowed: PRODUCTION_ADAPTERS,
   report: (message) => console.error(message),
   exit: (code) => process.exit(code),
 };
@@ -94,8 +92,13 @@ const REFUSED = "The web app cannot start in production";
  * vouch for the other (ADR-0150 Decision 2). One that only one of them calls
  * production is refused for that too. Any other start is left alone, as
  * `next dev` and the browser test choose development adapters on purpose.
+ *
+ * Both arguments are for tests. The start hook gives neither, so the
+ * process's own start is judged by `PRODUCTION_ADAPTERS`; no environment
+ * passes that list until production adapters exist, so a test of a start
+ * that goes on gives its own.
  */
-export function checkWebStart(start: WebStart = processStart): void {
+export function checkWebStart(start: WebStart = processStart, allowed: ProductionAdapters = PRODUCTION_ADAPTERS): void {
   const ambient = process.env.NODE_ENV === "production";
   let env: ServerEnv;
   try {
@@ -112,7 +115,7 @@ export function checkWebStart(start: WebStart = processStart): void {
   }
   const configured = env.NODE_ENV === "production";
   if (!ambient && !configured) return;
-  const problems = [...productionStartProblems(env, start.allowed)];
+  const problems = [...productionStartProblems(env, allowed)];
   // The schema's production rules and the session cookie's `Secure` follow the configured value, and
   // the build follows the ambient one: where the two differ, production's rules hold only in part.
   if (ambient !== configured) {

@@ -55,11 +55,11 @@ development server given `NODE_ENV=production` is refused the same way.
 `production`.
 
 A refused start writes one message to standard error and ends the server's
-process with exit code 1. Ending it matters: on Next.js 15.5 a server whose
-`register()` throws keeps running and answers every request, liveness
-included, with a 500. Under `next start` that is the command's own exit code.
-`next dev` runs its server in a child process: the child ends with 1, and the
-`next dev` command then ends with 0.
+process with exit code 1. Under `next start` that is the command's own exit
+code. `next dev` runs its server in a child process: the child ends with 1,
+and the `next dev` command then ends with 0. Ending the process matters: on
+Next.js 15.5 a server whose `register()` throws keeps running and answers
+every request, liveness included, with a 500.
 
 The message lists every adapter and setting problem at once. When the
 environment fails its schema, the message is the schema's instead; the
@@ -140,8 +140,9 @@ every adapter's code before it could refuse: sharp today, and the Google
 Cloud Storage, ClamAV and SMTP clients after RD-3, RD-5 and RD-6. A package
 that failed to load would leave the server answering 500, which Decision 1
 exists to end. Under `next dev` the hook's build falls from 1,092 modules to
-45. `startup.test.ts` follows every import from the hook and holds it to the
-check, the choice and the environment, and to no package but `@app/shared`.
+45. `startup.test.ts` follows the hook's imports from file to file and holds
+them to the check, the choice and the environment, and to no package but
+`@app/shared`.
 
 ## Consequences
 
