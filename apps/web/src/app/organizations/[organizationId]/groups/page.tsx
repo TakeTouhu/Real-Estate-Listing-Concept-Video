@@ -189,8 +189,9 @@ function RenameGroup({ organizationId, group }: { organizationId: string; group:
 
 /**
  * The closed form that deletes a group, for a holder of `group.manage` who is
- * an `OWNER` or `ADMIN` (ADR-0052 Decision 11). Opened, it says what deleting
- * does before its button.
+ * an `OWNER` or `ADMIN` (ADR-0052 Decision 11) and may take what the group
+ * gives from each of its members (ADR-0148 Decision 2). Opened, it says what
+ * deleting does before its button.
  */
 function DeleteGroup({ organizationId, group }: { organizationId: string; group: GroupsOverviewGroup }) {
   return (
@@ -212,7 +213,8 @@ function DeleteGroup({ organizationId, group }: { organizationId: string; group:
 
 /**
  * The closed form that adds a member of the organization to a group: one of
- * those not in it whose role the viewer may assign (ADR-0143).
+ * those not in it whose role the viewer may assign (ADR-0143), on a group
+ * whose permissions the viewer may give (ADR-0148 Decision 2).
  */
 function AddGroupMember({ organizationId, group }: { organizationId: string; group: GroupsOverviewGroup }) {
   return (
@@ -250,8 +252,8 @@ function AddGroupMember({ organizationId, group }: { organizationId: string; gro
 
 /**
  * The closed form that removes a member from a group, for a viewer who may
- * assign their role (ADR-0143). Opened, it says what removing does before its
- * button.
+ * assign their role (ADR-0143) and take back what the group gives (ADR-0148
+ * Decision 2). Opened, it says what removing does before its button.
  */
 function RemoveGroupMember({
   organizationId,
@@ -305,6 +307,7 @@ function GroupPermissions({ organizationId, group }: { organizationId: string; g
             {group.permissions.map((permission) => (
               <li key={permission}>
                 {permissionName(permission)}
+                {permission === "property.create" ? " (never in effect for a Viewer or Billing member)" : null}
                 {group.revocable.includes(permission) ? (
                   <form method="post" action={`${action}/revoke`}>
                     <input type="hidden" name="permission" value={permission} />
@@ -336,11 +339,13 @@ function GiveGroupPermission({ action, group }: { action: string; group: GroupsO
   const quoted = mfa.map((permission) => `"${PERMISSION_NAMES[permission]}"`).join(" or ");
   return (
     <details>
-      <summary aria-label={`Give ${group.name} a permission…`}>Give a permission…</summary>
+      <summary aria-label={`Give a permission to ${group.name}…`}>Give a permission…</summary>
       <form method="post" action={action}>
         <p className="muted" id={notes}>
-          Each member of {group.name} will hold it, and so will anyone added to the group later. It never widens which
-          Properties they reach.
+          Each member of {group.name} will hold it, and so will anyone added to the group later. It applies to the
+          Properties their role reaches, and giving never widens them: an Owner, Admin or Billing member reaches every
+          Property of the organization, a Manager the Properties of the groups they belong to, and a Creator or Viewer
+          the Properties they are responsible for.
           {group.givable.includes("property.create")
             ? " \"Add Properties\" is never in effect for a Viewer or Billing member."
             : null}
@@ -354,7 +359,7 @@ function GiveGroupPermission({ action, group }: { action: string; group: GroupsO
         </label>
         <select
           id={`give-${group.id}`}
-          aria-label={`Permission to give ${group.name}`}
+          aria-label={`Permission to give to ${group.name}`}
           name="permission"
           defaultValue=""
           required

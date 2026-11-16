@@ -298,6 +298,15 @@ describe("taking a permission back from a group", () => {
     expect(deps.repos.auditLogs.all()).toHaveLength(entries);
   });
 
+  it("refuses unread a group id longer than any group's, auditing nothing", async () => {
+    await signIn("team.viewer");
+    // An id of the longest length still reaches the service, which audits a VIEWER's refusal.
+    expect(landing(await takingBack("g".repeat(64), "audit.view"))).toBe("error=may-not-revoke-group-permission");
+    const entries = deps.repos.auditLogs.all().length;
+    expect(landing(await takingBack("g".repeat(65), "audit.view"))).toBe("error=group-gone");
+    expect(deps.repos.auditLogs.all()).toHaveLength(entries);
+  });
+
   it.each([
     ["ADMIN", "billing.manage", "protected"],
     ["VIEWER", "audit.view", "lacks_permission_manage"],

@@ -18,7 +18,7 @@ permissions and gains their forms.
 
 | Route | Change |
 | --- | --- |
-| `GET /organizations/{organizationId}/groups` | Each group says what it gives each of its members, or that it gives none. A viewer the ceiling allows sees "Take back" on each, and a closed "Give a permission…" form listing what it may give, which says before its list what giving brings (two-step sign-in for `permission.manage` and `billing.manage`, `property.create` never in effect for a `VIEWER` or `BILLING` member, only an `OWNER` or `ADMIN` acting on other members). Delete, and the members offered to add or remove, are decided per group under the ceiling of what the group gives. Shows the new `notice` and `error` codes, and nothing for any other code |
+| `GET /organizations/{organizationId}/groups` | Each group says what it gives each of its members (of `property.create`, that it is never in effect for a `VIEWER` or `BILLING` member), or that it gives none. A viewer the ceiling allows sees "Take back" on each, and a closed "Give a permission…" form listing what it may give, which says before its list what giving brings (which Properties each role reaches, two-step sign-in for `permission.manage` and `billing.manage`, `property.create` never in effect for a `VIEWER` or `BILLING` member, only an `OWNER` or `ADMIN` acting on other members). Delete, and the members offered to add or remove, are decided per group under the ceiling of what the group gives. Shows the new `notice` and `error` codes, and nothing for any other code |
 
 ## Domain
 
@@ -44,24 +44,44 @@ sequenceDiagram
   V->>R: POST .../groups/{groupId}/permissions/grant (permission)
   alt another origin
     R-->>V: 403
+  else signed out
+    R-->>V: 303 /login
   else missing or not a permission, or group id over 64
     R-->>V: 303 groups page, error=group-permission or group-gone
   else
     R->>S: grantPermission(viewer, organization, group, permission)
-    S->>D: viewer's membership and permissions; the group
-    alt refused by permission.manage or the ceiling's actor half
+    S->>D: viewer's membership and permissions
+    alt not a member
+      S-->>R: FORBIDDEN, not audited
+      R-->>V: 303 groups page, error=may-not-grant-group-permission
+    else no permission.manage
       S->>D: audit group.change_refused
       S-->>R: FORBIDDEN
       R-->>V: 303 groups page, error=may-not-grant-group-permission
     else
-      S->>D: lock the group and read its members' roles
-      alt a member out of reach
+      S->>D: the group
+      alt no such group in the organization
+        S-->>R: NOT_FOUND
+        R-->>V: 303 groups page, error=group-gone
+      else past the ceiling's actor half
         S->>D: audit group.change_refused
+        S-->>R: FORBIDDEN
         R-->>V: 303 groups page, error=may-not-grant-group-permission
-      else allowed
-        S->>D: permission and group.permission_granted, in one transaction
-        R-->>V: 303 groups page, notice=group-permission-granted
+      else
+        S->>D: lock the group and read its members' roles
+        alt a member out of reach
+          S->>D: audit group.change_refused
+          S-->>R: FORBIDDEN
+          R-->>V: 303 groups page, error=may-not-grant-group-permission
+        else the group was deleted meanwhile
+          S-->>R: NOT_FOUND
+          R-->>V: 303 groups page, error=group-gone
+        else allowed, or given already (nothing written)
+          S->>D: permission and group.permission_granted, in one transaction
+          R-->>V: 303 groups page, notice=group-permission-granted
+        end
       end
     end
+    Note over R: Any other error is logged by its code alone: error=grant-group-permission-failed
   end
 ```

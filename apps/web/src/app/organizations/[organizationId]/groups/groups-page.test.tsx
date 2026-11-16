@@ -30,6 +30,12 @@ import { AppError, hotp } from "@app/shared";
  */
 const PASSWORD = "password-123456";
 const WENT_WRONG = "Something went wrong.";
+/** What the form giving East a permission always says first. */
+const REACH =
+  "Each member of East will hold it, and so will anyone added to the group later. It applies to the Properties " +
+  "their role reaches, and giving never widens them: an Owner, Admin or Billing member reaches every Property of " +
+  "the organization, a Manager the Properties of the groups they belong to, and a Creator or Viewer the Properties " +
+  "they are responsible for.";
 const KEY = "56".repeat(32);
 
 const cookie = vi.hoisted(() => ({ value: undefined as string | undefined }));
@@ -420,11 +426,12 @@ describe("the groups page", () => {
   });
 
   it("shows what each group gives its members, by name, and a manager nothing to change", async () => {
-    await group("East", [ownerId], ["video.download", "audit.view", "unit.view"]);
+    await group("East", [ownerId], ["video.download", "audit.view", "unit.view", "property.create"]);
     await signInAs("MANAGER");
     const text = await renderGroups();
     expect(text).toContain(
-      "East · 1 memberAiko Owner · owner@example.com · OwnerIt gives each of its members:Download videos" +
+      "East · 1 memberAiko Owner · owner@example.com · OwnerIt gives each of its members:" +
+        "Add Properties (never in effect for a Viewer or Billing member)Download videos" +
         "See UnitsSee the audit log (nothing in VTaVision uses it yet)",
     );
     expect(giveForm("East")).toBeNull();
@@ -441,19 +448,18 @@ describe("the groups page", () => {
       "Take back",
     );
     const form = giveForm("East");
-    const list = "Permission (Permission to give East): name=permission value= required=true";
+    const list = "Permission (Permission to give to East): name=permission value= required=true";
     expect(form).toMatch(`post ${path}/grant (${list})`);
     expect(form).toContain("Choose a permission (none) | See the organization (nothing in VTaVision uses it yet) = ");
     expect(form).toContain(" | Add Properties = property.create | ");
     expect(form).not.toContain("disclosure.none");
     expect(form).not.toContain("= unit.view");
     expect(form?.split(" -- ")[1]?.replace(/\s+/g, " ")).toBe(
-      "Each member of East will hold it, and so will anyone added to the group later. It never widens which " +
-        'Properties they reach. "Add Properties" is never in effect for a Viewer or Billing member. Whoever holds ' +
+      `${REACH} "Add Properties" is never in effect for a Viewer or Billing member. Whoever holds ` +
         "\"Change members' roles and permissions, and groups' permissions\" must use two-step sign-in. Whatever a " +
         "group gives, only an Owner or Admin can act on other members.",
     );
-    const summary = `summary[aria-label="Give East a permission…"]`;
+    const summary = `summary[aria-label="Give a permission to East…"]`;
     expect(screen.getByText("Give a permission…", { selector: summary })).toBeTruthy();
     expect(document.querySelectorAll("details[open]")).toHaveLength(0);
   });
@@ -463,10 +469,7 @@ describe("the groups page", () => {
     const groupsShown = [shownGroup({ id: "grp_1", name: "East", givable: ["video.view", "unit.view"] })];
     overview.value = { overview: () => Promise.resolve({ groups: groupsShown, mayManage: true }) };
     await renderGroups();
-    expect(giveForm("East")?.split(" -- ")[1]?.replace(/\s+/g, " ")).toBe(
-      "Each member of East will hold it, and so will anyone added to the group later. It never widens which " +
-        "Properties they reach.",
-    );
+    expect(giveForm("East")?.split(" -- ")[1]?.replace(/\s+/g, " ")).toBe(REACH);
   });
 
   it("offers an admin no change of what a group with an owner gives, nor deleting it once it gives any", async () => {

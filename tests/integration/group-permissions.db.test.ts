@@ -417,7 +417,7 @@ describe.skipIf(!HAS_DB)("each check is judged on the group as the change commit
 });
 
 describe.skipIf(!HAS_DB)("listing several groups' permissions at once (AT-11c, ADR-0148)", () => {
-  it("lists the named groups' permissions, of this organization only, in one read", async () => {
+  it("lists the named groups' permissions, of this organization only", async () => {
     await groups.grantPermission(OWNER, ORG, GROUP, "audit.view");
     await groups.grantPermission(OWNER, ORG, GROUP, "unit.view");
     await groups.grantPermission(OWNER, ORG, SECOND_GROUP, "video.view");

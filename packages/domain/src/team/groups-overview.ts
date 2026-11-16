@@ -27,7 +27,11 @@ export interface GroupsOverviewMember {
 }
 
 export interface GroupsOverviewGroupMember extends GroupsOverviewMember {
-  /** Whether the viewer may remove the member from the group: `group.manage` and the ceiling on their role. */
+  /**
+   * Whether the viewer may remove the member from the group: `group.manage`,
+   * the ceiling on their role, and the grant ceiling on taking each permission
+   * the group gives (ADR-0148 Decision 2).
+   */
   readonly mayRemove: boolean;
 }
 
@@ -38,7 +42,8 @@ export interface GroupsOverviewGroup {
   readonly members: readonly GroupsOverviewGroupMember[];
   /**
    * The organization's members not in the group whose role the viewer may
-   * assign, in the same order, for a holder of `group.manage`; none for
+   * assign, in the same order, for a holder of `group.manage` who may also
+   * give each permission the group gives (ADR-0148 Decision 2); none for
    * anyone else.
    */
   readonly addable: readonly GroupsOverviewMember[];

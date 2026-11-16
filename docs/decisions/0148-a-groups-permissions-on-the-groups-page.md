@@ -9,10 +9,11 @@ already built".
 Builds on: ADR-0052 Decision 10 (the grant ceiling; `disclosure.none` only
 to an individual), ADR-0061 (group permissions: what a group may carry, and
 each change checked as a direct grant or revocation to every member it
-reaches, under the group's lock), ADR-0065 Decision 18 (who must use MFA),
-ADR-0141 to ADR-0143 (the groups page, its form posts, renaming, deleting
-and changing a group's members), ADR-0146 (how a permission is named) and
-ADR-0147 (individual grants on a member's permissions page).
+reaches, under the group's lock), ADR-0065 Decisions 7 and 15 (who must use
+MFA, and setting it up first, read on every request), ADR-0141 to ADR-0143
+(the groups page, its form posts, renaming, deleting and changing a group's
+members), ADR-0146 (how a permission is named) and ADR-0147 (individual
+grants on a member's permissions page).
 
 ## Context
 
@@ -87,7 +88,8 @@ group's. This settles the AT-9b item in `TODO.md`.
 
 Each group says what it gives each of its members, by the names a member's
 permissions page uses (ADR-0146), saying of one that nothing in VTaVision
-uses it yet; a group giving nothing says so.
+uses it yet, and of `property.create` that it is never in effect for a
+`VIEWER` or `BILLING` member; a group giving nothing says so.
 
 - **Take back**, on each permission the group gives, where `revocable`.
 - **Give a permission…**, a closed form listing what is `givable`, where
@@ -97,13 +99,19 @@ uses it yet; a group giving nothing says so.
 
 Opened, the form says before its list what giving brings:
 - each member will hold it, and so will anyone added to the group later;
-  it never widens which Properties they reach (Scope stays fixed by role);
+- it applies to the Properties their role reaches and never widens them
+  (Scope stays fixed by role): an `OWNER`, `ADMIN` or `BILLING` member
+  reaches every Property of the organization, a `MANAGER` the Properties of
+  the groups they belong to, and a `CREATOR` or `VIEWER` the Properties they
+  are responsible for. So a permission over Properties given to a group with
+  a `BILLING` member reaches every Property of the organization, and the
+  form says what each role reaches before anyone gives it;
 - when `property.create` is offered: it is never in effect for a `VIEWER` or
   `BILLING` member;
 - when `permission.manage` or `billing.manage` is offered: whoever holds it
   must use two-step sign-in. The requirement is read from the memberships on
   every request, group permissions included, so each member is asked to set
-  it up at their next page (ADR-0065 Decision 18);
+  it up at their next page (ADR-0065 Decisions 7 and 15);
 - when `member.manage`, `group.manage` or `permission.manage` is offered:
   whatever a group gives, only an `OWNER` or `ADMIN` can act on other
   members (ADR-0146 Decision 3).

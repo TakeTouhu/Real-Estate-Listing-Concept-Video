@@ -16,8 +16,9 @@ import { codeOf } from "./page-codes";
 let overview: GroupsOverviewService | undefined;
 
 /**
- * An organization's groups and their members (ADR-0141). Server-only. It reads
- * the groups, their members and the members' accounts, and writes nothing.
+ * An organization's groups, their members (ADR-0141) and their permissions
+ * (ADR-0148). Server-only. It reads the groups, their members, their
+ * permissions and the members' accounts, and writes nothing.
  */
 export function getGroupsOverviewService(): GroupsOverviewService {
   overview ??= new GroupsOverviewService(getIdentityServices().deps);

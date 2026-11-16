@@ -29,8 +29,8 @@ test("an owner creates a group, changes its permissions and members, renames it 
   await expect(page.getByRole("heading", { name: "Groups (1)" })).toBeVisible();
 
   await expect(page.getByText("It gives its members no permissions.")).toBeVisible();
-  await page.locator('summary[aria-label="Give East office a permission…"]').click();
-  await page.getByLabel("Permission to give East office").selectOption("unit.view");
+  await page.locator('summary[aria-label="Give a permission to East office…"]').click();
+  await page.getByLabel("Permission to give to East office").selectOption("unit.view");
   await page.getByRole("button", { name: "Give to group East office" }).click();
   await expect(page.getByRole("status")).toHaveText("The group gives that permission now, to each of its members.");
   await expect(page.getByText("It gives each of its members:")).toBeVisible();

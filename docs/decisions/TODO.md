@@ -1429,12 +1429,12 @@ cross-reference to *Business rules to confirm* is stale; that item is closed.
       for the organization: `group.manage` and the `OWNER` or `ADMIN` role
       (ADR-0141, ADR-0142). The grant ceiling can refuse an `ADMIN` one
       group's deletion when the group carries a permission the `ADMIN` may
-      not take from a member (ADR-0061). Groups carry none until AT-11, so
-      today the page offers Delete exactly where it succeeds. AT-11 should
-      decide it per group, or say why the page offers it anyway. The same
-      holds for adding and removing a member (ADR-0143): the overview asks
-      `group.manage` and the role-assignment ceiling, not the grant ceiling
-      of what the group gives or takes.
+      not take from a member (ADR-0061). Groups carried none until AT-11, so
+      until then the page offered Delete exactly where it succeeded. AT-11
+      was to decide it per group, or say why the page offered it anyway.
+      The same held for adding and removing a member (ADR-0143): the
+      overview asked `group.manage` and the role-assignment ceiling, not the
+      grant ceiling of what the group gives or takes.
 
 ## Open in AT-11b — `disclosure.none` on a member's permissions page
 
