@@ -2579,3 +2579,11 @@ asked to set up two-step sign-in at their next page.
 routes go. Permissions given to groups meanwhile stay, and stay in effect;
 the groups page then offers Delete, Add and Remove as before, and the group
 service still refuses what the grant ceiling does not allow.
+
+## AT-12 — the browser test of what invited members reach
+
+**No migration** (ADR-0149). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing: only a browser test and documents.
+
+**Rolling back.** Not applicable; no product code changes.

@@ -48,7 +48,7 @@ is split further where it would exceed about 500 changed lines.
 | AT-9 | Groups page (*split: AT-9a list and create, ADR-0141; AT-9b rename and delete, ADR-0142; AT-9c members, ADR-0143*) | none |
 | AT-10 | Property assignment on the Property page (*split: AT-10a changing it on the Property page, ADR-0144; AT-10b choosing it at creation, ADR-0145*) | none |
 | AT-11 | Individual and group permissions (*split: AT-11a a member's permissions page, ADR-0146; AT-11b individual grants, ADR-0147; AT-11c group permissions, ADR-0148*) | none |
-| AT-12 | Browser test and completion report | none |
+| AT-12 | Browser test and completion report (*the browser test of what invited members reach, ADR-0149; `docs/accounts-team-completion.md`*) | none |
 
 ## Defaults the product owner approved
 

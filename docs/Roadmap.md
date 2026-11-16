@@ -987,6 +987,15 @@ same-origin form posts answer with the groups page and a fixed code. The
 browser test of groups gives a group a permission and takes it back. AT-11
 is complete.
 
+**AT-12 — the browser test of what invited members reach** (ADR-0149, no
+migration): a tenth browser test has an owner invite a Creator and a
+Manager, who join from the emailed link with new, verified accounts and see
+no Property. Once the owner makes the Creator responsible for one Property
+and adds the Manager to a group with another, each sees only that one, and
+any other Property is not found from its address; the Creator uploads its
+Property's photos. No product change. The plan is complete; its record is
+`docs/accounts-team-completion.md`.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin
