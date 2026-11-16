@@ -12,11 +12,16 @@ answers:
 
 - The `database` check asks a Prisma client of its own, with one connection
   and limits the client keeps: 3 seconds to open a connection, 3 for a
-  query's answer and 4 to wait for the connection. A database that says
-  nothing reads `503` after 3 or 4 seconds, where the request could wait
-  without end (ADR-0153 Decision 1).
+  query's answer and 4 to wait for the connection. Asked by one request at
+  a time, a database that says nothing reads `503` after 3 or 4 seconds,
+  where the request could wait without end (ADR-0153 Decision 1).
 - Requests that arrive together take that one connection in turn. One that
-  waits 4 seconds for it reads `503`.
+  waits 4 seconds for it reads `503`, also when the database answers, only
+  slowly. Of five at once to a database that said nothing, the last read
+  `503` after 6 seconds.
+- When the probe's own connection goes silent and the database still
+  answers, readiness reads `503` until the client gives that connection up
+  and opens another: about 20 seconds, measured.
 - The `storage` check keeps its adapter's limits. Neither development
   adapter asks over a network (Decision 2).
 
@@ -35,7 +40,7 @@ says nothing is now logged by one of these codes:
 | --- | --- |
 | `P1001` | opening a connection |
 | `P2010` | a query it had sent; Prisma's code for any raw query that failed |
-| `P2024` | waiting for its one connection |
+| `P2024` | waiting for its one connection: another request held it, or it had sat unused and the database said nothing |
 
 ## Internal API
 
@@ -43,7 +48,7 @@ says nothing is now logged by one of these codes:
 
 | Export | Shape |
 | --- | --- |
-| `limitedDatabaseUrl(url, seconds)` | new: the address with `connection_limit=1`, `connect_timeout` and `socket_timeout` of `seconds` and `pool_timeout` one more; refuses seconds that are not a whole number of one or more |
+| `limitedDatabaseUrl(url, seconds)` | new: the address with `connection_limit=1`, `connect_timeout` and `socket_timeout` of `seconds` and `pool_timeout` one more; refuses seconds that are not a whole number of one or more (`RangeError`), and an address that is not a URL (`TypeError` with the code `ERR_INVALID_URL`, which carries no part of the address) |
 | `getReadinessPrismaClient(url, seconds)` | new: the process's second Prisma client, made once for the limited address; a plain client when `url` is not given |
 
 ### Changed: `apps/web/src/lib/readiness.ts`

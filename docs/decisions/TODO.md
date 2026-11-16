@@ -1524,8 +1524,7 @@ blocks activation. The production email service is tracked below, under
       client: an app whose own pool has nothing to give would read ready.
       The storage probe needs the same answer for each adapter. RD-2c is to
       propose which. *Decided in RD-2c (ADR-0153): limits of the client's
-      own, on a client that readiness alone uses. What it leaves open is
-      below.*
+      own, on a client made for readiness. What it leaves open is below.*
 
 ## Open in RD-2c — what the readiness limit leaves open
 
@@ -1546,6 +1545,17 @@ blocks activation. The production email service is tracked below, under
       Decision 1). A limit would be set in the deployment's `DATABASE_URL`
       or in the database, and belongs with the deployment, in part 2 of the
       production readiness plan.
+- [ ] **Set the readiness limit against what watches readiness.** The
+      probe's database client is given 3 seconds to open a connection, 3 for
+      an answer and 4 to wait for its one connection (ADR-0153 Decision 1).
+      The 3 was chosen with no deployment to measure: what asks for
+      readiness in production, how often, with what limit of its own, and
+      whether several ask at once are not known until part 2 of the
+      production readiness plan. Requests that arrive together take the one
+      connection in turn, so with a database that answers slowly one of them
+      can read `503` by `P2024` though every answer came in time. Part 2 is
+      to set the seconds, and to decide whether requests that arrive
+      together share one pending question.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
