@@ -114,23 +114,29 @@ describe("productionStartProblems", () => {
   });
 });
 
-describe("what the start check loads", () => {
-  it("imports the choice of adapters and the environment, and no adapter (ADR-0151 Decision 5)", () => {
+/** A module named by an import, a re-export, a dynamic `import()` or a `require()`, in either kind of quotes. */
+const IMPORTED = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\(\s*)["']([^"']+)["']/g;
+
+describe("what the start hook loads", () => {
+  it("imports the check, the choice of adapters and the environment, and no adapter (ADR-0151 Decision 5)", () => {
+    const src = join(__dirname, "..");
     const packages = new Set<string>();
     const files = new Set<string>();
     const read = (file: string): void => {
       if (files.has(file)) return;
       files.add(file);
-      for (const [, name = ""] of readFileSync(file, "utf8").matchAll(/ from "([^"]+)"/g)) {
+      for (const [, name = ""] of readFileSync(file, "utf8").matchAll(IMPORTED)) {
         if (name.startsWith(".")) read(join(dirname(file), `${name}.ts`));
         else packages.add(name);
       }
     };
-    read(join(__dirname, "startup.ts"));
-    expect([...files].map((file) => file.slice(__dirname.length + 1)).sort()).toEqual([
-      "adapter-choice.ts",
-      "env.ts",
-      "startup.ts",
+    // From the hook itself, whose import of the check is a dynamic one.
+    read(join(src, "instrumentation.ts"));
+    expect([...files].map((file) => file.slice(src.length + 1)).sort()).toEqual([
+      "instrumentation.ts",
+      "lib/adapter-choice.ts",
+      "lib/env.ts",
+      "lib/startup.ts",
     ]);
     // The environment's schema: no storage, image, database or provider code.
     expect([...packages]).toEqual(["@app/shared"]);
@@ -162,7 +168,7 @@ describe("checkWebStart", () => {
     ]);
   });
 
-  it("checks a start only one NODE_ENV calls production, and refuses it for that (ADR-0150 Decision 2)", () => {
+  it("checks a start only one NODE_ENV calls production, and refuses it for that (ADR-0151 Decision 1)", () => {
     const refused = (ambient: string, env: ServerEnv, allowed?: ProductionAdapters): string[] => {
       vi.stubEnv("NODE_ENV", ambient);
       const { start, reports, exits } = recorded(() => env, allowed);
@@ -178,9 +184,12 @@ describe("checkWebStart", () => {
     expect(refused("development", served, allowingTodays)).toEqual([
       '  - NODE_ENV is "production", but this is not a production build',
     ]);
-    // Neither vouches for the other: the adapters and the settings are checked all the same.
+    // Neither vouches for the other (ADR-0150 Decision 2): the three adapters and the three
+    // settings are checked all the same, after the line about NODE_ENV.
     expect(refused("development", production)).toHaveLength(4);
-    expect(refused("production", development)).toContain("  - DATABASE_URL is not set");
+    const [first, ...rest] = refused("production", development);
+    expect(first).toBe('  - NODE_ENV is not "production", but this is a production build');
+    expect(rest).toHaveLength(6);
   });
 
   it("ends a production start whose environment is invalid, with the schema's message", () => {
@@ -198,6 +207,22 @@ describe("checkWebStart", () => {
     const { start, reports, exits } = recorded(invalid);
     checkWebStart(start);
     expect([reports, exits]).toEqual([[], []]);
+  });
+
+  it("writes to standard error and ends the process itself when it is given no start", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("SESSION_SECRET", "");
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      checkWebStart();
+      expect(exit.mock.calls).toEqual([[1]]);
+      expect(error.mock.calls).toHaveLength(1);
+      expect(error.mock.calls[0]?.[0]).toMatch(/^The web app cannot start in production\. Invalid server environment/);
+    } finally {
+      exit.mockRestore();
+      error.mockRestore();
+    }
   });
 
   it("lets a production start go on when nothing is wrong", () => {

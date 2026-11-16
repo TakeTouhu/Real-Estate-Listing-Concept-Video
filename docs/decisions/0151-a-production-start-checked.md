@@ -54,10 +54,12 @@ development server given `NODE_ENV=production` is refused the same way.
 `next start` with no `NODE_ENV` is a production start: Next.js sets it to
 `production`.
 
-A refused start writes one message to standard error and ends the process
-with exit code 1. Ending it matters: on Next.js 15.5 a server whose
+A refused start writes one message to standard error and ends the server's
+process with exit code 1. Ending it matters: on Next.js 15.5 a server whose
 `register()` throws keeps running and answers every request, liveness
-included, with a 500.
+included, with a 500. Under `next start` that is the command's own exit code.
+`next dev` runs its server in a child process: the child ends with 1, and the
+`next dev` command then ends with 0.
 
 The message lists every adapter and setting problem at once. When the
 environment fails its schema, the message is the schema's instead; the
@@ -97,8 +99,9 @@ The offline analysis and prompt moderation are allowed because no decision
 keeps them out (ADR-0150 Decision 3).
 
 Until RD-3, RD-5 and RD-6, then, no environment passes and every production
-start is refused. A production start that would have failed at its first
-upload or sign-up now fails at start. Nothing is deployed.
+start the check sees is refused (Decision 1 names the one it does not see). A
+production start that would have failed at its first upload or sign-up now
+fails at start. Nothing is deployed.
 
 ## Decision 3 — The settings a production start requires
 
@@ -137,8 +140,8 @@ every adapter's code before it could refuse: sharp today, and the Google
 Cloud Storage, ClamAV and SMTP clients after RD-3, RD-5 and RD-6. A package
 that failed to load would leave the server answering 500, which Decision 1
 exists to end. Under `next dev` the hook's build falls from 1,092 modules to
-45. `startup.test.ts` holds the check to importing the choice and the
-environment alone.
+45. `startup.test.ts` follows every import from the hook and holds it to the
+check, the choice and the environment, and to no package but `@app/shared`.
 
 ## Consequences
 
@@ -151,4 +154,9 @@ environment alone.
 - No route, page, permission, migration or audit action changes.
 - `docs/decisions/TODO.md`: the boot-time validation entry is done for the
   web app, and MFA item 6 is settled.
+- A production build cannot be started with `NODE_ENV=test` or
+  `development` (Decision 1). RD-11's production-mode test therefore runs
+  with `NODE_ENV=production` and the schema's production rules: an https
+  `APP_BASE_URL`, hence https emailed links, while `next start` itself
+  serves http. RD-11 decides how its test follows those links.
 - Readiness of the database and the object storage follows in RD-2b.

@@ -23,10 +23,13 @@ The web app cannot start in production:
 ```
 
 No production adapter exists for object storage, malware scanning or email
-until RD-3, RD-5 and RD-6, so no production start passes yet. `next build`
-runs no check. `next dev` and the browser test are left alone, as neither
-`NODE_ENV` value says `production` there; a development server given
-`NODE_ENV=production` is refused.
+until RD-3, RD-5 and RD-6, so no production start passes the check yet.
+`next build` runs no check, and neither does a server started with
+`NEXT_PHASE=phase-production-build` in its environment: Next.js skips its
+start hook in its build phase (ADR-0151 Decision 1). `next dev` and the
+browser test are left alone, as neither `NODE_ENV` value says `production`
+there. A development server given `NODE_ENV=production` is refused: its
+server process ends with exit code 1, and the `next dev` command with 0.
 
 ## Internal API
 

@@ -3,8 +3,9 @@ import type { ServerEnv } from "@app/shared";
 /**
  * Which adapter serves each of the web app's ports, chosen in this one place
  * from its environment (RD-1, ADR-0150). A production adapter is one more
- * choice here and one more adapter built in `adapters.ts`, with no change to
- * the services, routes or pages that use the port.
+ * choice here, one more adapter built in `adapters.ts` and one more entry in
+ * what a production start allows (`startup.ts`), with no change to the
+ * services, routes or pages that use the port.
  *
  * Kept apart from the adapters, so the production start check reads the choice
  * without loading one (ADR-0151 Decision 5): this module imports no adapter.
