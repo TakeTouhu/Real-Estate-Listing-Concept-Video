@@ -959,6 +959,15 @@ same-origin form post, and refuses ids over 64 characters unread. The home
 page no longer fails for a `BILLING` member, who sees no Property list. A
 browser test creates a Property with its owner responsible and in a group.
 
+**AT-11a — a member's permissions page** (ADR-0146, no migration): AT-11 is
+split into this page, individual grants on it (AT-11b) and a group's
+permissions on the groups page (AT-11c). Each member on the members page
+links to a page listing every permission a member can hold, whether it is in
+effect, and whether their role, an individual grant or their groups give it,
+the groups named only for a viewer holding `group.view`. A holder of
+`member.view` sees it; viewing writes nothing. Permissions nothing in the
+product uses yet say so. A browser test opens an owner's own permissions.
+
 **Not yet built in Phase 6:** Stripe and sales-assisted billing, subscription cancellation, seats and
 storage blocks, upgrade/downgrade, charged disclosure recomposition, the internal
 recovery budget, the Cost Safety Guard threshold, and reconciliation/admin

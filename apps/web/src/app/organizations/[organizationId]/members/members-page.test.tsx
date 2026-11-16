@@ -22,7 +22,8 @@ import { AppError, hotp } from "@app/shared";
  * with the roles it may assign and cancels those roles' invitations, and the
  * page says what a fixed code in its address names, and nothing else (AT-6b,
  * ADR-0136). A holder of `permission.manage` gives other members the roles its
- * ceiling allows (AT-8a, ADR-0139).
+ * ceiling allows (AT-8a, ADR-0139). Each member links to their permissions
+ * page (AT-11a, ADR-0146).
  */
 const PASSWORD = "password-123456";
 const KEY = "55".repeat(32);
@@ -237,11 +238,18 @@ describe("the members page", () => {
     );
     expect(screen.getByRole("heading", { name: "Members (2)" })).toBeTruthy();
     expect(screen.getAllByRole("listitem").map((item) => item.textContent?.replace(/\s+/g, " "))).toEqual([
-      "Aiko Owner · owner@example.com · Owner · joined 10 Nov 2026, 12:00 JST",
-      "Ken BILLING (you) · ken.billing@example.com · Billing · joined 10 Nov 2026, 14:00 JST",
+      "Aiko Owner · owner@example.com · Owner · joined 10 Nov 2026, 12:00 JST · Permissions",
+      "Ken BILLING (you) · ken.billing@example.com · Billing · joined 10 Nov 2026, 14:00 JST · Permissions",
       "new.hire@example.com · Viewer · invited 10 Nov 2026, 12:00 JST, expires 17 Nov 2026, 12:00 JST",
     ]);
     expect(screen.getByRole("heading", { name: "Pending invitations (1)" })).toBeTruthy();
+    // Each member links to their permissions page (AT-11a, ADR-0146).
+    const billingId = (await deps.repos.users.findByEmail("ken.billing@example.com"))?.id;
+    const links = screen.getAllByRole("link", { name: /^Permissions of / });
+    expect(links.map((link) => [link.getAttribute("aria-label"), link.getAttribute("href")])).toEqual([
+      ["Permissions of owner@example.com", `/organizations/${orgId}/members/${ownerId}/permissions`],
+      ["Permissions of ken.billing@example.com", `/organizations/${orgId}/members/${billingId}/permissions`],
+    ]);
   });
 
   it("says when no invitation is pending", async () => {
