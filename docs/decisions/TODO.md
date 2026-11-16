@@ -1556,6 +1556,27 @@ blocks activation. The production email service is tracked below, under
       can read `503` by `P2024` though every answer came in time. Part 2 is
       to set the seconds, and to decide whether requests that arrive
       together share one pending question.
+- [ ] **Have readiness, or the start check, refuse an address the web app's
+      own client cannot read.** The probe's client is given the address
+      taken apart and put together again, with four settings replaced
+      (ADR-0153 Decision 1). That puts right two kinds of address Prisma
+      refuses: one that does not begin with `postgresql://` or
+      `postgres://` as written (`P1012`), and one whose own value for
+      `connection_limit`, `connect_timeout`, `socket_timeout` or
+      `pool_timeout` it cannot read (`P1013`). With either, the web app's
+      own client can ask nothing and readiness reads `ready`; before RD-2c
+      readiness asked that client. The environment check passes both, and
+      the start check asks only whether `DATABASE_URL` is set. RD-2d is to
+      decide where it is refused.
+- [ ] **Have the reading of the rule on timers confirmed.** ADR-0153
+      Decision 1 reads CLAUDE.md's rule on timers as not reaching a
+      deadline a client keeps for its own question. The reading is the
+      decision's own: no authorization under the rule had been given when
+      it was accepted. Put to the product owner on 2026-11-16. If the rule
+      is to reach such limits, the four settings come out again; the
+      deadline the media process runner gives Node.js for a process and the
+      two defaults of the web app's own database client are limits of the
+      same kind.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

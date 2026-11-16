@@ -5,7 +5,9 @@ of production readiness, part 1, which the product owner approved on
 2026-11-16 (`/mnt/project-files/cto/production-readiness-proposal.md`; gap
 analysis `docs/production-readiness-gap-analysis.md`). RD-2b made readiness
 ask the database and the storage (ADR-0152) and left how it is limited open.
-RD-2d is to make readiness report a start that RD-2a could not check.
+RD-2d is to make readiness report a start that RD-2a could not check, and to
+decide where an address the web app's own client cannot read is refused
+(Decision 1).
 
 Builds on: ADR-0152 (what readiness asks, and the code a probe that did not
 answer is logged by), ADR-0151 (a production start refuses the two
@@ -68,11 +70,18 @@ whatever is attached to it; a deadline and a schedule are written with the
 same name, and only reading the code tells them apart. It reads the rule as
 not reaching a deadline that a client keeps for its own question: nothing
 is scheduled by one, and the web app's own database client keeps two by
-default. The reading is this decision's own. No authorization under the
-rule was asked or given for it. If the rule is to reach such limits, the
-four settings come out again and readiness has no limit of its own, as
-ADR-0152 left it. The sources the guard reads still hold one timer, the
-transport's deadline (Decision 3), and this change adds none.
+default.
+
+The reading is this decision's own, and no authorization under the rule
+had been given for it when this was accepted. It was put to the product
+owner on 2026-11-16 as a question, whether the rule reaches such limits,
+and `docs/decisions/TODO.md` holds the question until it is answered. If
+the rule is to reach them, the four settings come out again and readiness
+has no limit of its own, as ADR-0152 left it; the deadline the media
+process runner gives Node.js for a process, and the two defaults of the web
+app's own client, are limits of the same kind and wait for the same answer.
+The sources the guard reads still hold one timer, the transport's deadline
+(Decision 3), and this change adds none.
 
 ### Why a client of its own, and these four settings
 
@@ -93,6 +102,23 @@ through the socket's folder and gave the same `application_name` for the
 address as written and as limited. An address that is not a URL is refused
 with an error that carries no part of it. The web app does not come that
 far with one: its environment check refuses such a `DATABASE_URL`.
+
+The limited address can be read where the address as written cannot.
+Prisma refuses an address that does not begin with `postgresql://` or
+`postgres://` (`P1012`): one with a space, a tab or a newline before it, or
+with its protocol in capitals. `new URL` reads each of those, so the
+environment check passes it and the limited address comes out put right.
+Prisma refuses too an address whose own value for one of the four settings
+it cannot read, such as `pool_timeout=10s` (`P1013`), and the limited
+address replaces that value. Measured on bare clients, twice: in each case
+a client given the address as written was refused before it connected, and
+one given it as limited was answered. Measured on the development server
+too, twice, with the protocol in capitals, with a space before the address,
+with `pool_timeout=10s` and with `connection_limit=abc`: readiness read
+`200` with each, while a sign-in for an account that does not exist, which
+asks the web app's own client, was answered `Sign in failed`, the route's
+words for an error it does not know, and not `Invalid email or password`
+as with the address as it should be.
 
 ### What was measured
 
@@ -115,11 +141,13 @@ after it took 3.0. In each case readiness read `200` again at the first
 request after the processes were resumed.
 
 The client keeps a connection on which it gave a query up, and asks the
-next question on it: in the first row every later request read `P2010`
-after 3 seconds too. It gives up a connection that fails a test, and the
-times fit a client that tests, before it uses it, a connection it has not
-tested for about 15 seconds. That is read off the measurements below and
-the second row above, not from Prisma's documentation.
+next question on it: in the first row the request after it, asked at once,
+read `P2010` after 3 seconds too. It gives up a connection that fails a
+test, and it tests a connection before it uses it once 15 seconds have
+passed since it made or last tested it, used meanwhile or not. That is
+measured, on a bare client with these settings and to within a second, and
+is not from Prisma's documentation; the second row above and the table
+below fit it.
 
 | The case | Readiness |
 | --- | --- |
@@ -127,7 +155,9 @@ the second row above, not from Prisma's documentation.
 | The server process of the probe's own connection stopped, the database answering every other client | `503` after 3 seconds (`P2010`) when asked at once and 8 or 9 seconds later; `200` after 3 seconds when asked at 16 or 17, on a new connection, and at once from then on |
 
 In the second case readiness read `503` of a database that answered every
-other client, for about 20 seconds, and then mended itself. The database
+other client, for about 20 seconds with requests 8 or 9 seconds apart, and
+then mended itself. How long depends on how often readiness is asked,
+because the client tests a connection only when it is asked. The database
 kept the silent connection, beside the new one, until its process ran
 again: two connections for the probe, not one.
 
@@ -170,7 +200,9 @@ records it.
   2.0 MB more, with 22 to 23 ms to connect.
 - Readiness says that the database answers, not that the web app's own
   client can ask it. An app whose own pool has no connection to give still
-  reads `ready`.
+  reads `ready`. So does one whose own client cannot read its address, in
+  the two ways named above; before this change readiness asked that client.
+  `docs/decisions/TODO.md` records it.
 - The web app's own client keeps Prisma's defaults. A request of its own
   whose query the database never answers waits as before; readiness no
   longer waits with it. Whether that client is to be limited is recorded in
@@ -218,19 +250,24 @@ It allows one of them once: `setTimeout` in
 request. A second timer in that file fails the test, and so does that one
 gone.
 
-Comments are read with the rest, so no source there may name a timer even
-in prose. A first form of this guard took comments out before it looked, and
-with them whatever followed `//` or `/*` inside a string: a timer on a line
-after an address was not seen.
+Comments are read with the rest, so no source there may write one of these
+names, in a comment either; the plural `timers` is one of them. A first
+form of this guard took comments out before it looked, and with them
+whatever followed `//` or `/*` inside a string: a timer on a line after an
+address was not seen.
 
 What the guard does not see:
 
-- a timer a dependency keeps, as Prisma keeps the limits of Decision 1;
+- a timer kept outside these sources: Prisma keeps the limits of
+  Decision 1, and Node.js the deadline the media process runner gives it
+  for a process;
 - a name put together when the code runs or reached another way, as
   `AbortSignal["timeout"]` is;
 - a loop or a wait that names no timer;
+- the one timer in `http.ts` changed into another: it is counted, not read;
 - a test, a file that is not `.ts` or `.tsx`, or one outside those trees:
-  `apps/web/next.config.mjs`, the `tests` folder, the CI workflow.
+  `apps/web/next.config.mjs`, the `tests` folder, `infra/`, the CI
+  workflow.
 
 It calls a change to a reviewer's attention and proves nothing more.
 
@@ -243,8 +280,8 @@ It calls a change to a reviewer's attention and proves nothing more.
   three limits against the installed Prisma, at one second where the web
   app gives three: against the suite's database, a wait for the one
   connection (`P2024`) and a query not answered in time (`P2010`, given up
-  before the database answers it); against a listener of its own, a
-  connection taken and never answered (`P1001`).
+  at the limit: not at once, and before the database answers it); against
+  a listener of its own, a connection taken and never answered (`P1001`).
 - `GET /api/health/ready` answers `503` within 3 or 4 seconds in each case
   measured with a database that says nothing and one request at a time,
   where it could wait without end. Each step has its own limit, 3 seconds
@@ -253,7 +290,9 @@ It calls a change to a reviewer's attention and proves nothing more.
   still reads no answer within its own limit as not ready.
 - The answer's shape, its checks and the log line are unchanged. No page,
   permission, migration or audit action changes.
-- `docs/decisions/TODO.md`: the item "Open in RD-2b" is closed. Three are
+- `docs/decisions/TODO.md`: the item "Open in RD-2b" is closed. Five are
   opened: how RD-3 limits the Google Cloud Storage adapter's `exists`,
-  whether the web app's own database client is to be limited, and what the
-  readiness limit is to be once what watches readiness is known.
+  whether the web app's own database client is to be limited, what the
+  readiness limit is to be once what watches readiness is known, where an
+  address the web app's own client cannot read is refused, and whether the
+  reading of the rule on timers is confirmed.

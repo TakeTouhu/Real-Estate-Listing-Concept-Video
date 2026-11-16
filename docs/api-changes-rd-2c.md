@@ -21,7 +21,16 @@ answers:
   `503` after 6 seconds.
 - When the probe's own connection goes silent and the database still
   answers, readiness reads `503` until the client gives that connection up
-  and opens another: about 20 seconds, measured.
+  and opens another: about 20 seconds, measured with requests 8 or 9
+  seconds apart. How long depends on how often readiness is asked, because
+  the client tests a connection only when it is asked.
+- The check answers for the database and no longer for the web app's own
+  client. Readiness reads `200` where that client cannot read its address
+  and the probe's can: an address that does not begin with `postgresql://`
+  or `postgres://` as written (`P1012`), or whose own value for
+  `connection_limit`, `connect_timeout`, `socket_timeout` or `pool_timeout`
+  Prisma cannot read (`P1013`). Before RD-2c readiness asked that client.
+  RD-2d is to decide where such an address is refused.
 - The `storage` check keeps its adapter's limits. Neither development
   adapter asks over a network (Decision 2).
 
@@ -40,7 +49,7 @@ says nothing is now logged by one of these codes:
 | --- | --- |
 | `P1001` | opening a connection |
 | `P2010` | a query it had sent; Prisma's code for any raw query that failed |
-| `P2024` | waiting for its one connection: another request held it, or it had sat unused and the database said nothing |
+| `P2024` | waiting for its one connection: another request held it, or the client tested it before using it and the database said nothing |
 
 ## Internal API
 

@@ -1066,7 +1066,8 @@ time. Prisma's engine keeps those limits, and the change adds no timer to
 the repository's code. The storage probe keeps its adapter's limits; RD-3 is
 to limit the Google Cloud Storage adapter's. The scheduler guard now reads
 every app's and package's sources, as text. RD-2d is to make readiness
-report a start that RD-2a could not check.
+report a start that RD-2a could not check, and to decide where an address
+the web app's own database client cannot read is refused.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
