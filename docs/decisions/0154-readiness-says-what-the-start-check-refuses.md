@@ -71,8 +71,8 @@ before.
 
 Readiness does not know whether the hook ran. It asks what the check
 refuses, of the environment and the build it runs in. A start the check saw
-and let go on reads `nothing refused`; one it saw and refused has ended, and
-is asked nothing.
+and let go on, and whose environment can be read, reads `nothing refused`;
+one it saw and refused has ended, and is asked nothing.
 
 ## Decision 2 — The reasons are logged, and the server is not ended
 
@@ -91,19 +91,23 @@ check did not see still serves whoever reaches it, as on the base: each
 development adapter refuses production when it is first built.
 
 Making the hook run was not tried. The skip is Next.js's own, and it has no
-setting. Taking `NEXT_PHASE` out before Next.js reads it would have to
-happen where the server is started, which RD-10 settles with the container
-image; `docs/decisions/TODO.md` records it.
+setting. Taking `NEXT_PHASE` out before Next.js reads it, or refusing to
+start with it, was not tried either: where that would run depends on how
+the server is started, which RD-10 settles with the container image;
+`docs/decisions/TODO.md` records it.
 
 ## Decision 3 — What readiness still cannot say
 
 An environment that fails its schema cannot be read at all, and readiness
-reads the operator's token from it before it answers anyone. Such a start,
-when the check did not see it, answers readiness with `500` and liveness
-with `200`, as on the base; the schema's message, which names each invalid
-setting, is in the server's output. A `500` is not ready to whatever
-watches, and the check ends such a start when it sees it (ADR-0151
-Decision 1).
+reads the operator's token from it before it answers a request that
+carries one. Such a start, when the check did not see it, answers such a
+request with `500` and liveness with `200`, as on the base; the schema's
+message, which names each invalid setting, is in the server's output. A
+request that carries no token is answered `401` before the environment is
+read, as in any start. Neither answer is ready to whatever watches. The
+check ends such a start when it sees it and the build is a production one;
+elsewhere it leaves it alone, and the environment is reported where it is
+first read (ADR-0151 Decision 1).
 
 ## What was measured
 
@@ -123,6 +127,14 @@ In each of the three that readiness answered with `503`, the storage check
 read `does not answer` as on the base, and the server logged one warning
 with the `start` check's lines for each readiness request, beside the
 storage probe's.
+
+Each of those requests carried the operator's token. A request with no
+token, and one with a wrong token, were measured apart, twice with the same
+result, on a build of `b8d9ee6`, whose code differs from `69442b3` in two
+comments. In the start not seen with every setting set, both read `401`,
+and the server logged nothing for them. In the one whose environment fails
+its schema, the request with no token read `401` and the one with a wrong
+token `500`.
 
 The development server (`next dev`) given `NODE_ENV=production` is the
 other kind of production start. Seen, its server ended with the check's

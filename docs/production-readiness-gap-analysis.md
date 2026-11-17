@@ -7,8 +7,8 @@ product owner's yes. Since the product owner's standing approval of
 2026-11-16 08:08Z, a milestone of an approved plan is merged without asking
 again, once CI is green on its head and an independent review finds nothing
 blocking; the merge commits of RD-2a onward record it. Starting another
-plan still needs the product owner's yes, as does everything this plan
-leaves BLOCKED.
+plan still needs the product owner's yes, and what this plan leaves BLOCKED
+stays BLOCKED until it is explicitly authorized (ADR-0054 Decision 7).
 
 The plan works toward Phase 7's scope (`docs/Roadmap.md`) but is not the
 whole phase, so it receives no `phase-N-complete` tag.

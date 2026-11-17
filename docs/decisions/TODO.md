@@ -1608,12 +1608,12 @@ blocks activation. The production email service is tracked below, under
 - [ ] **Decide whether the web app may be started with `NEXT_PHASE` naming
       the build.** Next.js does not run the start hook for such a server,
       so the start check does not see it (ADR-0151 Decision 1). Readiness
-      says what the check refuses of it and logs that (ADR-0154), but the
-      server is not ended, and serves whoever reaches it. Taking the
-      variable out before Next.js reads it, or refusing to start with it,
-      was not tried: where that would run depends on how the server is
-      started. RD-10 adds the container image and its start command, and is
-      to decide.
+      says what the check refuses of it and logs that, where its
+      environment can be read (ADR-0154), but the server is not ended, and
+      serves whoever reaches it. Taking the variable out before Next.js
+      reads it, or refusing to start with it, was not tried: where that
+      would run depends on how the server is started. RD-10 adds the
+      container image and its start command, and is to decide.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

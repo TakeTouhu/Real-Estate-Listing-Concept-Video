@@ -1054,7 +1054,7 @@ adds the database and the object storage to readiness.
 migration): the readiness probe asks the database for one query and the
 chosen object storage about one key, and reports whether each answered, never
 what it threw. It sets no time limit of its own. Liveness loads none of the
-database, storage, provider or log code. RD-2 is now in four parts for size:
+database, storage, provider or log code. RD-2 is split further for size:
 RD-2c is to propose how readiness is limited, and RD-2d is to make it report
 a start that RD-2a could not check.
 
@@ -1066,16 +1066,16 @@ time. Prisma's engine keeps those limits, and the change adds no timer to
 the repository's code. The storage probe keeps its adapter's limits; RD-3 is
 to limit the Google Cloud Storage adapter's. The scheduler guard now reads
 every app's and package's sources, as text. RD-2d is to make readiness
-report a start that RD-2a could not check, and to decide where an address
-the web app's own database client cannot read is refused.
+report a start that RD-2a could not check; where an address the web app's
+own database client cannot read is refused is RD-2e's to decide (ADR-0154).
 
 **RD-2d — readiness says what the start check refuses** (ADR-0154, no
 migration): readiness gains a `start` check from the start check's own
 judgment. A start the check would have refused and did not see, such as
 one given `NEXT_PHASE=phase-production-build`, reads `503` with the check's
-reasons, and the server logs them. Every such start whose environment can
-be read already read `503` by the storage check; the reasons are new, and
-it stays not ready once RD-3 adds a storage adapter production may use.
+reasons where its environment can be read, and the server logs them. Every
+such start already read `503` by the storage check; the reasons are new,
+and it stays not ready once RD-3 adds a storage adapter production may use.
 RD-2 is now in five parts: RD-2e is to decide where an address the web
 app's own database client cannot read is refused.
 

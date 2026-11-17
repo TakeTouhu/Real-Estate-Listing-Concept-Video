@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@app/shared";
 import { NonProductionAdapterError } from "@app/storage";
 import {
@@ -82,6 +82,9 @@ describe("probeFailureCode", () => {
 });
 
 describe("buildReadiness", () => {
+  // The start check reads the ambient NODE_ENV: each case is given one, whatever the run was started with.
+  beforeEach(() => vi.stubEnv("NODE_ENV", "test"));
+
   it("asks the database to connect and for one query, and the chosen storage about one key", async () => {
     const lines = logged();
     queryRaw.mockResolvedValue([{ "?column?": 1 }]);
@@ -129,14 +132,13 @@ describe("buildReadiness", () => {
       { name: "start", ok: false, detail: problems.join("; ") },
     ]);
     // Where an operator who has the log alone reads them: the check wrote none, as it ended nothing.
-    expect(lines).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        component: "readiness",
-        message: "The start check refuses this start",
-        problems,
-      }),
-    ]);
+    const line = { level: "warn", component: "readiness", message: "The start check refuses this start", problems };
+    expect(lines).toEqual([expect.objectContaining(line)]);
+    // The line carries the check's lines, and nothing else of the environment.
+    expect(Object.keys(lines[0] ?? {}).sort()).toEqual(["component", "level", "message", "problems", "time"]);
+    // Each time readiness is asked, and not the first time alone (Decision 2).
+    await buildReadiness();
+    expect(lines).toEqual([expect.objectContaining(line), expect.objectContaining(line)]);
 
     // Answered all the same when the log cannot be written.
     vi.spyOn(console, "log").mockImplementation(() => {

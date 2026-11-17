@@ -2682,11 +2682,14 @@ app's own database client, with no limit of its own.
 
 **What changes at deploy.** `GET /api/health/ready` answers with a fifth
 check, `start`. It reads `nothing refused` in every start the start check
-lets go on. In a start the check would have refused and did not see, such
-as one given `NEXT_PHASE=phase-production-build`, it gives the check's
-reasons, the answer is `503`, and the server logs the reasons as a warning
-each time readiness is asked. A deployment must still not set
-`NEXT_PHASE`: such a server is not ended, and serves whoever reaches it.
+lets go on whose environment can be read. In a start the check would have
+refused and did not see, such as one given
+`NEXT_PHASE=phase-production-build`, it gives the check's reasons, the
+answer is `503`, and the server logs the reasons as a warning each time
+readiness is asked. Such a start whose environment fails its schema answers
+`500` with no checks, as before, and logs no such warning (ADR-0154
+Decision 3). A deployment must still not set `NEXT_PHASE`: such a server is
+not ended, and serves whoever reaches it.
 Whatever reads the checks by name is not affected; whatever counts them
 finds five.
 

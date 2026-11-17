@@ -12,7 +12,7 @@ The answer gains a fifth check, `start`, after `storage`:
 | The start check | `ok` | `detail` |
 | --- | --- | --- |
 | refuses nothing: a start that neither the build nor `NODE_ENV` calls production, and a production start with nothing wrong | `true` | `nothing refused` |
-| refuses the start | `false` | the check's lines in its order, joined by `; `, such as `email: "outbox" is not a production adapter; APP_BASE_URL is not set` |
+| refuses the start | `false` | the check's lines in its order, joined by `; `, such as `object storage: "memory" is not a production adapter; malware scanning: "passthrough" is not a production adapter; email: none is configured, so sign-up cannot send its verification link` |
 
 A `start` check that is not `ok` makes the status `degraded` and the answer
 `503`, as any other check does. The start check ends a start it refuses, so
