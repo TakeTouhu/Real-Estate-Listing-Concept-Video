@@ -1615,6 +1615,96 @@ blocks activation. The production email service is tracked below, under
       would run depends on how the server is started. RD-10 adds the
       container image and its start command, and is to decide.
 
+## Found after RD-2d — two CI jobs that failed now and then
+
+Each failed a job for a change that did not touch the test that failed or
+the pages it uses, and passed when the job was run again. Both were looked
+into on 2026-11-17.
+
+- [x] **A database test file's later client had no `DATABASE_URL`
+      (`P1012`).** Seen three times, each in one of a commit's two runs:
+      in `paid-submission-authorization.db.test.ts` (Phase 4C-3B-2G-1),
+      `legacy-executor-orchestrated.db.test.ts` (#168) and
+      `job-launch.db.test.ts` (#178). Each file makes two clients or more
+      one after the other. In the two whose client is on record (#168,
+      #178) it was the file's second; the first records only the message.
+      Reproduced outside CI, on Ubuntu 24.04 with Prisma 5.22.0 and
+      Node.js 22. Measured: every client hands its engine a copy of the
+      whole environment a few milliseconds after it is made; at a
+      process's first connection the engine sets `SSL_CERT_FILE` and
+      `SSL_CERT_DIR` from a thread of its own; where a name was not set,
+      the C library can move the environment and free the old one; a copy
+      of the environment taken at that instant was seen to lack a name, or
+      nearly all of them; and such processes were seen to end with `P1012`
+      in the second client, or to die. That the `P1012` comes from a copy
+      that lost `DATABASE_URL` is inferred: the two were not seen in the
+      same round.
+      In 12,000 fresh processes that made two clients one after the other
+      (151 of them spoiled by a full connection limit), 3 ended with
+      `P1012` in the second and 12 died; in a repetition of 6,000, none and
+      6; in a reviewer's 3,000, 1 and 7. With both names set before the
+      process started: none of either in 6,000, in the repetition's 6,000
+      or in the reviewer's 3,000. In those rounds the process first added
+      a name of its own, as a test runner does; the fault was seen without
+      that too (1 `P1012` and 1 death in 3,000 rounds of another script).
+      Run as 800 files of the database suite itself, the reproduction
+      ended with `Channel closed` after 205 files without the two names,
+      and passed all 800 with them.
+      Fixed for the database suite: `vitest.integration.config.ts` sets
+      both names for every file, and
+      `tests/integration/first-connection.db.test.ts` holds that both are
+      there and that the first connection adds no name. That this is what
+      failed in CI is inferred from the same signature, not measured there.
+      If `P1012` is seen again in a test's later client, the inference was
+      wrong, and the next step is to give each client the tests make
+      without an address its address when it is made (161 places on
+      `main`). The database job ending with `Channel closed` and no failed
+      test (seen once, on `main` after #172) is very likely the same
+      fault, the worker's process having died.
+- [ ] **Set the two names for the app's own processes.** The web app
+      makes two clients in a process too (`packages/database/src/client.ts`):
+      its own, and the one the readiness check asks (ADR-0153). Either may
+      be built while the other makes the process's first connection, and
+      each is kept for the life of the process. The app's own client is
+      plain: built from a copy that lost `DATABASE_URL`, it would fail
+      until a restart. The readiness client is given its address, and a
+      client given its address was measured not to need the variable. The
+      process can die in either case. No such failure has been seen, and
+      how often the two meet in a server was not measured. Nothing in the
+      repository sets the names for a server today. RD-10 adds the
+      container image, where both can be set once for every process; RD-2e,
+      which is to decide where an address the app's own client cannot read
+      is refused, is to take it into account. The browser tests'
+      development server is exposed the same way and was left as it is.
+- [ ] **Find the error behind a browser test's lost press.** Seen once
+      (#178, the `e2e` job of one of a commit's two runs): after pressing
+      `Videos →` the first test did not find the next page's form in 30
+      seconds. At most about half a second before that wait began, the
+      development server had printed `Fast Refresh had to perform a full
+      reload due to a runtime error`. Read in the installed Next.js
+      (15.5.22): the server prints that when an open page says it is
+      reloading itself after an error that reached Next.js's own boundary,
+      and such a page reloads itself when the server next says a page has
+      been compiled. Inferred, not seen (the failed run's screenshot could
+      not be read): that the page was the Property page, that the compile
+      the press started set the reload off, and that the reload dropped
+      the press and left the browser where it was. What the error was is
+      not known: the tests keep neither the page's errors nor its console.
+      One reading, reproduced only in an imitation of the page and not
+      against `next dev`, is that the press stopped the Property page
+      before the last of its data had arrived. `startVideo` in
+      `tests/e2e/support/video.ts` now leaves the Property page only once
+      it has loaded, which removes that case there and proves none. Other
+      browser tests still leave a page after only a check that something
+      is visible (`tests/e2e/support/owner.ts` before `Create`, for one),
+      so the same reading stays possible there.
+      Should the signature return, have the browser tests keep a failed
+      test's page errors, console errors and warnings, navigations and
+      failed page requests in its output, with addresses cut to their
+      paths. That was designed (about 420 lines in 13 files) and not
+      added. The design is kept with the plan's working files, outside the
+      repository, and would otherwise have to be written again.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of

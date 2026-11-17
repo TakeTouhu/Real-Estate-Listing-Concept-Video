@@ -28,6 +28,12 @@ export async function startVideo(page: Page, propertyName: string, name: string)
   await expect(page.getByRole("heading", { name: `Decided (${PHOTOS})` })).toBeVisible();
 
   await page.getByRole("link", { name: `← ${propertyName}` }).click();
+  // The Property page is left only once it has loaded. Seen once in CI: the press on `Videos →` below was lost just
+  // after `next dev` printed that a page was reloading itself after a runtime error (the error was not kept). One
+  // reading, not proven: the press stopped the Property page while it was still loading, its render failed, and it
+  // reloaded itself when the server said the next page was compiled, which dropped the press.
+  await hydrated(page.locator('input[type="file"]'));
+  await page.waitForLoadState("load");
   await page.getByRole("link", { name: "Videos →" }).click();
   await (await hydrated(page.getByLabel("Project name"))).fill(name);
   await page.getByLabel("Target length in seconds").fill("15");
