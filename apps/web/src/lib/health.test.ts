@@ -169,6 +169,12 @@ describe("computeReadiness", () => {
       { name: "start", ok: false, detail: 'email: "outbox" is not a production adapter; APP_BASE_URL is not set' },
     ]);
     expect(refused.checks.at(-1)?.name).toBe("start");
+
+    // One reason alone refuses a start.
+    const reason = "APP_BASE_URL is not set";
+    const single = await computeReadiness(env, new FakeVideoProvider(), { ...answering, startProblems: [reason] });
+    expect(single.status).toBe("degraded");
+    expect(single.checks.at(-1)).toEqual({ name: "start", ok: false, detail: reason });
   });
 
   it("answers degraded all the same when no one can be told of the failure", async () => {
