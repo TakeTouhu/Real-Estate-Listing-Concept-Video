@@ -1,15 +1,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@app/shared";
 import { NonProductionAdapterError } from "@app/storage";
-import { buildReadiness, probeFailureCode, READINESS_STORAGE_KEY } from "./readiness";
+import {
+  buildReadiness,
+  probeFailureCode,
+  READINESS_DATABASE_LIMIT_SECONDS,
+  READINESS_STORAGE_KEY,
+} from "./readiness";
 
+/** The settings readiness asks its database client by, each time it asks. */
+const clientSettings = vi.hoisted(() => vi.fn());
 const connect = vi.hoisted(() => vi.fn());
 const queryRaw = vi.hoisted(() => vi.fn());
 const exists = vi.hoisted(() => vi.fn());
 /** What building the storage adapter throws, when it refuses to be built. */
 const refusal = vi.hoisted(() => ({ value: undefined as Error | undefined }));
+const DATABASE_URL = vi.hoisted(() => "postgresql://probe:probe@database.test:5432/app?schema=public");
 
-vi.mock("@app/database", () => ({ getPrismaClient: () => ({ $connect: connect, $queryRaw: queryRaw }) }));
+vi.mock("@app/database", () => ({
+  getReadinessPrismaClient: (...settings: unknown[]) => {
+    clientSettings(...settings);
+    return { $connect: connect, $queryRaw: queryRaw };
+  },
+}));
 vi.mock("./adapters", () => ({
   getWebAdapters: () => ({
     choice: { storage: "shared-folder" },
@@ -26,13 +39,14 @@ vi.mock("./env", async () => {
     HEALTHCHECK_API_TOKEN: "healthcheck-token-abcdef123456",
     STORAGE_SIGNING_SECRET: "storage-signing-secret-abc",
     MFA_SECRET_KEY: "11".repeat(32),
+    DATABASE_URL,
   });
   return { getServerEnv: () => env };
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const mock of [connect, queryRaw, exists]) mock.mockReset();
+  for (const mock of [clientSettings, connect, queryRaw, exists]) mock.mockReset();
   refusal.value = undefined;
 });
 
@@ -79,6 +93,9 @@ describe("buildReadiness", () => {
       ["database", true, "answers"],
       ["storage", true, "adapter=shared-folder, answers"],
     ]);
+    // The probe's own client, limited by its own settings (ADR-0153 Decision 1).
+    expect(clientSettings.mock.calls).toEqual([[DATABASE_URL, READINESS_DATABASE_LIMIT_SECONDS]]);
+    expect(READINESS_DATABASE_LIMIT_SECONDS).toBe(3);
     // Connected first: only then does Prisma say why it could not (ADR-0152 Decision 3).
     expect(connect).toHaveBeenCalledTimes(1);
     expect(queryRaw).toHaveBeenCalledTimes(1);
@@ -109,6 +126,24 @@ describe("buildReadiness", () => {
     for (const part of ["db.internal", "app-user", "/srv/shared", "EACCES"]) {
       expect(JSON.stringify([lines, readiness])).not.toContain(part);
     }
+  });
+
+  it("counts a database client that cannot be made as not answering", async () => {
+    const lines = logged();
+    exists.mockResolvedValue(false);
+    // What Node.js throws for an address that is not a URL: it carries the whole address.
+    clientSettings.mockImplementation(() => {
+      throw Object.assign(new TypeError("Invalid URL"), { code: "ERR_INVALID_URL", input: DATABASE_URL });
+    });
+    const readiness = await buildReadiness();
+
+    expect(readiness.status).toBe("degraded");
+    expect(readiness.checks.filter((check) => !check.ok)).toEqual([
+      { name: "database", ok: false, detail: "does not answer" },
+    ]);
+    expect(connect).not.toHaveBeenCalled();
+    expect(lines).toEqual([expect.objectContaining({ probe: "database", code: "ERR_INVALID_URL" })]);
+    expect(JSON.stringify([lines, readiness])).not.toContain("database.test");
   });
 
   it("counts a storage adapter that refuses to be built as not answering", async () => {

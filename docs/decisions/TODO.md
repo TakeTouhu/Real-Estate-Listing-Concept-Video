@@ -1511,7 +1511,7 @@ blocks activation. The production email service is tracked below, under
 
 ## Open in RD-2b — how readiness is limited
 
-- [ ] **Give the readiness probe a limit of its own, or decide it has
+- [x] **Give the readiness probe a limit of its own, or decide it has
       none.** ADR-0152 Decision 2 leaves a probe with its client's limits
       alone: a query on a connection the app holds waits for a database that
       says nothing, and the request has no answer. Two ways are open. A
@@ -1523,7 +1523,84 @@ blocks activation. The production email service is tracked below, under
       process, and answer for the database and not for the app's own
       client: an app whose own pool has nothing to give would read ready.
       The storage probe needs the same answer for each adapter. RD-2c is to
-      propose which.
+      propose which. *Decided in RD-2c (ADR-0153): limits of the client's
+      own, on a client made for readiness. What it leaves open is below.*
+
+## Open in RD-2c — what the readiness limit leaves open
+
+- [ ] **Limit the Google Cloud Storage adapter's `exists`.** Readiness asks
+      the chosen storage adapter about one key, with that adapter's limits
+      alone (ADR-0153 Decision 2), so an `exists` that never ended would
+      leave the readiness request without an answer. The two development
+      adapters ask over no network. RD-3 adds the first production adapter:
+      it is to decide how its `exists` is ended, within the rule on timers,
+      and to measure it against a stand-in that says nothing.
+- [ ] **Decide whether the web app's own database client is limited.** It
+      keeps Prisma's defaults: 5 seconds to open a connection, 10 to wait
+      for one from its pool, and no limit on a query it has sent (ADR-0152
+      Decision 2). A request whose query the database never answers
+      therefore waits until whatever is in front of the web app gives it up.
+      Readiness no longer waits with it, and does not see it either: an app
+      whose own pool has no connection to give reads `ready` (ADR-0153
+      Decision 1). A limit would be set in the deployment's `DATABASE_URL`
+      or in the database, and belongs with the deployment, in part 2 of the
+      production readiness plan.
+- [ ] **Set the readiness limit against what watches readiness.** The
+      probe's database client is given 3 seconds to open a connection, 3 for
+      an answer and 4 to wait for its one connection (ADR-0153 Decision 1).
+      The 3 was chosen with no deployment to measure: what asks for
+      readiness in production, how often, with what limit of its own, and
+      whether several ask at once are not known until part 2 of the
+      production readiness plan. Requests that arrive together take the one
+      connection in turn, so with a database that answers slowly one of them
+      can read `503` by `P2024` though every answer came in time. Part 2 is
+      to set the seconds, and to decide whether requests that arrive
+      together share one pending question.
+- [ ] **Have readiness, or the start check, refuse an address the web app's
+      own client cannot read.** The probe's client is given the address
+      taken apart and put together again, with four settings replaced
+      (ADR-0153 Decision 1). That puts right two kinds of address Prisma
+      refuses: one that does not begin with `postgresql://` or
+      `postgres://` as written (`P1012`), and one whose own value for
+      `connection_limit`, `connect_timeout`, `socket_timeout` or
+      `pool_timeout` it cannot read (`P1013`). With either, the web app's
+      own client can ask nothing and readiness reads `ready`; before RD-2c
+      readiness asked that client. The environment check passes both, and
+      the start check asks only whether `DATABASE_URL` is set. RD-2d is to
+      decide where it is refused.
+- [ ] **Decide whether a request that fails for a reason the app does not
+      know is logged.** Measured in RD-2c with an address the web app's own
+      database client cannot read: a sign-in was answered `Sign in failed`
+      and nothing was logged for it but the development server's own lines,
+      for the route's compile and for the request. The sign-in route gives
+      that answer to any error caught in its `try` that is not the app's
+      own, and logs none (`apps/web/src/app/api/auth/login/route.ts`).
+      `appErrorToResponse` (`apps/web/src/lib/http.ts`) answers an error it
+      does not know as `INTERNAL_ERROR` and logs none either; of its 65
+      calls under `apps/web/src/app`, 16 pass it a caught error. What else
+      those routes do with the error, and the other routes, were not
+      examined. Readiness read `ready` meanwhile (the item above), so
+      nothing told an operator why no one could sign in. No milestone of
+      part 1 of the production readiness plan names it.
+- [x] **Have the reading of the rule on timers confirmed.** ADR-0153
+      Decision 1 reads CLAUDE.md's rule on timers as not reaching a
+      deadline a client keeps for its own question. The reading was the
+      decision's own: no authorization under the rule had been given when
+      it was written. Put to the product owner on 2026-11-16, with the
+      limits of the same kind named: the deadline the media process runner
+      gives Node.js for a process, the two defaults of the web app's own
+      database client, and those the storage, mail and scanner clients
+      will need. *Answered by the product owner on 2026-11-16 (UTC) in the
+      CTO thread. The decision card asked
+      「接続や問い合わせを打ち切る時間制限(タイムアウト)を、
+      タイマー禁止ルールの対象外としますか?」 and the option chosen was
+      「対象外とする」, which read: 「このまま進めます。
+      今後も1回の問い合わせを打ち切る時間制限は確認なしで設定します。」
+      So a time limit that ends one connection or one query is outside the
+      rule, and is set without asking again. A timer written in the sources
+      the scheduler guard reads is still refused, and a new deadline
+      written there is not what the card described: it would have to be
+      put to the product owner on its own (ADR-0153 Decisions 1 and 3).*
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

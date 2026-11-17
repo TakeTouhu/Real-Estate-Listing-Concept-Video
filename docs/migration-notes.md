@@ -2644,3 +2644,34 @@ operator's token, as before. The probes write no row and no object.
 
 **Rolling back.** To RD-2a's build: safe. Readiness again reports the
 provider self-check and the MFA key alone.
+
+## RD-2c — readiness limited by its clients' own settings
+
+**No migration** (ADR-0153). Migration 34 stays the last.
+
+**What changes at deploy.** Each web process holds one more database
+connection, made for its readiness probe: count it against the database's
+connection limit. It is opened when readiness is first asked, for the
+address in `DATABASE_URL` with `connection_limit=1`, `connect_timeout=3`,
+`socket_timeout=3` and `pool_timeout=4` replacing whatever the address sets
+for those four. A value there that Prisma cannot read is replaced too, and
+a space before the address or a protocol in capitals is put right, so
+readiness reads `ready` with an address the web app's own client refuses
+(`P1012`, `P1013`): try a new address with a request that uses the
+database. It comes with a second Prisma engine in the process, about 2 MB
+of memory where it was measured. The web app's own client is as before.
+
+`GET /api/health/ready` now answers `503` after 3 or 4 seconds when the
+database says nothing and one request asks at a time, where it could wait
+without end. Requests that arrive together take the one connection in turn:
+of five at once the last read `503` after 6 seconds, and with a database
+that answers slowly one of them can read `503` though every answer came in
+time. Each step has its own limit, so at the very most a probe takes 10
+seconds. Whatever watches readiness keeps a limit of its own and reads no
+answer as not ready, as before. The storage check has its adapter's limits
+alone (ADR-0153 Decision 2).
+
+**On a development machine.** Nothing to do.
+
+**Rolling back.** To RD-2b's build: safe. Readiness again asks the web
+app's own database client, with no limit of its own.
