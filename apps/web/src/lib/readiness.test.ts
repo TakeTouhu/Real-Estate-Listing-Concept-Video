@@ -134,7 +134,7 @@ describe("buildReadiness", () => {
     // Where an operator who has the log alone reads them: the check wrote none, as it ended nothing.
     const line = { level: "warn", component: "readiness", message: "The start check refuses this start", problems };
     expect(lines).toEqual([expect.objectContaining(line)]);
-    // The line carries the check's lines, and no other field that has a value here.
+    // The line carries the check's lines beside the logger's own fields, and no other field that has a value here.
     expect(Object.keys(lines[0] ?? {}).sort()).toEqual(["component", "level", "message", "problems", "time"]);
     // Each time readiness is asked, and not the first time alone (Decision 2).
     await buildReadiness();

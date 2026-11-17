@@ -36,13 +36,13 @@ and nothing else in its environment but its own settings.
 
 So readiness read not ready in each. In the first three it did so by the
 storage check alone, or with the MFA check, where the start check has three
-to five reasons, and only because neither storage adapter that exists can be
-built in production (ADR-0008, ADR-0085, ADR-0150): the probe builds the
-adapter, and it refuses. RD-3 adds a storage adapter production may use.
-With that one the storage check can pass, and readiness could then read
-`ready` in a start the check refuses: for its scanner or its email adapter
-until RD-5 and RD-6, because `APP_BASE_URL` is not set, or because only one
-of the build and `NODE_ENV` says production.
+to five reasons, and, where the MFA key is set, only because neither storage
+adapter that exists can be built in production (ADR-0008, ADR-0085,
+ADR-0150): the probe builds the adapter, and it refuses. RD-3 adds a storage
+adapter production may use. With that one the storage check can pass, and
+readiness could then read `ready` in a start the check refuses: for its
+scanner or its email adapter until RD-5 and RD-6, because `APP_BASE_URL` is
+not set, or because only one of the build and `NODE_ENV` says production.
 
 ## Decision 1 — Readiness reads the start check's own judgment
 
