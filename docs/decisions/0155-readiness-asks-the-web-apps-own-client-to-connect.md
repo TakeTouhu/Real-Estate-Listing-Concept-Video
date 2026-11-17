@@ -112,9 +112,10 @@ new connection without answering it:
 With both set to zero that readiness request did not end, and a later one
 was still waiting 15 s after the database answered new connections again.
 The same process's own first query waited in the same way without this
-change, while readiness read `ready`. ADR-0153's measured cases are unchanged: in
-each the probe's client fails first. Its sentence that a probe "could take
-10" seconds no longer gives the most: by Prisma's defaults it is 15.
+change, while readiness read `ready`. ADR-0153's measured cases are
+unchanged: in each the probe's client fails first. Its sentence that a
+probe "could take 10" seconds no longer gives the most: by Prisma's
+defaults it is 15.
 
 ## Decision 4 — Not at start, and no rule of Prisma's is copied
 
@@ -158,6 +159,26 @@ and closes the first kind only.
 On bare clients, as above. The reports, scripts and outputs are kept with
 the plan's working files, outside the repository.
 
+On the development server (`next dev`, the browser test's throwaway
+settings), on the base (`main @ d777a30`) and at `c40df68`, twice each with
+the same result. Each case is a fresh server; the first readiness request
+also compiles the route, so its time is not compared.
+
+| The case | Base | Change |
+| --- | --- | --- |
+| the address as written | `200`; one connection after the first readiness request | `200`; two |
+| the protocol in capitals, a space before it, `pool_timeout=10s`, `connection_limit=abc` | `200`, nothing logged; a sign-in answered `Sign in failed` | `503` at each request, `P1012`, `P1012`, `P1013` and `P1013` logged; the sign-in as on the base |
+| a sign-in first, then readiness | `200` | `200` |
+| five readiness requests at once, first in the process | `200` each | `200` each |
+| the database stopped (`SIGSTOP`) before readiness is first asked, then let go | `503` by `P1001`, the second in 3.0 s; then `200` | the same |
+| the database stopped once ready, then let go | `503` by `P2010` in 3.0 to 3.1 s; then `200` | the same |
+| the database answers the probe's connection and says nothing to a new one, then answers again | `200` | `503` by `P1001`, the second request in 5.0 to 5.1 s; then `200` |
+| the same, with `connect_timeout=0` | `200` | `503` by `P2024`, the second in 10.0 to 10.1 s; then `200` |
+
+In the last two a forwarder of the measurement's own stood between the
+server and PostgreSQL. Readiness had been the first to use the database, so
+the probe's client held the one connection that was answered.
+
 `tests/integration/readiness-own-client-address.db.test.ts` holds, against
 the installed Prisma and the suite's database, that the client
 `getPrismaClient` makes is refused with `P1012` or `P1013` each time it is
@@ -176,8 +197,9 @@ each is answered.
 - The web app's own client is made, and opens its first connection, when
   readiness is first asked and the database answers: a process that has
   only been asked for readiness holds two connections where it held one.
-  Measured locally, that first connection took 25 to 32 ms, and a first
-  query that no longer opens it 1 to 4 ms where it took 25 to 39.
+  Measured in bare Node.js processes against a local database, that first
+  connection took 25 to 32 ms, and a first query then took 0.8 to 4.3 ms
+  where it took 25 to 39.
 - `docs/decisions/TODO.md`: the item on the address the web app's own
   client cannot read is closed. Four are amended: whether the web app's own
   client is limited, the readiness limit against what watches it, a
