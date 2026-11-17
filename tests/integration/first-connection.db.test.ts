@@ -7,11 +7,11 @@ import { describe, expect, it } from "vitest";
  *
  * Each file runs in a process of its own. At that process's first connection
  * Prisma's engine sets `SSL_CERT_FILE` and `SSL_CERT_DIR` from a thread of its
- * own. A name that is not in the environment yet makes the C library move the
- * environment and free the old one; a client being built at that instant
- * copies the freed one, and its engine is left without `DATABASE_URL` (P1012)
- * or the process dies. The first was seen in CI three times, each in a file's
- * second client.
+ * own. A name that is not in the environment yet can make the C library move
+ * the environment and free the old one while a client being built is copying
+ * it. Processes without the names were seen to leave a second client without
+ * `DATABASE_URL` (P1012), or to die. P1012 was seen in CI three times, twice
+ * in a file's second client (the first record does not say in which).
  *
  * A name that is already there is replaced in place, and nothing moves. So
  * the suite's configuration sets both before a file loads, and this file
