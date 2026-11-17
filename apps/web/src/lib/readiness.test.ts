@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@app/shared";
 import { NonProductionAdapterError } from "@app/storage";
 import {
@@ -46,6 +46,7 @@ vi.mock("./env", async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const mock of [clientSettings, connect, queryRaw, exists]) mock.mockReset();
   refusal.value = undefined;
 });
@@ -81,17 +82,23 @@ describe("probeFailureCode", () => {
 });
 
 describe("buildReadiness", () => {
+  // The start check reads the ambient NODE_ENV: each case is given one, whatever the run was started with.
+  beforeEach(() => vi.stubEnv("NODE_ENV", "test"));
+
   it("asks the database to connect and for one query, and the chosen storage about one key", async () => {
+    const lines = logged();
     queryRaw.mockResolvedValue([{ "?column?": 1 }]);
     exists.mockResolvedValue(false);
     const readiness = await buildReadiness();
 
     expect(readiness.status).toBe("ready");
+    expect(lines).toEqual([]);
     expect(readiness.checks.map((check) => [check.name, check.ok, check.detail])).toEqual([
       ["video-provider-adapter", true, "adapter=fake"],
       ["mfa", true, "key set"],
       ["database", true, "answers"],
       ["storage", true, "adapter=shared-folder, answers"],
+      ["start", true, "nothing refused"],
     ]);
     // The probe's own client, limited by its own settings (ADR-0153 Decision 1).
     expect(clientSettings.mock.calls).toEqual([[DATABASE_URL, READINESS_DATABASE_LIMIT_SECONDS]]);
@@ -103,6 +110,41 @@ describe("buildReadiness", () => {
     expect(queryRaw.mock.calls[0]?.[0]).toEqual(["SELECT 1"]);
     expect(exists.mock.calls).toEqual([[READINESS_STORAGE_KEY]]);
     expect(READINESS_STORAGE_KEY).toBe("readiness/probe");
+  });
+
+  it("reports and logs what the start check refuses of the start it runs in (ADR-0154)", async () => {
+    const lines = logged();
+    queryRaw.mockResolvedValue([{ "?column?": 1 }]);
+    exists.mockResolvedValue(false);
+    // A production build, as the start check reads it, with this environment: one of development.
+    vi.stubEnv("NODE_ENV", "production");
+    const readiness = await buildReadiness();
+
+    const problems = [
+      'NODE_ENV is not "production", but this is a production build',
+      'object storage: "memory" is not a production adapter',
+      'malware scanning: "passthrough" is not a production adapter',
+      "email: none is configured, so sign-up cannot send its verification link",
+      "APP_BASE_URL is not set",
+    ];
+    expect(readiness.status).toBe("degraded");
+    expect(readiness.checks.filter((check) => !check.ok)).toEqual([
+      { name: "start", ok: false, detail: problems.join("; ") },
+    ]);
+    // Where an operator who has the log alone reads them: the check wrote none, as it ended nothing.
+    const line = { level: "warn", component: "readiness", message: "The start check refuses this start", problems };
+    expect(lines).toEqual([expect.objectContaining(line)]);
+    // The line carries the check's lines beside the logger's own fields, and no other field that has a value here.
+    expect(Object.keys(lines[0] ?? {}).sort()).toEqual(["component", "level", "message", "problems", "time"]);
+    // Each time readiness is asked, and not the first time alone (Decision 2).
+    await buildReadiness();
+    expect(lines).toEqual([expect.objectContaining(line), expect.objectContaining(line)]);
+
+    // Answered all the same when the log cannot be written.
+    vi.spyOn(console, "log").mockImplementation(() => {
+      throw new Error("the log is closed");
+    });
+    expect((await buildReadiness()).checks.at(-1)).toEqual({ name: "start", ok: false, detail: problems.join("; ") });
   });
 
   it("logs a probe that did not answer by its code alone", async () => {

@@ -66,6 +66,36 @@ export function productionStartProblems(
   return problems;
 }
 
+/**
+ * Why this start of the web app is refused, one line each, or none when it
+ * is not a production start or may go on.
+ *
+ * A start is a production one when the ambient `NODE_ENV`, which a production
+ * build fixes at `production`, or the configured one says so: neither can
+ * vouch for the other (ADR-0150 Decision 2). One that only one of them calls
+ * production is refused for that too. Any other start is left alone, as
+ * `next dev` and the browser test choose development adapters on purpose.
+ *
+ * The start check ends a start on it. Readiness reads it too, and so tells of
+ * a start the check did not see (ADR-0154).
+ */
+export function webStartProblems(env: ServerEnv, allowed: ProductionAdapters = PRODUCTION_ADAPTERS): readonly string[] {
+  const ambient = process.env.NODE_ENV === "production";
+  const configured = env.NODE_ENV === "production";
+  if (!ambient && !configured) return [];
+  const problems = [...productionStartProblems(env, allowed)];
+  // The schema's production rules and the session cookie's `Secure` follow the configured value, and
+  // the build follows the ambient one: where the two differ, production's rules hold only in part.
+  if (ambient !== configured) {
+    problems.unshift(
+      ambient
+        ? 'NODE_ENV is not "production", but this is a production build'
+        : 'NODE_ENV is "production", but this is not a production build',
+    );
+  }
+  return problems;
+}
+
 /** How a start check reads its environment, and how a refused start is reported and ended. */
 export interface WebStart {
   readonly loadEnv: () => ServerEnv;
@@ -85,13 +115,8 @@ const REFUSED = "The web app cannot start in production";
  * Checked once as the web app's server starts (`src/instrumentation.ts`). A
  * production start with an invalid environment, an adapter production may not
  * use or a missing setting reports why and ends the process: left running,
- * Next.js answers every request with an error instead.
- *
- * A start is a production one when the ambient `NODE_ENV`, which a production
- * build fixes at `production`, or the configured one says so: neither can
- * vouch for the other (ADR-0150 Decision 2). One that only one of them calls
- * production is refused for that too. Any other start is left alone, as
- * `next dev` and the browser test choose development adapters on purpose.
+ * Next.js answers every request with an error instead. What makes a start a
+ * production one, and what it is refused for, is `webStartProblems`.
  *
  * Both arguments are for tests. The start hook gives neither, so the
  * process's own start is judged by `PRODUCTION_ADAPTERS`; no environment
@@ -99,32 +124,20 @@ const REFUSED = "The web app cannot start in production";
  * that goes on gives its own.
  */
 export function checkWebStart(start: WebStart = processStart, allowed: ProductionAdapters = PRODUCTION_ADAPTERS): void {
-  const ambient = process.env.NODE_ENV === "production";
   let env: ServerEnv;
   try {
     env = start.loadEnv();
   } catch (error) {
     // No configured value can be read, so the ambient one decides alone.
     // Elsewhere an invalid environment is reported where it is first read, as before.
-    if (!ambient) return;
+    if (process.env.NODE_ENV !== "production") return;
     // The schema's message names the invalid variables and what is wrong with each.
     const why = error instanceof Error ? error.message : "Its environment could not be read.";
     start.report(`${REFUSED}. ${why}`);
     start.exit(1);
     return;
   }
-  const configured = env.NODE_ENV === "production";
-  if (!ambient && !configured) return;
-  const problems = [...productionStartProblems(env, allowed)];
-  // The schema's production rules and the session cookie's `Secure` follow the configured value, and
-  // the build follows the ambient one: where the two differ, production's rules hold only in part.
-  if (ambient !== configured) {
-    problems.unshift(
-      ambient
-        ? 'NODE_ENV is not "production", but this is a production build'
-        : 'NODE_ENV is "production", but this is not a production build',
-    );
-  }
+  const problems = webStartProblems(env, allowed);
   if (problems.length === 0) return;
   start.report(`${REFUSED}:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
   start.exit(1);

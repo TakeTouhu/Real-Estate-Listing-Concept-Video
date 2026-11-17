@@ -7,6 +7,7 @@ import {
   checkWebStart,
   PRODUCTION_ADAPTERS,
   productionStartProblems,
+  webStartProblems,
   type ProductionAdapters,
   type WebStart,
 } from "./startup";
@@ -139,6 +140,37 @@ describe("what the start hook loads", () => {
     ]);
     // The environment's schema: no storage, image, database or provider code.
     expect([...packages]).toEqual(["@app/shared"]);
+  });
+});
+
+describe("webStartProblems", () => {
+  it("finds nothing in a start neither NODE_ENV calls production, whatever it chose", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    expect(webStartProblems(development)).toEqual([]);
+    expect(webStartProblems({ ...production, NODE_ENV: "test" })).toEqual([]);
+  });
+
+  it("gives the lines the start check reports, and none where it reports nothing (ADR-0154)", () => {
+    const starts: [ambient: string, env: ServerEnv, allowed?: ProductionAdapters][] = [
+      ["development", development],
+      ["production", production],
+      ["production", served, allowingTodays],
+      ["production", { ...served, NODE_ENV: "development" }, allowingTodays],
+      ["development", served, allowingTodays],
+      ["development", { ...production, APP_BASE_URL: undefined }],
+    ];
+    const counts = starts.map(([ambient, env, allowed]) => {
+      vi.stubEnv("NODE_ENV", ambient);
+      const lines = webStartProblems(env, allowed);
+      const { start, reports, exits } = recorded(() => env);
+      checkWebStart(start, allowed);
+      const message = `The web app cannot start in production:\n${lines.map((line) => `  - ${line}`).join("\n")}`;
+      expect([reports, exits]).toEqual(lines.length === 0 ? [[], []] : [[message], [1]]);
+      return lines.length;
+    });
+    // None in a development start and in a production start with nothing wrong; one where only the
+    // two values of NODE_ENV differ; the adapters and the settings beside it where they are wrong too.
+    expect(counts).toEqual([0, 3, 0, 1, 1, 5]);
   });
 });
 
