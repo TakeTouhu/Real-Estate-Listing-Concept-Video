@@ -1693,22 +1693,13 @@ into on 2026-11-17.
       is refused, is to take it into account. The browser tests'
       development server is exposed the same way and was left as it is.
       *RD-2e (ADR-0155 Decision 2) took it into account and leaves the item
-      open. The readiness probe makes the app's own client only once the
-      probe's client has connected, when both names are there: 0 faulty in
-      9,000 fresh processes with neither name set, against 21 in 9,000
-      for two clients made one after the other. That neither adds to the
-      fault nor cures it: where a first request of another kind makes the
-      app's own client within about 20 ms of the first readiness request,
-      14 of 15,000 rounds were faulty with the change and 17 of 15,000
-      without. In two rounds a client handed 2 names of some 210, and
-      not `DATABASE_URL`, was refused with `P1012`, so a damaged copy and
-      `P1012` were seen together; in one of them, without the change, it
-      was the app's own kind of client, refused again and again while the
-      readiness client was answered. Readiness now reads `503` of an own
-      client in that state. Setting both names
-      from the process's own code before any client is made was measured
-      too (0 faulty in 3,000, against 6 in 3,000 beside it), with paths
-      that do not exist as well; the image stays the place.*
+      open. Readiness makes the app's own client only once the probe's
+      client has connected, when both names are there, which neither adds
+      to the fault nor cures it. A damaged copy and `P1012` were since seen
+      in the same round, so readiness now reads `503` of an own client in
+      that state. Setting both names from the process's own code before
+      any client is made was measured to remove the fault too; the image
+      stays the place.*
 - [ ] **Find the error behind a browser test's lost press.** Seen once
       (#178, the `e2e` job of one of a commit's two runs): after pressing
       `Videos →` the first test did not find the next page's form in 30
