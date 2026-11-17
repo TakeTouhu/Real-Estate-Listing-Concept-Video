@@ -28,6 +28,11 @@ export async function startVideo(page: Page, propertyName: string, name: string)
   await expect(page.getByRole("heading", { name: `Decided (${PHOTOS})` })).toBeVisible();
 
   await page.getByRole("link", { name: `← ${propertyName}` }).click();
+  // The Property page is left only once it has loaded. `next dev` compiles the next page at this click, and tells
+  // every open page when it has: a Property page that met an error while still loading then reloads itself and
+  // drops the click, and the browser stays where it is (seen once in CI; the error itself was not kept).
+  await hydrated(page.locator('input[type="file"]'));
+  await page.waitForLoadState("load");
   await page.getByRole("link", { name: "Videos →" }).click();
   await (await hydrated(page.getByLabel("Project name"))).fill(name);
   await page.getByLabel("Target length in seconds").fill("15");

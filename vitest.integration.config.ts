@@ -20,6 +20,19 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "**/dist/**", "**/.next/**"],
     // Migrations and shared tables make parallel files unsafe.
     fileParallelism: false,
+    // Prisma's engine sets these two names at a process's first connection,
+    // from a thread of its own. Where a name is not set yet, the C library
+    // moves the environment and frees the old one, and a second client being
+    // built at that instant copies the freed one: its engine has no
+    // DATABASE_URL from then on (P1012), or the process dies and Vitest
+    // reports "Channel closed". With both set before a file loads, the
+    // engine replaces each value in place and nothing moves. The paths are
+    // the ones the engine finds on Ubuntu, where CI runs; it replaces one
+    // that does not exist. `first-connection.db.test.ts` holds this.
+    env: {
+      SSL_CERT_FILE: process.env.SSL_CERT_FILE ?? "/etc/ssl/certs/ca-certificates.crt",
+      SSL_CERT_DIR: process.env.SSL_CERT_DIR ?? "/etc/ssl/certs",
+    },
     testTimeout: 30_000,
     hookTimeout: 30_000,
   },

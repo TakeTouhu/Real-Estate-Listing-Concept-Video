@@ -1615,6 +1615,72 @@ blocks activation. The production email service is tracked below, under
       would run depends on how the server is started. RD-10 adds the
       container image and its start command, and is to decide.
 
+## Found after RD-2d — two CI jobs that failed now and then
+
+Each failed a job for a change that did not touch it, and passed when the
+job was run again. Both were looked into on 2026-11-17.
+
+- [x] **A database test file's second client had no `DATABASE_URL`
+      (`P1012`).** Seen three times, each in one of a commit's two runs and
+      each in a file that makes two clients one after the other:
+      `paid-submission-authorization.db.test.ts` (Phase 4C-3B-2G-1),
+      `legacy-executor-orchestrated.db.test.ts` (#168) and
+      `job-launch.db.test.ts` (#178). Reproduced outside CI, on Ubuntu
+      24.04 with Prisma 5.22.0 and Node.js 22. Every client hands its
+      engine a copy of the whole environment a few milliseconds after it
+      is made. At a process's first connection the engine sets
+      `SSL_CERT_FILE` and `SSL_CERT_DIR` from a thread of its own; where a
+      name was not set, and the process had added a name of its own before
+      (a Vitest worker does), the C library moves the environment and frees
+      the old one. A client built at that instant copies the freed one:
+      a name is lost, or nearly all of them (`P1012`), or the process dies.
+      In 12,000 fresh processes that made two clients one after the other,
+      3 ended with `P1012` in the second and 12 died; in a repetition of
+      6,000, none and 6. With both names set before the process started:
+      none of either in 6,000, nor in the repetition's 6,000. Fixed for the
+      database suite: `vitest.integration.config.ts` sets both names for
+      every file, and `tests/integration/first-connection.db.test.ts` holds
+      that both are there and that the first connection adds no name. That
+      this is what failed in CI is inferred from the same signature, not
+      measured there. If `P1012` is seen again in a test's second client,
+      the inference was wrong, and the next step is to give every client
+      the tests make its address when it is made (161 places).
+      The database job ending with `Channel closed` and no failed test
+      (seen once, on `main` after #172) is very likely the same fault, the
+      worker's process having died.
+- [ ] **Set the two names for the app's own processes.** The web app
+      makes two clients in a process too (`packages/database/src/client.ts`):
+      its own, and the one the readiness check asks (ADR-0153). Either may
+      be built while the other makes the process's first connection, and
+      each is kept for the life of the process, so one built from a damaged
+      copy would fail until a restart. No such failure has been seen, and
+      how often the two meet in a server was not measured. Nothing in the
+      repository sets the names for a server today. RD-10 adds the
+      container image, where both can be set once for every process; RD-2e,
+      which is to decide where an address the app's own client cannot read
+      is refused, is to take it into account. The browser tests'
+      development server is exposed the same way and was left as it is.
+- [ ] **Find the error behind a browser test's lost click.** Seen once
+      (#178, the `e2e` job of one of a commit's two runs): the first test
+      stayed on the Property page after pressing `Videos →`, and waited
+      30 seconds for the next page's form. Half a second earlier the
+      development server had printed `Fast Refresh had to perform a full
+      reload due to a runtime error`. Read in the installed Next.js
+      (15.5.22): the server prints that only when an open page reports an
+      error that reached Next.js's own boundary, and such a page reloads
+      itself when the server next says a page has been compiled, which
+      the press itself causes for a page not compiled yet. The reload
+      drops the press. What the error was is not known: the tests keep
+      neither the page's errors nor its console. One reading, reproduced
+      only in an imitation of the page and not against `next dev`, is that
+      the press stopped the Property page before the last of its data had
+      arrived. `tests/e2e/support/video.ts` now leaves the Property page
+      only once it has loaded, which removes that case and proves none.
+      Should the signature return, have the browser tests keep a failed
+      test's page errors, console errors, navigations and failed page
+      requests in its output, with addresses cut to their paths. That was
+      designed (about 420 lines in 13 files) and not added.
+
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
 The product, commercial and production decisions are **settled**. Almost none of
