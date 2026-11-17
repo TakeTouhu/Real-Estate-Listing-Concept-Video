@@ -2656,7 +2656,7 @@ address in `DATABASE_URL` with `connection_limit=1`, `connect_timeout=3`,
 `socket_timeout=3` and `pool_timeout=4` replacing whatever the address sets
 for those four. A value there that Prisma cannot read is replaced too, and
 a space before the address or a protocol in capitals is put right, so
-readiness does not show an address the web app's own client refuses
+readiness reads `ready` with an address the web app's own client refuses
 (`P1012`, `P1013`): try a new address with a request that uses the
 database. It comes with a second Prisma engine in the process, about 2 MB
 of memory where it was measured. The web app's own client is as before.
