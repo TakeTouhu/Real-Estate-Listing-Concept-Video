@@ -14,7 +14,8 @@ const holder = globalThis as typeof globalThis & {
 
 /**
  * Lazily construct a process-wide PrismaClient. Requires DATABASE_URL at
- * runtime; never imported by client-side code.
+ * runtime; never imported by client-side code. It reads the address as it is
+ * written, and the web app's readiness probe asks it to connect (ADR-0155).
  */
 export function getPrismaClient(): PrismaClient {
   return (holder.appPrismaClient ??= new PrismaClient());
@@ -27,8 +28,9 @@ export function getPrismaClient(): PrismaClient {
  * that a connection that cannot be opened in time is named as that (`P1001`)
  * and not as a pool with none to give (`P2024`). Whatever else the address
  * sets is kept, though it may be spelled otherwise (`/` in a value as `%2F`).
- * Prisma reads a limit of zero as none, so `seconds` is a whole number of one
- * or more.
+ * Prisma reads a limit of zero as none for three of the four, and with
+ * `socket_timeout=0` its queries were measured to fail now and then
+ * (ADR-0155), so `seconds` is a whole number of one or more.
  */
 export function limitedDatabaseUrl(url: string, seconds: number): string {
   if (!Number.isSafeInteger(seconds) || seconds < 1) {

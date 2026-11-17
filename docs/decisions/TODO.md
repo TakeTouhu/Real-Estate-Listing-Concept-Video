@@ -1544,7 +1544,13 @@ blocks activation. The production email service is tracked below, under
       whose own pool has no connection to give reads `ready` (ADR-0153
       Decision 1). A limit would be set in the deployment's `DATABASE_URL`
       or in the database, and belongs with the deployment, in part 2 of the
-      production readiness plan.
+      production readiness plan. Since RD-2e readiness asks that client to
+      connect, and waits for its first connection by that client's own
+      settings (ADR-0155 Decision 3): with `connect_timeout=0` and
+      `pool_timeout=0` in the address, a first connection that is never
+      answered leaves the readiness request waiting, as it leaves the
+      app's own. Once that client has connected readiness asks nothing more
+      of it, and still does not see a pool with nothing to give.
 - [ ] **Set the readiness limit against what watches readiness.** The
       probe's database client is given 3 seconds to open a connection, 3 for
       an answer and 4 to wait for its one connection (ADR-0153 Decision 1).
@@ -1555,8 +1561,11 @@ blocks activation. The production email service is tracked below, under
       connection in turn, so with a database that answers slowly one of them
       can read `503` by `P2024` though every answer came in time. Part 2 is
       to set the seconds, and to decide whether requests that arrive
-      together share one pending question.
-- [ ] **Have readiness, or the start check, refuse an address the web app's
+      together share one pending question. Since RD-2e the first connection
+      of the web app's own client is one more step, and not within those
+      seconds: 5 by Prisma's defaults, or what the deployment's address
+      sets (ADR-0155 Decision 3).
+- [x] **Have readiness, or the start check, refuse an address the web app's
       own client cannot read.** The probe's client is given the address
       taken apart and put together again, with four settings replaced
       (ADR-0153 Decision 1). That puts right two kinds of address Prisma
@@ -1568,7 +1577,11 @@ blocks activation. The production email service is tracked below, under
       readiness asked that client. The environment check passes both, and
       the start check asks only whether `DATABASE_URL` is set. RD-2e is to
       decide where it is refused; RD-2d, which was to, was split for size
-      and did the start alone (ADR-0154).
+      and did the start alone (ADR-0154). *Decided in RD-2e (ADR-0155): the
+      readiness probe asks the web app's own client to connect, once the
+      database has answered the probe's own. Such an address reads `503`,
+      with `P1012` or `P1013` in the log. The start check does not refuse
+      it. What that leaves open is under "Open in RD-2e".*
 - [ ] **Decide whether a request that fails for a reason the app does not
       know is logged.** Measured in RD-2c with an address the web app's own
       database client cannot read: a sign-in was answered `Sign in failed`
@@ -1582,7 +1595,10 @@ blocks activation. The production email service is tracked below, under
       those routes do with the error, and the other routes, were not
       examined. Readiness read `ready` meanwhile (the item above), so
       nothing told an operator why no one could sign in. No milestone of
-      part 1 of the production readiness plan names it.
+      part 1 of the production readiness plan names it. Since RD-2e
+      readiness reads `503` with such an address and logs its code
+      (ADR-0155); what the routes log of an error they do not know is as
+      open as before.
 - [x] **Have the reading of the rule on timers confirmed.** ADR-0153
       Decision 1 reads CLAUDE.md's rule on timers as not reaching a
       deadline a client keeps for its own question. The reading was the
@@ -1676,6 +1692,23 @@ into on 2026-11-17.
       which is to decide where an address the app's own client cannot read
       is refused, is to take it into account. The browser tests'
       development server is exposed the same way and was left as it is.
+      *RD-2e (ADR-0155 Decision 2) took it into account and leaves the item
+      open. The readiness probe makes the app's own client only once the
+      probe's client has connected, when both names are there: 0 faulty in
+      9,000 fresh processes with neither name set, against 21 in 9,000
+      for two clients made one after the other. That neither adds to the
+      fault nor cures it: where a first request of another kind makes the
+      app's own client within about 20 ms of the first readiness request,
+      14 of 15,000 rounds were faulty with the change and 17 of 15,000
+      without. In two rounds a client handed 2 names of some 210, and
+      not `DATABASE_URL`, was refused with `P1012`, so a damaged copy and
+      `P1012` were seen together; in one of them, without the change, it
+      was the app's own kind of client, refused again and again while the
+      readiness client was answered. Readiness now reads `503` of an own
+      client in that state. Setting both names
+      from the process's own code before any client is made was measured
+      too (0 faulty in 3,000, against 6 in 3,000 beside it), with paths
+      that do not exist as well; the image stays the place.*
 - [ ] **Find the error behind a browser test's lost press.** Seen once
       (#178, the `e2e` job of one of a commit's two runs): after pressing
       `Videos →` the first test did not find the next page's form in 30
@@ -1704,6 +1737,21 @@ into on 2026-11-17.
       paths. That was designed (about 420 lines in 13 files) and not
       added. The design is kept with the plan's working files, outside the
       repository, and would otherwise have to be written again.
+
+## Open in RD-2e — what asking the client to connect does not see
+
+- [ ] **Decide whether `socket_timeout=0` in `DATABASE_URL` is refused.**
+      Prisma reads a zero for `connection_limit`, `connect_timeout` and
+      `pool_timeout` as no limit. With `socket_timeout=0` its client
+      connects and then fails queries now and then: measured on a local
+      connection with Prisma 5.22.0, 6, 8 and 7 raw queries of 50, and 26
+      and 28 of 200 (`P2010`), and model queries with `P1008`. The
+      readiness probe's client replaces that setting (ADR-0153 Decision 1)
+      and the web app's own client connects, so readiness reads `ready`
+      (ADR-0155 Decision 5). Refusing it would need a rule that reads the
+      address as Prisma does, which ADR-0155 Decision 4 did not write. It
+      belongs with the limits of the deployment's own address, in part 2
+      of the production readiness plan.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

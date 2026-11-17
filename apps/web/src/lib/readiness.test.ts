@@ -12,6 +12,9 @@ import {
 const clientSettings = vi.hoisted(() => vi.fn());
 const connect = vi.hoisted(() => vi.fn());
 const queryRaw = vi.hoisted(() => vi.fn());
+/** How the web app's own client is asked for, and its being asked to connect. It has nothing else to be asked. */
+const ownClient = vi.hoisted(() => vi.fn());
+const ownConnect = vi.hoisted(() => vi.fn());
 const exists = vi.hoisted(() => vi.fn());
 /** What building the storage adapter throws, when it refuses to be built. */
 const refusal = vi.hoisted(() => ({ value: undefined as Error | undefined }));
@@ -21,6 +24,10 @@ vi.mock("@app/database", () => ({
   getReadinessPrismaClient: (...settings: unknown[]) => {
     clientSettings(...settings);
     return { $connect: connect, $queryRaw: queryRaw };
+  },
+  getPrismaClient: (...given: unknown[]) => {
+    ownClient(...given);
+    return { $connect: ownConnect };
   },
 }));
 vi.mock("./adapters", () => ({
@@ -47,7 +54,7 @@ vi.mock("./env", async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  for (const mock of [clientSettings, connect, queryRaw, exists]) mock.mockReset();
+  for (const mock of [clientSettings, connect, queryRaw, ownClient, ownConnect, exists]) mock.mockReset();
   refusal.value = undefined;
 });
 
@@ -85,7 +92,7 @@ describe("buildReadiness", () => {
   // The start check reads the ambient NODE_ENV: each case is given one, whatever the run was started with.
   beforeEach(() => vi.stubEnv("NODE_ENV", "test"));
 
-  it("asks the database to connect and for one query, and the chosen storage about one key", async () => {
+  it("asks the database to connect and for one query, then the web app's own client to connect", async () => {
     const lines = logged();
     queryRaw.mockResolvedValue([{ "?column?": 1 }]);
     exists.mockResolvedValue(false);
@@ -108,6 +115,12 @@ describe("buildReadiness", () => {
     expect(queryRaw).toHaveBeenCalledTimes(1);
     expect(connect.mock.invocationCallOrder[0]).toBeLessThan(queryRaw.mock.invocationCallOrder[0] ?? 0);
     expect(queryRaw.mock.calls[0]?.[0]).toEqual(["SELECT 1"]);
+    // Then the web app's own client, which is given no address and reads the one written (ADR-0155).
+    expect(ownClient.mock.calls).toEqual([[]]);
+    expect(ownConnect.mock.calls).toEqual([[]]);
+    const order = [connect, queryRaw, ownClient, ownConnect].map((mock) => mock.mock.invocationCallOrder[0] ?? 0);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(new Set(order).size).toBe(4);
     expect(exists.mock.calls).toEqual([[READINESS_STORAGE_KEY]]);
     expect(READINESS_STORAGE_KEY).toBe("readiness/probe");
   });
@@ -156,6 +169,10 @@ describe("buildReadiness", () => {
 
     expect(readiness.status).toBe("degraded");
     expect(queryRaw).not.toHaveBeenCalled();
+    // A database that does not answer is not asked through the web app's own client, which keeps Prisma's
+    // defaults and would wait by them (ADR-0155).
+    expect(ownClient).not.toHaveBeenCalled();
+    expect(ownConnect).not.toHaveBeenCalled();
     expect(readiness.checks.filter((check) => !check.ok).map((check) => check.name)).toEqual(["database", "storage"]);
     // One line a probe, in whichever order the two failed.
     expect(lines).toHaveLength(2);
@@ -184,8 +201,108 @@ describe("buildReadiness", () => {
       { name: "database", ok: false, detail: "does not answer" },
     ]);
     expect(connect).not.toHaveBeenCalled();
+    expect(ownClient).not.toHaveBeenCalled();
     expect(lines).toEqual([expect.objectContaining({ probe: "database", code: "ERR_INVALID_URL" })]);
     expect(JSON.stringify([lines, readiness])).not.toContain("database.test");
+  });
+
+  it("makes the web app's own client only once the probe's client has been answered", async () => {
+    exists.mockResolvedValue(false);
+    // Made beside the probe's client, it would be made during the process's first connection (ADR-0155 Decision 2).
+    const answered: { now: (rows: unknown) => void }[] = [];
+    connect.mockImplementation(() => new Promise((now) => void answered.push({ now })));
+    queryRaw.mockImplementation(() => new Promise((now) => void answered.push({ now })));
+    const readiness = buildReadiness();
+    const turns = async () => {
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+    };
+
+    await turns();
+    expect([connect.mock.calls.length, queryRaw.mock.calls.length, ownClient.mock.calls.length]).toEqual([1, 0, 0]);
+    answered[0]?.now(undefined);
+    await turns();
+    expect([connect.mock.calls.length, queryRaw.mock.calls.length, ownClient.mock.calls.length]).toEqual([1, 1, 0]);
+    answered[1]?.now([{ "?column?": 1 }]);
+    expect((await readiness).status).toBe("ready");
+    expect([ownClient.mock.calls.length, ownConnect.mock.calls.length]).toEqual([1, 1]);
+  });
+
+  it("does not ask the web app's own client when the probe's query is not answered", async () => {
+    const lines = logged();
+    exists.mockResolvedValue(false);
+    queryRaw.mockRejectedValue(Object.assign(new Error("Raw query failed"), { code: "P2010" }));
+    const readiness = await buildReadiness();
+
+    expect(readiness.checks.filter((check) => !check.ok)).toEqual([
+      { name: "database", ok: false, detail: "does not answer" },
+    ]);
+    expect(ownClient).not.toHaveBeenCalled();
+    expect(ownConnect).not.toHaveBeenCalled();
+    expect(lines).toEqual([expect.objectContaining({ probe: "database", code: "P2010" })]);
+  });
+
+  it.each(["P1012", "P1013"])(
+    "counts an address the web app's own client cannot read as the database not answering (%s)",
+    async (errorCode) => {
+      const lines = logged();
+      queryRaw.mockResolvedValue([{ "?column?": 1 }]);
+      exists.mockResolvedValue(false);
+      // As Prisma words them: the first names the schema's line, the second can repeat a part of the address.
+      const said =
+        "error: Error validating datasource `db`: the URL must start with the protocol `postgresql://`.\n" +
+        '  -->  schema.prisma:11\n   |\n11 |   url      = env("DATABASE_URL")\n' +
+        "The provided database string is invalid. invalid digit found in string in database URL " +
+        "POSTGRESQL://app-user:hunter2@db.internal:5432/app?pool_timeout=10s";
+      ownConnect.mockRejectedValue(Object.assign(new Error(said), { errorCode }));
+      const readiness = await buildReadiness();
+
+      // The database answered the probe's client, and the storage answered.
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(queryRaw).toHaveBeenCalledTimes(1);
+      expect(readiness.status).toBe("degraded");
+      expect(readiness.checks.filter((check) => !check.ok)).toEqual([
+        { name: "database", ok: false, detail: "does not answer" },
+      ]);
+      // One line, by the code alone, as for any probe that did not answer (ADR-0152 Decision 3).
+      const line = { level: "warn", component: "readiness", message: "A readiness probe did not answer" };
+      expect(lines).toEqual([expect.objectContaining({ ...line, probe: "database", code: errorCode })]);
+      expect(Object.keys(lines[0] ?? {}).sort()).toEqual(["code", "component", "level", "message", "probe", "time"]);
+      for (const part of ["db.internal", "app-user", "hunter2", "schema.prisma", "DATABASE_URL", "pool_timeout"]) {
+        expect(JSON.stringify([lines, readiness])).not.toContain(part);
+      }
+    },
+  );
+
+  it("counts a web app's own client that cannot be made as the database not answering", async () => {
+    const lines = logged();
+    queryRaw.mockResolvedValue([{ "?column?": 1 }]);
+    exists.mockResolvedValue(false);
+    // What `new PrismaClient()` throws where no client was generated. It has no code.
+    ownClient.mockImplementation(() => {
+      throw new Error("@prisma/client did not initialize yet. Please run \"prisma generate\"");
+    });
+    const readiness = await buildReadiness();
+
+    expect(readiness.checks.filter((check) => !check.ok)).toEqual([
+      { name: "database", ok: false, detail: "does not answer" },
+    ]);
+    expect(ownConnect).not.toHaveBeenCalled();
+    expect(lines).toEqual([expect.objectContaining({ probe: "database", code: "UNEXPECTED" })]);
+    expect(JSON.stringify([lines, readiness])).not.toContain("prisma generate");
+  });
+
+  it("asks the web app's own client each time readiness is asked, and keeps no answer of its own", async () => {
+    const lines = logged();
+    queryRaw.mockResolvedValue([{ "?column?": 1 }]);
+    exists.mockResolvedValue(false);
+    // A first connection that failed once: Prisma tries again when it is asked again.
+    ownConnect.mockRejectedValueOnce(Object.assign(new Error("Can't reach database server"), { errorCode: "P1001" }));
+
+    expect((await buildReadiness()).status).toBe("degraded");
+    expect((await buildReadiness()).status).toBe("ready");
+    expect((await buildReadiness()).status).toBe("ready");
+    expect(ownConnect).toHaveBeenCalledTimes(3);
+    expect(lines).toEqual([expect.objectContaining({ probe: "database", code: "P1001" })]);
   });
 
   it("counts a storage adapter that refuses to be built as not answering", async () => {

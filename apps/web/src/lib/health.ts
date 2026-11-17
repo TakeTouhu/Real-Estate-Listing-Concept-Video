@@ -36,10 +36,11 @@ export type ReadinessProbe = "database" | "storage";
 /**
  * What readiness asks of the web app's surroundings (RD-2b, ADR-0152). Each
  * probe resolves when its service answers and throws when it does not;
- * neither writes a row or an object.
+ * neither writes a row or an object. The database probe throws too when the
+ * database answers and the web app's own client cannot connect (ADR-0155).
  */
 export interface ReadinessInputs {
-  /** The database answers a query. */
+  /** The database answers a query, and the web app's own client connects (ADR-0155). */
   readonly database: () => Promise<void>;
   /** The object storage answers whether a key holds an object. It writes none. */
   readonly storage: () => Promise<void>;
@@ -61,7 +62,7 @@ export function buildLiveness(now: () => Date = () => new Date()): Liveness {
 /**
  * Whether a probe answers. Never what it threw. Readiness sets no limit of its
  * own: a probe ends when its client answers or gives up (ADR-0152 Decision 2),
- * and each client is to end its own question (ADR-0153).
+ * and each client is to end its own question (ADR-0153, ADR-0155 Decision 3).
  */
 async function answers(probe: ReadinessProbe, inputs: ReadinessInputs): Promise<boolean> {
   try {
