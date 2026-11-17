@@ -1566,8 +1566,9 @@ blocks activation. The production email service is tracked below, under
       `pool_timeout` it cannot read (`P1013`). With either, the web app's
       own client can ask nothing and readiness reads `ready`; before RD-2c
       readiness asked that client. The environment check passes both, and
-      the start check asks only whether `DATABASE_URL` is set. RD-2d is to
-      decide where it is refused.
+      the start check asks only whether `DATABASE_URL` is set. RD-2e is to
+      decide where it is refused; RD-2d, which was to, was split for size
+      and did the start alone (ADR-0154).
 - [ ] **Decide whether a request that fails for a reason the app does not
       know is logged.** Measured in RD-2c with an address the web app's own
       database client cannot read: a sign-in was answered `Sign in failed`
@@ -1601,6 +1602,18 @@ blocks activation. The production email service is tracked below, under
       the scheduler guard reads is still refused, and a new deadline
       written there is not what the card described: it would have to be
       put to the product owner on its own (ADR-0153 Decisions 1 and 3).*
+
+## Open in RD-2d — a start the start check does not see
+
+- [ ] **Decide whether the web app may be started with `NEXT_PHASE` naming
+      the build.** Next.js does not run the start hook for such a server,
+      so the start check does not see it (ADR-0151 Decision 1). Readiness
+      says what the check refuses of it and logs that (ADR-0154), but the
+      server is not ended, and serves whoever reaches it. Taking the
+      variable out before Next.js reads it, or refusing to start with it,
+      was not tried: where that would run depends on how the server is
+      started. RD-10 adds the container image and its start command, and is
+      to decide.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

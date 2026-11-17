@@ -2,8 +2,13 @@
 
 Base: `main @ 148b6f6` (PR #173, AT-12; post-merge CI run 976 green).
 Plan: `/mnt/project-files/cto/production-readiness-proposal.md`, approved by
-the product owner on 2026-11-16 with its defaults. Each pull request still
-needs the product owner's yes before merge.
+the product owner on 2026-11-16 with its defaults. RD-1 was merged on the
+product owner's yes. Since the product owner's standing approval of
+2026-11-16 08:08Z, a milestone of an approved plan is merged without asking
+again, once CI is green on its head and an independent review finds nothing
+blocking; the merge commits of RD-2a onward record it. Starting another
+plan still needs the product owner's yes, as does everything this plan
+leaves BLOCKED.
 
 The plan works toward Phase 7's scope (`docs/Roadmap.md`) but is not the
 whole phase, so it receives no `phase-N-complete` tag.
@@ -30,7 +35,7 @@ production scheduler activation and live Stripe charges stay BLOCKED
 | Email | the development outbox (ADR-0126), refused in production; with none, sign-up cannot send its verification link (ADR-0129) | `apps/web/src/lib/mailer.ts` |
 | Rate limiting | none, beyond locking an MFA sign-in after five wrong codes | |
 | Start-up checks | the environment schema refuses the development folders in production; an adapter refuses only when first built; `MFA_SECRET_KEY` is optional (*a production start is checked since RD-2a, ADR-0151*) | `@app/shared` `env.ts` |
-| Readiness | a provider self-check and whether the MFA key is set; not the database or storage (*both are asked since RD-2b, ADR-0152, and the database within a limit since RD-2c, ADR-0153*) | `apps/web/src/lib/health.ts` |
+| Readiness | a provider self-check and whether the MFA key is set; not the database or storage (*both are asked since RD-2b, ADR-0152, and the database within a limit since RD-2c, ADR-0153; what the start check refuses is given since RD-2d, ADR-0154*) | `apps/web/src/lib/health.ts` |
 | Same-origin check | on 20 of the 45 route files with a mutating handler; sign-in, sign-up, password reset, email verification, MFA, organization creation, uploads, analysis review, storyboard and video projects rely on `SameSite=Lax` alone (the entry in `docs/decisions/TODO.md` still names two routes) | `apps/web/src/lib/same-origin.ts` |
 | Security headers | none app-wide; the download route sets its own `Content-Security-Policy` and `nosniff` | `apps/web/src/app/api/storage/download/route.ts` |
 | Container images | none; `infra/` holds a README only | |
@@ -45,7 +50,7 @@ changed lines.
 | PR | What | Migration |
 | --- | --- | --- |
 | RD-1 | The web app's adapters chosen in one place (ADR-0150) | none |
-| RD-2 | Boot-time check of adapters and secrets (*RD-2a, ADR-0151*); readiness checks the database and storage (*RD-2b, ADR-0152*); how those checks are limited (*RD-2c, ADR-0153*); a start RD-2a could not check (*RD-2d*) | none |
+| RD-2 | Boot-time check of adapters and secrets (*RD-2a, ADR-0151*); readiness checks the database and storage (*RD-2b, ADR-0152*); how those checks are limited (*RD-2c, ADR-0153*); a start RD-2a could not check (*RD-2d, ADR-0154*); an address the web app's own database client cannot read (*RD-2e*) | none |
 | RD-3 | Google Cloud Storage adapter for the web storage port, tested on an emulator | none |
 | RD-4 | Google Cloud Storage for the worker's copy and deliverable writes | none |
 | RD-5 | ClamAV scanner, with ClamAV in CI | none |

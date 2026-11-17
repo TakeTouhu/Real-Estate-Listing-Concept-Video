@@ -2675,3 +2675,21 @@ alone (ADR-0153 Decision 2).
 
 **Rolling back.** To RD-2b's build: safe. Readiness again asks the web
 app's own database client, with no limit of its own.
+
+## RD-2d — readiness says what the start check refuses
+
+**No migration** (ADR-0154). Migration 34 stays the last.
+
+**What changes at deploy.** `GET /api/health/ready` answers with a fifth
+check, `start`. It reads `nothing refused` in every start the start check
+lets go on. In a production start the check did not see, which is one
+given `NEXT_PHASE=phase-production-build`, it gives the check's reasons,
+the answer is `503`, and the server logs the reasons as a warning each time
+readiness is asked. A deployment must still not set `NEXT_PHASE`: such a
+server is not ended, and serves whoever reaches it. Whatever reads the
+checks by name is not affected; whatever counts them finds five.
+
+**On a development machine.** Nothing to do.
+
+**Rolling back.** To RD-2c's build: safe. Readiness answers with four
+checks again.
