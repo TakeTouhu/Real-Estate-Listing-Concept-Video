@@ -83,11 +83,13 @@ describe("probeFailureCode", () => {
 
 describe("buildReadiness", () => {
   it("asks the database to connect and for one query, and the chosen storage about one key", async () => {
+    const lines = logged();
     queryRaw.mockResolvedValue([{ "?column?": 1 }]);
     exists.mockResolvedValue(false);
     const readiness = await buildReadiness();
 
     expect(readiness.status).toBe("ready");
+    expect(lines).toEqual([]);
     expect(readiness.checks.map((check) => [check.name, check.ok, check.detail])).toEqual([
       ["video-provider-adapter", true, "adapter=fake"],
       ["mfa", true, "key set"],
@@ -107,26 +109,40 @@ describe("buildReadiness", () => {
     expect(READINESS_STORAGE_KEY).toBe("readiness/probe");
   });
 
-  it("reports what the start check refuses of the start it runs in (ADR-0154)", async () => {
+  it("reports and logs what the start check refuses of the start it runs in (ADR-0154)", async () => {
+    const lines = logged();
     queryRaw.mockResolvedValue([{ "?column?": 1 }]);
     exists.mockResolvedValue(false);
     // A production build, as the start check reads it, with this environment: one of development.
     vi.stubEnv("NODE_ENV", "production");
     const readiness = await buildReadiness();
 
+    const problems = [
+      'NODE_ENV is not "production", but this is a production build',
+      'object storage: "memory" is not a production adapter',
+      'malware scanning: "passthrough" is not a production adapter',
+      "email: none is configured, so sign-up cannot send its verification link",
+      "APP_BASE_URL is not set",
+    ];
     expect(readiness.status).toBe("degraded");
     expect(readiness.checks.filter((check) => !check.ok)).toEqual([
-      {
-        name: "start",
-        ok: false,
-        detail:
-          'NODE_ENV is not "production", but this is a production build; ' +
-          'object storage: "memory" is not a production adapter; ' +
-          'malware scanning: "passthrough" is not a production adapter; ' +
-          "email: none is configured, so sign-up cannot send its verification link; " +
-          "APP_BASE_URL is not set",
-      },
+      { name: "start", ok: false, detail: problems.join("; ") },
     ]);
+    // Where an operator who cannot ask readiness reads them: the check wrote none, as it ended nothing.
+    expect(lines).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        component: "readiness",
+        message: "The start check refuses this start",
+        problems,
+      }),
+    ]);
+
+    // Answered all the same when the log cannot be written.
+    vi.spyOn(console, "log").mockImplementation(() => {
+      throw new Error("the log is closed");
+    });
+    expect((await buildReadiness()).checks.at(-1)).toEqual({ name: "start", ok: false, detail: problems.join("; ") });
   });
 
   it("logs a probe that did not answer by its code alone", async () => {

@@ -19,6 +19,7 @@ export const READINESS_STORAGE_KEY = "readiness/probe";
 export const READINESS_DATABASE_LIMIT_SECONDS = 3;
 
 let logger: Logger | undefined;
+const log = (): Logger => (logger ??= createLogger({ base: { component: "readiness" } }));
 
 /**
  * A short code for why a probe did not answer: the error's own code when it
@@ -41,6 +42,17 @@ export function probeFailureCode(error: unknown): string {
 export async function buildReadiness(): Promise<Readiness> {
   const env = getServerEnv();
   const adapters = getWebAdapters();
+  // As the start check judged this start, or would have, had it seen it (ADR-0154).
+  const startProblems = webStartProblems(env);
+  if (startProblems.length > 0) {
+    // The check writes its lines where it ends a start. It did not end this one, so they are logged:
+    // an operator whose server is kept from requests can read the log and cannot ask readiness.
+    try {
+      log().warn("The start check refuses this start", { problems: startProblems });
+    } catch {
+      // Readiness answers whether or not the log could be written.
+    }
+  }
   return computeReadiness(env, createVideoProvider(env), {
     database: async () => {
       // A client of the probe's own, which ends each of its questions itself (ADR-0153 Decision 1).
@@ -55,11 +67,9 @@ export async function buildReadiness(): Promise<Readiness> {
       await adapters.storage().exists(READINESS_STORAGE_KEY);
     },
     storageAdapter: adapters.choice.storage,
-    // As the start check judged this start, or would have, had it seen it (ADR-0154).
-    startProblems: webStartProblems(env),
+    startProblems,
     failed: (probe, error) => {
-      logger ??= createLogger({ base: { component: "readiness" } });
-      logger.warn("A readiness probe did not answer", { probe, code: probeFailureCode(error) });
+      log().warn("A readiness probe did not answer", { probe, code: probeFailureCode(error) });
     },
   });
 }
