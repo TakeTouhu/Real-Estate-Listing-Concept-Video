@@ -16,9 +16,9 @@ The answer gains a fifth check, `start`, after `storage`:
 
 A `start` check that is not `ok` makes the status `degraded` and the answer
 `503`, as any other check does. The start check ends a start it refuses, so
-the second row is read only of a start it did not see: a server started with
-`NEXT_PHASE=phase-production-build` in its environment (ADR-0151
-Decision 1).
+the second row is read only of a start it did not see, such as a server
+started with `NEXT_PHASE=phase-production-build` in its environment
+(ADR-0151 Decision 1).
 
 The other four checks, the answer's shape and the route's status codes are
 unchanged. An environment that fails its schema answers `500`, as before

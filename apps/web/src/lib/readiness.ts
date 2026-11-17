@@ -46,7 +46,7 @@ export async function buildReadiness(): Promise<Readiness> {
   const startProblems = webStartProblems(env);
   if (startProblems.length > 0) {
     // The check writes its lines where it ends a start. It did not end this one, so they are logged:
-    // an operator whose server is kept from requests can read the log and cannot ask readiness.
+    // a server that is kept from requests may be within its operator's reach by its log alone.
     try {
       log().warn("The start check refuses this start", { problems: startProblems });
     } catch {

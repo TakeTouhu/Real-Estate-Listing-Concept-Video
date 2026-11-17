@@ -150,9 +150,10 @@ measured here and held by no test, as in RD-2a.
   checks are unchanged. No page, permission, migration or audit action
   changes.
 - Today the change turns no answer from `200` to `503`: every start the
-  check refuses already read `503` by the storage check. It gives the
-  reasons, in the answer and in the log, and it keeps such a start not
-  ready once RD-3 adds a storage adapter production may use.
+  check refuses already read `503` by the storage check, or `500` where
+  its environment fails its schema. It gives the reasons, in the answer
+  and in the log, and it keeps such a start not ready once RD-3 adds a
+  storage adapter production may use.
 - A start that neither `NODE_ENV` calls production reads `nothing
   refused`: the development server, the browser test and the tests are
   judged as before, by nothing.

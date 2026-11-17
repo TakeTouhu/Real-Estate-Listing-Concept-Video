@@ -128,7 +128,7 @@ describe("buildReadiness", () => {
     expect(readiness.checks.filter((check) => !check.ok)).toEqual([
       { name: "start", ok: false, detail: problems.join("; ") },
     ]);
-    // Where an operator who cannot ask readiness reads them: the check wrote none, as it ended nothing.
+    // Where an operator who has the log alone reads them: the check wrote none, as it ended nothing.
     expect(lines).toEqual([
       expect.objectContaining({
         level: "warn",

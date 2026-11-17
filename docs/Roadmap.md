@@ -1071,13 +1071,13 @@ the web app's own database client cannot read is refused.
 
 **RD-2d — readiness says what the start check refuses** (ADR-0154, no
 migration): readiness gains a `start` check from the start check's own
-judgment. A production start the check did not see, as one given
-`NEXT_PHASE=phase-production-build`, reads `503` with the check's reasons,
-and the server logs them. Every such start already read `503` by the
-storage check; the reasons are new, and it stays not ready once RD-3 adds a
-storage adapter production may use. RD-2 is now in five parts: RD-2e is to
-decide where an address the web app's own database client cannot read is
-refused.
+judgment. A start the check would have refused and did not see, such as
+one given `NEXT_PHASE=phase-production-build`, reads `503` with the check's
+reasons, and the server logs them. Every such start whose environment can
+be read already read `503` by the storage check; the reasons are new, and
+it stays not ready once RD-3 adds a storage adapter production may use.
+RD-2 is now in five parts: RD-2e is to decide where an address the web
+app's own database client cannot read is refused.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
