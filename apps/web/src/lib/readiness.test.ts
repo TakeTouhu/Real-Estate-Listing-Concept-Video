@@ -46,6 +46,7 @@ vi.mock("./env", async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const mock of [clientSettings, connect, queryRaw, exists]) mock.mockReset();
   refusal.value = undefined;
 });
@@ -92,6 +93,7 @@ describe("buildReadiness", () => {
       ["mfa", true, "key set"],
       ["database", true, "answers"],
       ["storage", true, "adapter=shared-folder, answers"],
+      ["start", true, "nothing refused"],
     ]);
     // The probe's own client, limited by its own settings (ADR-0153 Decision 1).
     expect(clientSettings.mock.calls).toEqual([[DATABASE_URL, READINESS_DATABASE_LIMIT_SECONDS]]);
@@ -103,6 +105,28 @@ describe("buildReadiness", () => {
     expect(queryRaw.mock.calls[0]?.[0]).toEqual(["SELECT 1"]);
     expect(exists.mock.calls).toEqual([[READINESS_STORAGE_KEY]]);
     expect(READINESS_STORAGE_KEY).toBe("readiness/probe");
+  });
+
+  it("reports what the start check refuses of the start it runs in (ADR-0154)", async () => {
+    queryRaw.mockResolvedValue([{ "?column?": 1 }]);
+    exists.mockResolvedValue(false);
+    // A production build, as the start check reads it, with this environment: one of development.
+    vi.stubEnv("NODE_ENV", "production");
+    const readiness = await buildReadiness();
+
+    expect(readiness.status).toBe("degraded");
+    expect(readiness.checks.filter((check) => !check.ok)).toEqual([
+      {
+        name: "start",
+        ok: false,
+        detail:
+          'NODE_ENV is not "production", but this is a production build; ' +
+          'object storage: "memory" is not a production adapter; ' +
+          'malware scanning: "passthrough" is not a production adapter; ' +
+          "email: none is configured, so sign-up cannot send its verification link; " +
+          "APP_BASE_URL is not set",
+      },
+    ]);
   });
 
   it("logs a probe that did not answer by its code alone", async () => {

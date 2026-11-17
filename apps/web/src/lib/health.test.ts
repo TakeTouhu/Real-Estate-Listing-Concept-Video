@@ -12,11 +12,12 @@ const env = serverEnvSchema.parse({
   MFA_SECRET_KEY: "11".repeat(32),
 });
 
-/** Both services answer. */
+/** Both services answer, and the start check refuses nothing. */
 const answering: ReadinessInputs = {
   database: () => Promise.resolve(),
   storage: () => Promise.resolve(),
   storageAdapter: "memory",
+  startProblems: [],
 };
 
 const check = (readiness: Awaited<ReturnType<typeof computeReadiness>>, name: string) =>
@@ -154,6 +155,20 @@ describe("computeReadiness", () => {
     expect(storage).toHaveBeenCalledTimes(1);
     for (const one of answer) one();
     expect((await pending).status).toBe("ready");
+  });
+
+  it("reports what the start check refuses this start for, last and line by line (ADR-0154)", async () => {
+    const ready = await computeReadiness(env, new FakeVideoProvider(), answering);
+    expect(ready.checks.at(-1)).toEqual({ name: "start", ok: true, detail: "nothing refused" });
+
+    const startProblems = ['email: "outbox" is not a production adapter', "APP_BASE_URL is not set"];
+    const refused = await computeReadiness(env, new FakeVideoProvider(), { ...answering, startProblems });
+    // Everything else answers, and the start alone keeps it from ready.
+    expect(refused.status).toBe("degraded");
+    expect(refused.checks.filter((one) => !one.ok)).toEqual([
+      { name: "start", ok: false, detail: 'email: "outbox" is not a production adapter; APP_BASE_URL is not set' },
+    ]);
+    expect(refused.checks.at(-1)?.name).toBe("start");
   });
 
   it("answers degraded all the same when no one can be told of the failure", async () => {

@@ -4,6 +4,7 @@ import { createVideoProvider } from "@app/video-providers";
 import { getWebAdapters } from "./adapters";
 import { getServerEnv } from "./env";
 import { computeReadiness, type Readiness } from "./health";
+import { webStartProblems } from "./startup";
 
 /** A key nothing writes, asked about only to see the storage answer. */
 export const READINESS_STORAGE_KEY = "readiness/probe";
@@ -33,8 +34,9 @@ export function probeFailureCode(error: unknown): string {
 
 /**
  * Readiness of the running web app, from its configured environment, provider,
- * database and storage (ADR-0152, ADR-0153). Kept apart from `health.ts`, so
- * the liveness route loads none of them.
+ * database and storage (ADR-0152, ADR-0153) and from what the start check
+ * refuses (ADR-0154). Kept apart from `health.ts`, so the liveness route
+ * loads none of them.
  */
 export async function buildReadiness(): Promise<Readiness> {
   const env = getServerEnv();
@@ -53,6 +55,8 @@ export async function buildReadiness(): Promise<Readiness> {
       await adapters.storage().exists(READINESS_STORAGE_KEY);
     },
     storageAdapter: adapters.choice.storage,
+    // As the start check judged this start, or would have, had it seen it (ADR-0154).
+    startProblems: webStartProblems(env),
     failed: (probe, error) => {
       logger ??= createLogger({ base: { component: "readiness" } });
       logger.warn("A readiness probe did not answer", { probe, code: probeFailureCode(error) });

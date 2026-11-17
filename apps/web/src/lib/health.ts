@@ -45,6 +45,8 @@ export interface ReadinessInputs {
   readonly storage: () => Promise<void>;
   /** The storage adapter the web app chose (ADR-0150), reported beside its answer. */
   readonly storageAdapter: WebAdapterChoice["storage"];
+  /** What the start check refuses this start for (ADR-0151), one line each: none when it refuses nothing. */
+  readonly startProblems: readonly string[];
   /**
    * Told of a probe that did not answer. What it threw can name a host or a
    * path, so readiness itself reports only that it did not answer.
@@ -78,8 +80,9 @@ async function answers(probe: ReadinessProbe, inputs: ReadinessInputs): Promise<
 /**
  * Pure readiness computation. Runs an offline provider self-check (a cost
  * estimate — no network) to confirm the adapter boundary is wired correctly,
- * checks that MFA is configured, and asks the database and the object storage
- * to answer (ADR-0152).
+ * checks that MFA is configured, asks the database and the object storage to
+ * answer (ADR-0152), and says what the start check refuses this start for
+ * (ADR-0154).
  */
 export async function computeReadiness(
   env: ServerEnv,
@@ -120,6 +123,11 @@ export async function computeReadiness(
   const answer = (did: boolean) => (did ? "answers" : "does not answer");
   checks.push({ name: "database", ok: database, detail: answer(database) });
   checks.push({ name: "storage", ok: storage, detail: `adapter=${inputs.storageAdapter}, ${answer(storage)}` });
+
+  // The start check ends a start it refuses (ADR-0151). One it did not see serves, and is not ready
+  // for the same reasons (ADR-0154). The lines name ports, adapters and settings, and no value.
+  const refused = inputs.startProblems;
+  checks.push({ name: "start", ok: refused.length === 0, detail: refused.join("; ") || "nothing refused" });
 
   const ok = checks.every((c) => c.ok);
   return {
