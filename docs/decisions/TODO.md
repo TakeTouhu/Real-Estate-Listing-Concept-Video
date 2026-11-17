@@ -1571,16 +1571,17 @@ blocks activation. The production email service is tracked below, under
 - [ ] **Decide whether a request that fails for a reason the app does not
       know is logged.** Measured in RD-2c with an address the web app's own
       database client cannot read: a sign-in was answered `Sign in failed`
-      and nothing was logged for it but the development server's own line
-      for the request. The sign-in route answers any error that is not the
-      app's own so, and logs none
-      (`apps/web/src/app/api/auth/login/route.ts`). `appErrorToResponse`
-      (`apps/web/src/lib/http.ts`), called at 65 places under
-      `apps/web/src/app`, answers such an error as `INTERNAL_ERROR` and
-      logs none either; its callers were not read. Readiness read `ready`
-      meanwhile (the item above), so nothing told an operator why no one
-      could sign in. No milestone of part 1 of the production readiness
-      plan names it.
+      and nothing was logged for it but the development server's own lines,
+      for the route's compile and for the request. The sign-in route gives
+      that answer to any error caught in its `try` that is not the app's
+      own, and logs none (`apps/web/src/app/api/auth/login/route.ts`).
+      `appErrorToResponse` (`apps/web/src/lib/http.ts`) answers an error it
+      does not know as `INTERNAL_ERROR` and logs none either; of its 65
+      calls under `apps/web/src/app`, 16 pass it a caught error. What else
+      those routes do with the error, and the other routes, were not
+      examined. Readiness read `ready` meanwhile (the item above), so
+      nothing told an operator why no one could sign in. No milestone of
+      part 1 of the production readiness plan names it.
 - [x] **Have the reading of the rule on timers confirmed.** ADR-0153
       Decision 1 reads CLAUDE.md's rule on timers as not reaching a
       deadline a client keeps for its own question. The reading was the
@@ -1589,17 +1590,17 @@ blocks activation. The production email service is tracked below, under
       limits of the same kind named: the deadline the media process runner
       gives Node.js for a process, the two defaults of the web app's own
       database client, and those the storage, mail and scanner clients
-      will need. *Answered by the product owner on 2026-11-16 in the CTO
-      thread. The decision card asked
+      will need. *Answered by the product owner on 2026-11-16 (UTC) in the
+      CTO thread. The decision card asked
       「接続や問い合わせを打ち切る時間制限(タイムアウト)を、
       タイマー禁止ルールの対象外としますか?」 and the option chosen was
       「対象外とする」, which read: 「このまま進めます。
       今後も1回の問い合わせを打ち切る時間制限は確認なしで設定します。」
       So a time limit that ends one connection or one query is outside the
-      rule, and is set without asking again. A timer in the repository's
-      own code is still refused by the scheduler guard, and a deadline
-      written there is not what the card asked about: it is to be put to
-      the product owner on its own (ADR-0153 Decisions 1 and 3).*
+      rule, and is set without asking again. A timer written in the sources
+      the scheduler guard reads is still refused, and a new deadline
+      written there is not what the card described: it would have to be
+      put to the product owner on its own (ADR-0153 Decisions 1 and 3).*
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

@@ -74,21 +74,24 @@ default.
 
 The reading was this decision's own when it was written, with no
 authorization under the rule given for it. It was put to the product owner
-on 2026-11-16, on a decision card in the CTO thread, as the question
+on 2026-11-16 (UTC), on a decision card in the CTO thread, as the question
 whether a time limit that ends one connection or one query is outside the
 rule, and the product owner answered the same day that it is (option
-「対象外とする」). The question named the limits of the same kind the
-repository already had, the deadline the media process runner gives
+「対象外とする」, which read that a time limit that ends one query is set
+from then on without asking). The card named the limits of the same kind
+the repository already had, the deadline the media process runner gives
 Node.js for a process and the two defaults of the web app's own client,
 and those the storage, mail and scanner clients of later milestones will
-need: such a limit is set without asking again.
+need.
 
 This decision takes the answer no further than a limit a client keeps for
-its own question. A timer written in the repository's own code is still
-refused by the guard by its name, and a deadline written there is not what
-the question asked about: it would have to be put to the product owner on
-its own. The sources the guard reads still hold one timer, the transport's
-deadline (Decision 3), and this change adds none.
+its own question. A timer written in the sources the guard reads is still
+refused by its name (Decision 3), and a new deadline written there is not
+what the card described: it gave the reading that the rule is about timers
+the app itself runs, and said that the library keeps this limit and that
+no timer was added to the app's code. Such a deadline would have to be put
+to the product owner on its own. Those sources still hold one timer, the
+transport's deadline, and this change adds none.
 
 ### Why a client of its own, and these four settings
 
@@ -126,7 +129,8 @@ with `pool_timeout=10s` and with `connection_limit=abc`: readiness read
 asks the web app's own client, was answered `Sign in failed`, the route's
 words for an error it does not know, and not `Invalid email or password`
 as with the address as it should be. Nothing was logged for it but the
-development server's own line for the request.
+development server's own lines, for the route's compile and for the
+request.
 
 ### What was measured
 
