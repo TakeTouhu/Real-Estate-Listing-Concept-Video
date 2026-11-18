@@ -1779,7 +1779,7 @@ describe("the staging sink's upload (ADR-0161)", () => {
     expect(store.seen).toHaveLength(2);
     await client.completeMultipartUpload(complete(uploadId, refs([body, last])));
     expect(store.seen).toHaveLength(3);
-    // An upload that took no part is not finished as an empty object.
+    // An upload that took no part is refused, not answered as a lost race.
     const none = await client.createMultipartUpload(target);
     expect(await failureOf(() => client.completeMultipartUpload(complete(none.uploadId, [])))).toMatchObject({
       code: "STORAGE_PART_REFUSED",
@@ -1878,6 +1878,8 @@ describe("the staging sink's upload (ADR-0161)", () => {
         $metadata: { httpStatusCode: 412 },
       });
     }
+    // A part after the race is lost is taken and dropped, as any other.
+    await client.uploadPart(part(uploadId, 2, filled(3, 2)));
     await client.abortMultipartUpload({ ...target, uploadId });
     expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-2/3`, CANCEL]);
   });
@@ -1925,7 +1927,7 @@ describe("the staging sink's upload (ADR-0161)", () => {
     }
   });
 
-  it("refuses a call on an upload while another on it is unanswered", async () => {
+  it("refuses a part or a completion while a chunk of the upload is unanswered", async () => {
     const store = await resumableStore((_request, index) =>
       index === 1 ? { status: 308, headers: { range: "bytes=0-262143" }, afterMs: 200 } : undefined,
     );
@@ -1943,19 +1945,23 @@ describe("the staging sink's upload (ADR-0161)", () => {
     expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-262143/*`, `${CHUNK} bytes 262144-262148/262149`]);
   });
 
-  it("takes a cancel while a chunk is unanswered, and lets the upload go at once", async () => {
+  it("takes a cancel while a chunk is unanswered, and lets the upload go before it is answered", async () => {
     const store = await resumableStore((_request, index) =>
-      index === 1 ? { status: 308, headers: { range: "bytes=0-262143" }, afterMs: 200 } : undefined,
+      index === 1 ? { status: 308, headers: { range: "bytes=0-262143" }, afterMs: 1_000 } : undefined,
     );
     const client = clientAt(store.origin);
     const { uploadId } = await client.createMultipartUpload(target);
     await client.uploadPart(part(uploadId, 1, filled(QUANTUM, 1)));
-    const sending = client.uploadPart(part(uploadId, 2, filled(5, 2)));
+    let answered = false;
+    const sending = client.uploadPart(part(uploadId, 2, filled(5, 2))).then(() => {
+      answered = true;
+    });
     await client.abortMultipartUpload({ ...target, uploadId });
-    await sending;
+    expect(answered).toBe(false);
     expect(await failureOf(() => client.uploadPart(part(uploadId, 3, filled(1, 3))))).toMatchObject({
       code: "STORAGE_UNKNOWN_UPLOAD",
     });
+    await sending;
     // The chunk already sent is not stopped; the cancel goes beside it.
     expect(described(store).sort()).toEqual([OPENED, `${CHUNK} bytes 0-262143/*`, CANCEL].sort());
   });
@@ -2027,12 +2033,14 @@ describe("the staging sink's upload (ADR-0161)", () => {
       [{ status: 410, body: "{}" }, null],
       [{ status: 503, body: "{}" }, "STORAGE_UNAVAILABLE"],
       [{ status: 204 }, "STORAGE_REFUSED"],
+      ["HANG_UP", "ANY"],
     ] as const) {
       const store = await resumableStore((request) => (request.method === "DELETE" ? answer : undefined));
       const client = clientAt(store.origin);
       const { uploadId } = await client.createMultipartUpload(target);
       const error = await failureOf(() => client.abortMultipartUpload({ ...target, uploadId }));
       if (code === null) expect(error).toBeNull();
+      else if (code === "ANY") expect(error).toBeInstanceOf(GoogleCloudStorageError);
       else expect(error).toMatchObject({ code });
       await client.abortMultipartUpload({ ...target, uploadId });
       expect(await failureOf(() => client.uploadPart(part(uploadId, 1, filled(1, 1))))).toMatchObject({

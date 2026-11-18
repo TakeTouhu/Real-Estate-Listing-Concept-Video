@@ -126,12 +126,13 @@ export interface GoogleCloudStorageOptions {
  *   the staging sink reads one (ADR-0161);
  * - `STORAGE_UNKNOWN_UPLOAD`: an upload this store did not start, or not for
  *   that key;
- * - `STORAGE_UPLOAD_BUSY`: a part or a completion of an upload while another
- *   call on it is unanswered (a cancel is always taken);
- * - `STORAGE_UPLOAD_FAILED`: a call on an upload once a request on it failed;
+ * - `STORAGE_UPLOAD_BUSY`: a part or a completion of an upload while one of
+ *   its chunks is unanswered (a cancel is always taken);
+ * - `STORAGE_UPLOAD_FAILED`: a part or a completion of an upload once a
+ *   request on it failed (a cancel is always taken);
  * - `STORAGE_PART_REFUSED`: a part out of order, empty, or whose checksum is
- *   not its bytes'; one followed by another that is not a whole number of
- *   256 KiB; or a completion naming other parts than those taken;
+ *   not its bytes'; a part after one that is not a whole number of 256 KiB;
+ *   or a completion naming other parts than those taken, or none;
  * - the transport's own one-word code, such as `ECONNREFUSED`;
  * - `STORAGE_UNREACHABLE`: a failure that names none.
  */

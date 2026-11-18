@@ -81,25 +81,27 @@ Then:
   no total, from where the store's bytes end, and the new one is held. The
   last part is sent by `completeMultipartUpload` with the object's size,
   since the sink names its last part only there. Beside the sink's own
-  array, an upload holds one part between calls and two while a chunk is
-  sent, since a part is copied before the one held is sent: 8 MiB and 16
-  MiB at the default size.
+  array, an upload holds one part between calls and two while a part's
+  chunk is sent, since a part is copied before the one held is sent: 8
+  MiB and 16 MiB at the default size. The last chunk, sent by the
+  completion, holds one.
 - **One request at a time, in order, each sent once.** A part must be the
-  next by number. A part or a completion while another call on the upload
+  next by number. A part or a completion while one of the upload's chunks
   is unanswered is refused (new code `STORAGE_UPLOAD_BUSY`). No chunk is
   sent again and no status is asked for. A cancel is taken at any time: it
   lets the upload go at once, and does not stop a chunk already sent, which
   may still finish the object. The sink cancels only once its calls are
   answered.
 - **A chunk must be kept whole.** It must be answered `308` with the range
-  of every byte sent so far; anything else fails the upload, with
+  of every byte sent so far; anything else but a `412` (Decision 2) fails
+  the upload, with
   `STORAGE_UNEXPECTED_ANSWER` or the status's code. A store that kept fewer
   bytes could be sent the rest from the part still held, but no chunk is
   sent twice: the upload fails as retryable, and the sink starts again.
   Whether Google ever keeps fewer bytes of a chunk than it was sent is a
-  check for the first deployment. Once a
-  request on an upload fails, every later call on it but a cancel is
-  refused (new code `STORAGE_UPLOAD_FAILED`), and the sink starts again.
+  check for the first deployment. Once a request on an upload fails, every
+  later part or completion is refused (new code `STORAGE_UPLOAD_FAILED`),
+  a cancel is taken, and the sink starts again.
 - **The last chunk finishes it.** `200` or `201` is a publish, and the
   upload is let go.
 - **The 256 KiB rule is the adapter's.** A part that is not a whole number
@@ -225,12 +227,13 @@ ignores that precondition too.
     completion as the sink's lost race, with the parts after it dropped;
   - a short range, none, an early finish and refusals each failing the
     upload, with nothing sent on it after but the cancel;
-  - a part or a completion while another call is unanswered refused, and
-    a cancel taken, letting the upload go at once;
+  - a part or a completion while a chunk is unanswered refused, and a
+    cancel taken, letting the upload go before the chunk is answered;
   - a session at another origin or path, with credentials, with a
     fragment, or with no `upload_id` refused, and no failure naming the
     session;
-  - the start's and the cancel's answers;
+  - the start's and the cancel's answers, a cancel cut in transit
+    included, after which the upload is let go;
   - on Google's origin, the token on every request of a session, and
     nothing sent to a session elsewhere;
   - the unchanged sink reading the winner back when the start is refused.
@@ -241,16 +244,20 @@ ignores that precondition too.
     when another upload finished first while it was sent;
   - stores nothing when aborted, and a later upload then publishes;
   - is retryable where the bucket is missing.
-- **Mutation**: 49 mutants of the new code, each run against the unit
-  tests; 40 failed a test at first. Tests were added for the five gaps the
-  survivors showed: a session whose address holds a password alone; an
-  upload whose request failed in transit, which would have sent its part
-  again; a completion of an upload that took no part, or naming a part by
-  another number; and a last chunk answered `201`. Each of those mutants
-  now fails a named test. The four that survive are equivalent: a part, or
-  the MD5, still kept for an upload already lost, a start refused with
-  `412` marked open with no session, and the session's address sent as
-  given rather than as parsed.
+- **Mutation**: 51 mutants of the new code, each run against the unit
+  tests. Of the first 49, 40 failed a test at first. Tests were added for
+  the gaps the survivors and the review showed: a session whose address
+  holds a password alone; an upload whose request failed in transit,
+  which would have sent its part again; a completion of an upload that
+  took no part, or naming a part by another number; a last chunk answered
+  `201`; a part taken after a completion refused with `412`, which would
+  have added to an MD5 already summed; a cancel that waits for a chunk
+  unanswered; and one that lets the upload go only once its `DELETE` is
+  answered, which a cancel that fails in transit would never do. Each of
+  those mutants now fails a named test. The three that survive are
+  equivalent: a part still kept for an upload already lost, a start
+  refused with `412` marked open with no session, and the session's
+  address sent as given rather than as parsed.
 
 ## What cannot be shown here
 
@@ -298,10 +305,10 @@ sequenceDiagram
   once the worker is given the view: RD-4c in development, part 2 in
   production, after the precondition check above.
 - An upload holds more than under S3, beside the sink's own array: one
-  part between calls and two while a chunk is sent. At the default part
-  size a transfer holds about 16 MiB between calls and 24 MiB while a
-  chunk is sent, which is most of its time. How many transfers a worker
-  runs at once is part 2's.
+  part between calls and two while a part's chunk is sent. At the default
+  part size a transfer holds about 16 MiB between calls and 24 MiB while a
+  part's chunk is sent. How many transfers a worker runs at once is part
+  2's.
 - No migration, setting, route, page, package or CI job is added; the
   emulator suite runs in the existing `storage` job.
 - Not applicable: the change log and release notes, which no RD milestone

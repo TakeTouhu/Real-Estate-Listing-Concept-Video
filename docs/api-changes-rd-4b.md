@@ -38,8 +38,8 @@ New codes:
 | --- | --- |
 | `STORAGE_PRECONDITION_FAILED` | the completion of an upload the store refused with `412`, at its start, on a chunk or on its last chunk; the error carries `$metadata.httpStatusCode` `412`, as the sink reads a lost race |
 | `STORAGE_UNKNOWN_UPLOAD` | an upload this store did not start, or started for another key |
-| `STORAGE_UPLOAD_BUSY` | a part or a completion while another call on the upload is unanswered; a cancel is always taken |
-| `STORAGE_UPLOAD_FAILED` | a call on an upload once a request on it failed |
+| `STORAGE_UPLOAD_BUSY` | a part or a completion while a chunk of the upload is unanswered; a cancel is always taken |
+| `STORAGE_UPLOAD_FAILED` | a part or a completion once a request on the upload failed; a cancel is always taken |
 | `STORAGE_PART_REFUSED` | a part out of order, sent again, empty or whose SHA-256 is not its bytes'; a part not a whole number of 256 KiB followed by another; a completion naming other parts than those taken, or none |
 
 A session at another origin or path than the store's upload path, with
