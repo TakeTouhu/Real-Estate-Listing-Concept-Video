@@ -19,9 +19,12 @@ it read `ready` and `200`: one that does not begin with `postgresql://` or
 `connection_limit`, `connect_timeout`, `socket_timeout` or `pool_timeout`
 Prisma cannot read. It reads `degraded` too, where it read `ready`, when
 the database answers the probe's client and refuses or does not answer the
-first connection of the web app's own (`P1001`, `P2024`, `P2037`, for
-example), and when that client was built from a damaged copy of the
-environment (`P1012`, ADR-0155 Decision 5).
+first connection of the web app's own client (`P1001`, `P2024`, `P2037`,
+for example), and when that client was built from a damaged copy of the
+environment (`P1012`, ADR-0155 Decision 5). With both `connect_timeout=0`
+and `pool_timeout=0` in the address, a first connection that is not
+answered leaves the request waiting without end instead (ADR-0155
+Decision 3).
 
 The answer's shape, the five checks' names and words, and the route's
 status codes are unchanged. `GET /api/health` is unchanged.

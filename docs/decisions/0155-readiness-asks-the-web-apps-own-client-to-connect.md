@@ -120,9 +120,11 @@ answering it:
 With both set to zero the imitated probe had not ended at 40 s, and a
 later one was still waiting 15 s after the database answered new
 connections again; an imitation of the probe without this change read
-`ready` meanwhile. Without the change the same process's own first query
-waited in the same way, while readiness read `ready`. The development
-server was measured with the first two rows' settings (What was measured).
+`ready` meanwhile. In another imitation, without the change, the app's own
+first query waited in the same way (still waiting at 20 s, and a second
+one 15 s after the database answered again), while the imitated probe read
+`ready`. The development server was measured with the first two rows'
+settings (What was measured).
 ADR-0153's measured cases are unchanged: in each the probe's client fails
 first. Its sentence that a probe "could take 10" seconds no longer gives
 the most: by Prisma's defaults it is 15.
@@ -133,9 +135,10 @@ The start check does not refuse such an address. The start hook loads no
 database code (ADR-0151 Decision 5), `webStartProblems` must not throw, and
 a rule written here would have to copy how Prisma reads an address. For
 the four settings alone that is, as measured: the last of several values
-counts, names are matched by case, a value is decoded as a form's is, a
-plus before the number is read and a minus is not, and a blank, an empty
-value and a number past 64 bits are refused.
+counts, names are matched by case, a value is decoded as a form's is (a
+`+` written is a space, `%2B` a plus), a plus before the number is read
+and a minus is not, and a blank, an empty value and a number past 64 bits
+are refused.
 Samples could hold such a copy to one Prisma, and it would not see an own
 client built from a damaged copy of the environment (Decision 5). Asking
 the client itself sees both, with whatever Prisma is installed.
@@ -208,10 +211,11 @@ each is answered.
   answered `200`, whenever the web app's own client does not connect in
   this process: for an address of the first two kinds; for a first
   connection of that client that the database refuses or does not answer,
-  though it answered the probe's (Decisions 1 and 3); and for a client
-  built from a damaged copy of the environment (Decision 5). The answer's
-  shape is unchanged. No page, permission, migration or audit action
-  changes.
+  though it answered the probe's (Decisions 1 and 3; with both
+  `connect_timeout=0` and `pool_timeout=0` in the address such a request
+  does not end); and for a client built from a damaged copy of the
+  environment (Decision 5). The answer's shape is unchanged. No page,
+  permission, migration or audit action changes.
 - The web app's own client is made, and opens its first connection, when
   readiness is first asked and the database answers: a process that has
   only been asked for readiness holds two connections where it held one.
