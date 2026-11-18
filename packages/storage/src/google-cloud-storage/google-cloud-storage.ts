@@ -125,7 +125,7 @@ export interface GoogleCloudStorageOptions {
  *   because an object was stored at its key first; it carries that status as
  *   the staging sink reads one (ADR-0161);
  * - `STORAGE_UNKNOWN_UPLOAD`: an upload this store did not start, or not for
- *   that key;
+ *   that key, or one let go by a cancel or a publish;
  * - `STORAGE_UPLOAD_BUSY`: a part or a completion of an upload while one of
  *   its chunks is unanswered (a cancel is always taken);
  * - `STORAGE_UPLOAD_FAILED`: a part or a completion of an upload once a

@@ -2868,8 +2868,9 @@ nothing more is inferred. Not measured, and checks for that deployment
 (`docs/decisions/TODO.md`): that Google refuses a last chunk whose MD5 does
 not match, what it answers a chunk that breaks the 256 KiB rule, the form
 of its `308` answers and its session URI, whether it keeps fewer bytes of
-a chunk than it was sent, that a `DELETE` cancels a session, and whether
-an abandoned session's bytes are billed until Google ends it after a week.
+a chunk than it was sent, that a `DELETE` cancels a session and what it
+answers one after a last chunk refused with `412`, and whether an
+abandoned session's bytes are billed until Google ends it after a week.
 Part 2's tracing must not record the URLs of these requests: a session's
 URI lets anyone who holds it write to the bucket.
 

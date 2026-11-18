@@ -1956,11 +1956,13 @@ describe("the staging sink's upload (ADR-0161)", () => {
     const sending = client.uploadPart(part(uploadId, 2, filled(5, 2))).then(() => {
       answered = true;
     });
-    await client.abortMultipartUpload({ ...target, uploadId });
-    expect(answered).toBe(false);
+    const cancelling = client.abortMultipartUpload({ ...target, uploadId });
+    // Let go before its own answer too: a part sent meanwhile goes nowhere.
     expect(await failureOf(() => client.uploadPart(part(uploadId, 3, filled(1, 3))))).toMatchObject({
       code: "STORAGE_UNKNOWN_UPLOAD",
     });
+    await cancelling;
+    expect(answered).toBe(false);
     await sending;
     // The chunk already sent is not stopped; the cancel goes beside it.
     expect(described(store).sort()).toEqual([OPENED, `${CHUNK} bytes 0-262143/*`, CANCEL].sort());

@@ -190,9 +190,9 @@ are billed meanwhile is not documented: a check for the first deployment.
 As for the worker's reads and write (ADR-0160 Decision 4), a call that
 names another bucket or any `expectedBucketOwner` is refused with
 `CONFIGURATION_ERROR`, and nothing is sent. A call that names an upload
-this store did not start, or started for another key, is refused (new code
-`STORAGE_UNKNOWN_UPLOAD`). A cancel of an upload it does not hold does
-nothing.
+this store did not start, started for another key, or let go by a cancel
+or a publish is refused (new code `STORAGE_UNKNOWN_UPLOAD`). A cancel of
+an upload it does not hold does nothing.
 
 ## If Google checks the precondition only at the start
 
@@ -244,7 +244,7 @@ ignores that precondition too.
     when another upload finished first while it was sent;
   - stores nothing when aborted, and a later upload then publishes;
   - is retryable where the bucket is missing.
-- **Mutation**: 51 mutants of the new code, each run against the unit
+- **Mutation**: 52 mutants of the new code, each run against the unit
   tests. Of the first 49, 40 failed a test at first. Tests were added for
   the gaps the survivors and the review showed: a session whose address
   holds a password alone; an upload whose request failed in transit,
@@ -252,8 +252,9 @@ ignores that precondition too.
   took no part, or naming a part by another number; a last chunk answered
   `201`; a part taken after a completion refused with `412`, which would
   have added to an MD5 already summed; a cancel that waits for a chunk
-  unanswered; and one that lets the upload go only once its `DELETE` is
-  answered, which a cancel that fails in transit would never do. Each of
+  unanswered; and two that let the upload go only once its `DELETE` is
+  answered or ends, so that a part sent meanwhile, or a second cancel
+  after one that failed in transit, would still reach the session. Each of
   those mutants now fails a named test. The three that survive are
   equivalent: a part still kept for an upload already lost, a start
   refused with `412` marked open with no session, and the session's
