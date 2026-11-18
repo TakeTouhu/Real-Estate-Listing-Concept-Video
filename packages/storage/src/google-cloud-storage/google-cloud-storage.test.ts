@@ -45,7 +45,8 @@ interface Seen {
  * What a stand-in does with a request: answer it, after a wait or at once,
  * hanging up once `cutAfter` bytes of the body are sent, or never ending the
  * answer once the body is sent when `holdOpen` is set; send `times` copies of
- * `repeat`, as fast as they are taken; say nothing; or hang up.
+ * `repeat`, as fast as they are taken; say nothing; or hang up. A redirect
+ * names `location`, or a port of this machine where nothing listens.
  */
 type Answer =
   | {
@@ -55,6 +56,7 @@ type Answer =
       readonly afterMs?: number;
       readonly cutAfter?: number;
       readonly holdOpen?: boolean;
+      readonly location?: string;
     }
   | {
       readonly status: number;
@@ -98,7 +100,9 @@ async function standIn(answer: (request: Seen) => Answer): Promise<StandIn> {
         return;
       }
       const headers: Record<string, string> = { "content-type": "application/json", ...answered.headers };
-      if (answered.status >= 300 && answered.status < 400) headers.location = "http://127.0.0.1:9/elsewhere";
+      if (answered.status >= 300 && answered.status < 400) {
+        headers.location = ("location" in answered && answered.location) || "http://127.0.0.1:9/elsewhere";
+      }
       response.writeHead(answered.status, headers);
       if ("repeat" in answered) {
         let left = answered.times;
@@ -724,8 +728,9 @@ describe("the streamed read (ADR-0157)", () => {
   it("takes nothing from the answer before the reader asks, then one read of it for each, and lets it go", async () => {
     // The answer the adapter is handed, so what is taken from it can be counted.
     const answers: Readable[] = [];
+    const guarded = requests.getMockImplementation()!;
     requests.mockImplementation(async function (this: Gaxios, options) {
-      const response = await sendRequest.call(this, options);
+      const response = await guarded.call(this, options);
       if (response.data instanceof Readable) answers.push(response.data);
       return response;
     });
@@ -834,14 +839,16 @@ describe("the token (ADR-0158)", () => {
 
   it("asks the metadata server once, as Google says, and keeps the token until the margin before its end", async () => {
     let count = 0;
+    const clock = { at: START };
     const server = await standIn(() => {
       count += 1;
-      return TOKEN({ access_token: `ya29.t${count}`, expires_in: count === 1 ? 3599 : 100 });
+      // The first answer comes 2 seconds after the question: a token's life counts from the question.
+      if (count === 1) clock.at += 2_000;
+      return TOKEN({ access_token: `ya29.t${count}`, expires_in: count === 1 ? 3599 : 300 });
     });
-    const clock = { at: START };
     const token = tokenAt(server.origin, clock);
     expect(await token.get()).toBe("ya29.t1");
-    clock.at += 3_599_000 - GOOGLE_CLOUD_STORAGE_TOKEN_MARGIN_MS - 1;
+    clock.at = START + 3_599_000 - GOOGLE_CLOUD_STORAGE_TOKEN_MARGIN_MS - 1;
     expect(await token.get()).toBe("ya29.t1");
     expect(server.seen.map(({ method, url }) => `${method} ${url}`)).toEqual([
       "GET /computeMetadata/v1/instance/service-accounts/default/token",
@@ -851,7 +858,7 @@ describe("the token (ADR-0158)", () => {
     clock.at += 1;
     expect(await token.get()).toBe("ya29.t2");
     // A token living less than twice the margin is kept for half its life.
-    clock.at += 49_999;
+    clock.at += 149_999;
     expect(await token.get()).toBe("ya29.t2");
     clock.at += 1;
     expect(await token.get()).toBe("ya29.t3");
@@ -859,11 +866,13 @@ describe("the token (ADR-0158)", () => {
   });
 
   it("takes only a token the metadata server gives, keeps nothing else, and asks again next time", async () => {
+    const elsewhere = await standIn(() => TOKEN({ access_token: "ya29.elsewhere" }));
     const refused: Answer[] = [
       { status: 503, headers: FLAVOR, body: tokenBody() },
       { status: 429, headers: FLAVOR, body: tokenBody() },
-      // A redirect is never followed.
-      { status: 301, headers: FLAVOR, body: tokenBody() },
+      { status: 203, headers: FLAVOR, body: tokenBody() },
+      // A redirect is never followed, even to a token.
+      { status: 301, headers: FLAVOR, body: tokenBody(), location: `${elsewhere.origin}/token` },
       // Something other than the metadata server answering, such as a proxy.
       { status: 200, body: tokenBody() },
       { status: 200, headers: { "metadata-flavor": "google" }, body: tokenBody() },
@@ -888,6 +897,7 @@ describe("the token (ADR-0158)", () => {
     for (next = 0; next < refused.length; next += 1) expect(await token.get()).toBeNull();
     expect(await token.get()).toBe(MARKER);
     expect(server.seen).toHaveLength(refused.length + 1);
+    expect(elsewhere.seen).toEqual([]);
   });
 
   it("gives the request its limit, by gaxios's own setting, once for every caller waiting", async () => {
@@ -920,7 +930,10 @@ describe("the token (ADR-0158)", () => {
     const clock = { at: START };
     const token = tokenAt(server.origin, clock);
     expect(await token.get()).toBe(MARKER);
-    clock.at = START + 600_000 - GOOGLE_CLOUD_STORAGE_TOKEN_MARGIN_MS;
+    clock.at = START + 600_000 - GOOGLE_CLOUD_STORAGE_TOKEN_MARGIN_MS - 1;
+    expect(await token.get()).toBe(MARKER);
+    expect(server.seen).toHaveLength(1);
+    clock.at += 1;
     expect(await token.get()).toBe(MARKER);
     clock.at = START + 600_000 - 1;
     expect(await token.get()).toBe(MARKER);
@@ -952,20 +965,24 @@ describe("the token (ADR-0158)", () => {
       vi.spyOn(globalAgent, "getName"),
       vi.spyOn(globalTlsAgent, "getName"),
       vi.spyOn(googleCloudStorageAgents.http, "getName"),
+      vi.spyOn(googleCloudStorageAgents.https, "getName"),
     ];
     const metadataServer = await standIn(() => TOKEN());
     expect(await tokenAt(metadataServer.origin, { at: START }).get()).toBe(MARKER);
     const store = await standIn(() => ({ status: 200, body: LISTED_NONE }));
     expect(await storeAt(store.origin).exists(ASSET)).toBe(false);
-    expect(used.map((spy) => spy.mock.calls.length > 0)).toEqual([false, false, true]);
-    // Node.js 22's own options for its global agents (ADR-0158 Decision 6).
-    for (const agent of Object.values(googleCloudStorageAgents)) {
-      expect((agent as unknown as { readonly options: object }).options).toMatchObject({
-        keepAlive: true,
-        scheduling: "lifo",
-        timeout: 5_000,
-      });
-    }
+    // An https request is given its connection before it connects, here to a port where nothing listens.
+    expect(await failureOf(() => storeAt("https://127.0.0.1:1").exists(ASSET))).toMatchObject({
+      code: "ECONNREFUSED",
+    });
+    expect(used.map((spy) => spy.mock.calls.length > 0)).toEqual([false, false, true, true]);
+    // Node.js 22's own options for its global agents, less a proxy (ADR-0158 Decision 6).
+    const optionsOf = (agent: object): Record<string, unknown> => {
+      const { proxyEnv: _proxyEnv, ...options } = (agent as { readonly options: Record<string, unknown> }).options;
+      return options;
+    };
+    expect(optionsOf(googleCloudStorageAgents.http)).toEqual(optionsOf(globalAgent));
+    expect(optionsOf(googleCloudStorageAgents.https)).toEqual(optionsOf(globalTlsAgent));
   });
 });
 
@@ -976,10 +993,15 @@ interface Asked {
   readonly headers: Headers;
 }
 
+/** What a test answers in place of Google. */
+interface GoogleAnswer {
+  readonly status: number;
+  readonly headers?: Record<string, string>;
+  readonly data?: unknown;
+}
+
 /** Answers every request in place of Google, sending nothing anywhere; the requests are kept. */
-function answeringAsGoogle(
-  answer: (url: URL) => { readonly status: number; readonly headers?: Record<string, string>; readonly data?: unknown },
-): Asked[] {
+function answeringAsGoogle(answer: (url: URL) => GoogleAnswer): Asked[] {
   const asked: Asked[] = [];
   requests.mockImplementation(async (options?: GaxiosOptions) => {
     const url = new URL(String(options?.url));
@@ -995,20 +1017,24 @@ const GOOGLE = "https://storage.googleapis.com";
 const METADATA_SERVER = "http://metadata.google.internal";
 const TOKEN_ANSWER = (token: string) => ({ status: 200, headers: FLAVOR, data: tokenBody({ access_token: token }) });
 
+/** Google's store holding three bytes under every name, as the test answers in its place. */
+function asGoogleStore(url: URL): GoogleAnswer {
+  if (url.pathname.startsWith("/upload/")) return { status: 200, data: "{}" };
+  if (url.search.includes("prefix=")) return { status: 200, data: LISTED(ASSET) };
+  if (url.search.includes("fields=")) return { status: 200, data: metadata(3) };
+  if (url.search.includes("generation=")) {
+    const headers = { "content-range": "bytes 0-2/3", "content-length": "3", "x-goog-generation": GENERATION };
+    return { status: 206, headers, data: Readable.from([Buffer.from([1, 2, 3])]) };
+  }
+  if (url.search.includes("alt=media")) return { status: 200, data: new Uint8Array([1, 2, 3]).buffer };
+  return { status: 204 };
+}
+
 describe("Google's store (ADR-0158)", () => {
   it("sends every request a token from the metadata server, asked for once", async () => {
-    const asked = answeringAsGoogle((url) => {
-      if (url.origin === METADATA_SERVER) return TOKEN_ANSWER(MARKER);
-      if (url.pathname.startsWith("/upload/")) return { status: 200, data: "{}" };
-      if (url.search.includes("prefix=")) return { status: 200, data: LISTED(ASSET) };
-      if (url.search.includes("fields=")) return { status: 200, data: metadata(3) };
-      if (url.search.includes("generation=")) {
-        const headers = { "content-range": "bytes 0-2/3", "content-length": "3", "x-goog-generation": GENERATION };
-        return { status: 206, headers, data: Readable.from([Buffer.from([1, 2, 3])]) };
-      }
-      if (url.search.includes("alt=media")) return { status: 200, data: new Uint8Array([1, 2, 3]).buffer };
-      return { status: 204 };
-    });
+    const asked = answeringAsGoogle((url) =>
+      url.origin === METADATA_SERVER ? TOKEN_ANSWER(MARKER) : asGoogleStore(url),
+    );
     const storage = createGoogleCloudStorage({ bucket: BUCKET, endpoint: GOOGLE, secret: SECRET });
     await storage.createSignedUploadUrl(ASSET, 60);
     expect(asked).toEqual([]);
@@ -1026,6 +1052,13 @@ describe("Google's store (ADR-0158)", () => {
     // The token joins each request's own headers, never in their place.
     expect(rest[0]?.headers.get("content-type")).toBe("application/octet-stream");
     expect(rest[4]?.headers.get("range")).toBe("bytes=0-2");
+    // The token is asked for on the store's own client, and so on the adapter's connections.
+    const clients = new Set(requests.mock.contexts as Gaxios[]);
+    expect(clients.size).toBe(1);
+    const [client] = clients;
+    const agentFor = client?.defaults.agent as (url: URL) => unknown;
+    expect(agentFor(new URL(METADATA_SERVER))).toBe(googleCloudStorageAgents.http);
+    expect(agentFor(new URL(GOOGLE))).toBe(googleCloudStorageAgents.https);
   });
 
   it("sends a token to Google's origin however it is written, and to no other", async () => {
@@ -1072,6 +1105,33 @@ describe("Google's store (ADR-0158)", () => {
       METADATA_SERVER,
       "Bearer ya29.t2",
     ]);
+  });
+
+  it("lets go of the token whichever request the store answers 401", async () => {
+    let tokens = 0;
+    let refusing: (url: URL) => boolean = () => false;
+    answeringAsGoogle((url) => {
+      if (url.origin === METADATA_SERVER) return TOKEN_ANSWER(`ya29.t${(tokens += 1)}`);
+      if (!refusing(url)) return asGoogleStore(url);
+      refusing = () => false;
+      // A streamed read's answer is a stream, whatever its status.
+      return { status: 401, data: Readable.from([]) };
+    });
+    const storage = createGoogleCloudStorage({ bucket: BUCKET, endpoint: GOOGLE, secret: SECRET });
+    const calls: ReadonlyArray<readonly [(url: URL) => boolean, () => Promise<unknown>]> = [
+      [(url) => url.pathname.startsWith("/upload/"), () => storage.putObject(ASSET, new Uint8Array([1]))],
+      [(url) => url.search === "?alt=media", () => storage.getObject(ASSET)],
+      [(url) => url.search.includes("generation="), async () => chunksOf(await storage.readObject(ASSET, null))],
+      [() => true, () => storage.deleteObject(ASSET)],
+    ];
+    for (const [refused, call] of calls) {
+      refusing = refused;
+      expect(await failureOf(call)).toMatchObject({ code: "STORAGE_FORBIDDEN" });
+      // The next request asks for a new token.
+      const asked = tokens;
+      expect(await storage.exists(ASSET)).toBe(true);
+      expect(tokens).toBe(asked + 1);
+    }
   });
 
   it("sends the store nothing when no token can be had, and names nothing", async () => {
@@ -1135,9 +1195,9 @@ describe("where it is constructed", () => {
       "packages/storage/src/google-cloud-storage/client.ts",
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
     ]);
-    expect(naming(/process\.env|GCE_METADATA|GOOGLE_APPLICATION_CREDENTIALS|STORAGE_EMULATOR_HOST/)).not.toContainEqual(
-      expect.stringContaining("google-cloud-storage/"),
-    );
+    const environment =
+      /\bprocess\s*[.[]|["'`](?:node:)?process["'`]|GCE_METADATA|GOOGLE_APPLICATION_CREDENTIALS|STORAGE_EMULATOR_HOST/;
+    expect(naming(environment)).not.toContainEqual(expect.stringContaining("google-cloud-storage/"));
     // Any quoted path beginning with gaxios, or naming the folder or anything below it, so an alias is caught too.
     const loading = /["'`]gaxios(?:\/[^"'`]*)?["'`]|google-cloud-storage(?:\/[\w.-]*)*["'`]/;
     expect(naming(loading).sort()).toEqual([

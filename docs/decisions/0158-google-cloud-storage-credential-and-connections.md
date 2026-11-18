@@ -24,7 +24,7 @@ cannot keep may be limited; and that it routinely answers `429` and `503`.
 RD-3 ruled out Google's own libraries (ADR-0156 Decision 1), so the token is
 asked for over gaxios, as the store is.
 
-Six investigations measured the token, proxies, the web app's wiring, the
+Five investigations measured the token, proxies, the web app's wiring, the
 production build and the records, and a sixth checked the others against
 each other and the sources. What decides this record:
 
@@ -51,9 +51,9 @@ Run's documentation gives, with that path and `Metadata-Flavor: Google`.
 Google's own Node.js client also tries the address `169.254.169.254` and the
 name with a trailing dot; neither is used. Whether a lookup of the name
 passes through search domains first on Cloud Run is a check for the first
-deployment. Nothing is read from the environment: not `GCE_METADATA_HOST`,
-not `GOOGLE_APPLICATION_CREDENTIALS`, not `STORAGE_EMULATOR_HOST`, nor any
-other variable.
+deployment. The adapter reads nothing from the environment: not
+`GCE_METADATA_HOST`, not `GOOGLE_APPLICATION_CREDENTIALS`, not
+`STORAGE_EMULATOR_HOST`, nor any other variable.
 
 An answer is a token only when it is `200`; says `Metadata-Flavor: Google`,
 which something else answering, such as a proxy, does not; is a JSON object;
@@ -139,7 +139,11 @@ true`, `scheduling: "lifo"`, `timeout: 5000`.
   its global agents. So no variable can send the token, or the customers'
   objects, elsewhere. The proxy agent and `debug` are never loaded for these
   requests, so ADR-0156's `DEBUG` that writes a proxy's password does not
-  reach them.
+  reach them. Node.js's own `NODE_DEBUG` still does: naming `https`, or
+  `net` for an `http` origin, it writes each new connection's request, its
+  `Authorization` header and the object's path included, to the process's
+  error output (measured in review). Production must not set it; recorded
+  as open, for RD-3d's start check.
 - **The idle limit.** `timeout: 5000` lets a pooled connection go once it
   has been idle for five seconds; it ends no request. It is the agent's own
   setting, a limit that ends one connection, which the product owner's
@@ -193,24 +197,29 @@ rewritten: where they say RD-3c wires the adapter in, RD-3d does.
 
 ## What was measured
 
-- **The stand-in suite**, 51 tests, 12 of them new. The token: asked for
+- **The stand-in suite**, 52 tests, 13 of them new. The token: asked for
   once, at the path, with `Metadata-Flavor: Google` and no credential; kept
-  until the margin, then asked again; a short-lived token kept for half its
-  life; each of nineteen answers that are not a token refused and not kept;
+  until the margin, counted from when it was asked for, then asked again; a
+  token of 300 seconds kept for half its life, and one of 600 seconds until
+  the margin; each of twenty answers that are not a token refused and not
+  kept, a `203` and a redirect to a token among them, the redirect not
+  followed;
   twenty waiters on a silent metadata server ending at 3.0 seconds with one
   request; fifty waiters sharing one answer; a due token sent while it lasts
   when its renewal fails, and never after its end or once let go; only the
   token named let go. Google's store, answered by the test in its place with
-  nothing sent: every request carries the token, asked for once, and signing
-  asks nothing; the origin's spellings that are Google's and five that are
-  not; a `401` letting go, a `403` keeping; no token, nothing sent and
-  nothing named. A production build's renamed abort read as
+  nothing sent: every request carries the token, asked for once on the
+  store's own client, and signing asks nothing; the origin's spellings that
+  are Google's and five that are not; a `401` to a put, a read, a streamed
+  read's bytes, a delete or a list letting go, a `403` keeping; no token,
+  nothing sent and nothing named. A production build's renamed abort read as
   `STORAGE_TIMEOUT`, as itself and as a cause.
 - **No proxy, no global agent.** Every test of the suite runs with the four
   proxy variables naming a proxy that records what reaches it, which saw
-  nothing. The adapter's requests and the token's are made on its own agent,
-  never on Node.js's global ones. A request to anywhere but this machine
-  fails the test unsent.
+  nothing. The adapter's requests and the token's are made on its own
+  agents, for `http` and for `https`, never on Node.js's global ones, and
+  the two have the global agents' options, less a proxy. A request to
+  anywhere but this machine fails the test unsent.
 - **The emulator suite**, 15 tests, with the proxy variables naming a proxy
   that is not there; the connections it counts are now the adapter's own.
 - **By name, over TLS.** The adapter, unchanged, in a network namespace that
@@ -224,9 +233,10 @@ rewritten: where they say RD-3c wires the adapter in, RD-3d does.
   variables naming a recording proxy: the proxy saw nothing; against the
   emulator over `http` likewise; two rounds each. With the agent taken off
   each request, as a control, the proxy saw 8 `CONNECT`s against the `http`
-  emulator, and the token's request went to it, so the read failed with
-  `STORAGE_CREDENTIAL_UNAVAILABLE`. A connection past the namespace failed
-  `ENETUNREACH`. Records: `/mnt/project-files/cto/rd-3/rd-3c-measured.md`.
+  emulator, and the token's request went to it, so the run's first request,
+  the put, failed with `STORAGE_CREDENTIAL_UNAVAILABLE`. A connection past
+  the namespace failed `ENETUNREACH`. Records:
+  `/mnt/project-files/cto/rd-3/rd-3c-measured.md`.
 
 ## What cannot be shown here
 
@@ -252,7 +262,7 @@ sequenceDiagram
   A->>G: GET list, Authorization: Bearer (3 s)
   G-->>A: 200 list
   A-->>C: true or false
-  Note over A,G: a 401 lets the token go; the next request asks again
+  Note over A,G: a 401 lets the token go, and the next request asks again
 ```
 
 - No production behaviour changes: nothing constructs the adapter, and no

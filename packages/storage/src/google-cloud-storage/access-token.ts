@@ -25,7 +25,10 @@ const BEARER_TOKEN = /^[A-Za-z0-9\-._~+/]+=*$/;
 
 /** The token of the service account the process runs as, for Cloud Storage's requests. */
 export interface AccessToken {
-  /** A token to send now, or `null` when none can be had. Never rejects. */
+  /**
+   * A token to send now, or `null` when none can be had. Nothing the metadata
+   * server or the network does makes it reject; only a clock that throws can.
+   */
   get(): Promise<string | null>;
   /** Forgets `token` if it is the one held: the store answered it `401`. */
   drop(token: string): void;

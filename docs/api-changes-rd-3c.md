@@ -32,7 +32,7 @@ The subpath's exports are unchanged.
 | anything else | kept |
 
 A token that is due is still sent while it lasts when its renewal fails.
-Nothing is retried, and nothing is read from the environment.
+Nothing is retried, and the adapter reads nothing from the environment.
 
 ### Internal to the adapter's folder (not exported)
 

@@ -1878,6 +1878,11 @@ into on 2026-11-17.
       again (ADR-0156). Until then a request that needs a first token during
       such an answer fails with `STORAGE_CREDENTIAL_UNAVAILABLE`; at a
       renewal, the held token is sent while it lasts (ADR-0158 Decision 3).
+- [ ] **Keep `NODE_DEBUG` off in production.** Naming `https`, or `net` for
+      an `http` origin, it makes Node.js write each new connection's
+      request, the token's `Authorization` header and the object's path
+      included, to the process's error output (ADR-0158 Decision 6). RD-3d's
+      start check decides whether to refuse it.
 
 ## Open in RD-3b — what the Google Cloud Storage adapter's streamed read leaves open
 

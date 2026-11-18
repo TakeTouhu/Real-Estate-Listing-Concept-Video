@@ -1121,9 +1121,9 @@ setting, and again 240 seconds before its end. The answer is checked, a
 token Google answers `401` is let go, and no request is sent without one.
 Every request, to the store and for the token, goes on HTTP agents of the
 adapter's own, so no proxy variable, and not Node.js's own proxy switch,
-sends it elsewhere. A timeout in a production build is read as one. Nothing
-reads the environment, and nothing constructs the adapter; RD-3d wires it
-into the web app (ADR-0159).
+sends it elsewhere. A timeout in a production build is read as one. The
+adapter reads nothing from the environment, and nothing constructs it; RD-3d
+wires it into the web app (ADR-0159).
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
