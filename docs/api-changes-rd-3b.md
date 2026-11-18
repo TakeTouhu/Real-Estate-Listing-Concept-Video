@@ -17,7 +17,7 @@ from the same environment.
 | --- | --- |
 | `createGoogleCloudStorage(options)` | returns an `ObjectStorage`: it gains `readObject(key, range)`, the port's streamed read (ADR-0115) |
 | `GoogleCloudStorageObjects` | **removed**: the adapter is the whole port |
-| `GoogleCloudStorageError` | gains `STORAGE_OBJECT_CHANGED` (the object was written again between a read's two requests); `STORAGE_UNEXPECTED_ANSWER` also names an answer that is not the bytes asked for, and a stream that ends short or runs over |
+| `GoogleCloudStorageError` | gains `STORAGE_OBJECT_CHANGED` (the object was written again between a read's two requests); `STORAGE_UNEXPECTED_ANSWER` also names an answer that is not the bytes asked for, and a stream that ends short of the range or brings a chunk past it |
 | `GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS` | also limits the size a read asks first |
 
 ### What a read asks

@@ -1851,10 +1851,10 @@ into on 2026-11-17.
 - [ ] **Decide whether a `HEAD` should ask for an object's bytes.** The
       download route answers `HEAD` by reading and cancelling at once. On
       Cloud Storage that is the size's request and a request for the bytes,
-      let go at once: of a 64 MiB object, 295,913 bytes had reached the
-      process on the emulator, the size's answer among them (ADR-0157 Decision
-      1). Reading the size alone would change the port; how much Google bills
-      for such a request is not measured.
+      let go at once: of a 64 MiB object, between 1,946 and 66,481 bytes had
+      reached the process on the emulator over sixteen runs, the size's answer
+      among them (ADR-0157 Decision 1). Reading the size alone would change
+      the port; how much Google bills for such a request is not measured.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

@@ -2,6 +2,8 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import { Gaxios } from "gaxios";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ObjectRead, ObjectStorage } from "@app/domain";
 import { AppError } from "@app/shared";
@@ -32,7 +34,8 @@ interface Seen {
 
 /**
  * What a stand-in does with a request: answer it, after a wait or at once,
- * hanging up once `cutAfter` bytes of the body are sent; send `times` copies of
+ * hanging up once `cutAfter` bytes of the body are sent, or never ending the
+ * answer once the body is sent when `holdOpen` is set; send `times` copies of
  * `repeat`, as fast as they are taken; say nothing; or hang up.
  */
 type Answer =
@@ -42,6 +45,7 @@ type Answer =
       readonly body?: string | Buffer;
       readonly afterMs?: number;
       readonly cutAfter?: number;
+      readonly holdOpen?: boolean;
     }
   | {
       readonly status: number;
@@ -102,8 +106,9 @@ async function standIn(answer: (request: Seen) => Answer): Promise<StandIn> {
         return;
       }
       const send = () => {
-        const { body = "", cutAfter } = answered;
-        if (cutAfter === undefined) response.end(body);
+        const { body = "", cutAfter, holdOpen = false } = answered;
+        if (holdOpen) response.write(body);
+        else if (cutAfter === undefined) response.end(body);
         else response.write(Buffer.from(body).subarray(0, cutAfter), () => request.socket.destroy());
       };
       if (answered.afterMs === undefined) send();
@@ -127,6 +132,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
     server.close();
@@ -527,9 +533,14 @@ describe("the streamed read (ADR-0157)", () => {
     );
     const storage = storeAt(store.origin);
     expect(joined(await chunksOf(await storage.readObject(ASSET, null)))).toEqual(new Uint8Array(TEN));
-    expect(await failureOf(() => storage.readObject(ASSET, { kind: "FROM", start: 3, end: 5 }))).toMatchObject({
-      code: "STORAGE_UNEXPECTED_ANSWER",
-    });
+    for (const [start, end] of [
+      [3, 5],
+      [0, 5],
+    ] as const) {
+      expect(await failureOf(() => storage.readObject(ASSET, { kind: "FROM", start, end }))).toMatchObject({
+        code: "STORAGE_UNEXPECTED_ANSWER",
+      });
+    }
   });
 
   it("asks for no bytes when the range holds none of them, or the object holds none", async () => {
@@ -667,7 +678,15 @@ describe("the streamed read (ADR-0157)", () => {
     await vi.waitFor(() => expect(store.open()).toBe(0));
   });
 
-  it("takes the answer only as the reader pulls, and lets it go when the reader stops", async () => {
+  it("takes nothing from the answer before the reader asks, then one read of it for each, and lets it go", async () => {
+    // The answer the adapter is handed, so what is taken from it can be counted.
+    const answers: Readable[] = [];
+    const request = Gaxios.prototype.request;
+    vi.spyOn(Gaxios.prototype, "request").mockImplementation(async function (this: Gaxios, options) {
+      const response = await request.call(this, options);
+      if (response.data instanceof Readable) answers.push(response.data);
+      return response;
+    });
     const size = 64 * MEBIBYTE;
     const store = await standIn((request) =>
       isMedia(request)
@@ -681,12 +700,60 @@ describe("the streamed read (ADR-0157)", () => {
     );
     const read = await storeAt(store.origin).readObject(ASSET, null);
     if (read.kind !== "READ") throw new Error("expected a read");
+    const [answer] = answers;
+    if (answer === undefined) throw new Error("expected the answer");
+    const taken: number[] = [];
+    const readAnswer = answer.read.bind(answer);
+    answer.read = (bytes?: number): unknown => {
+      const chunk: unknown = readAnswer(bytes);
+      if (chunk instanceof Uint8Array) taken.push(chunk.byteLength);
+      return chunk;
+    };
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(answer.readableDidRead).toBe(false);
+    expect(taken).toEqual([]);
     const reader = read.body.getReader();
-    expect((await reader.read()).value?.byteLength).toBeGreaterThan(0);
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    // What the transport buffers is taken; the rest waits for the reader.
+    const first = await reader.read();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(taken).toEqual([first.value?.byteLength]);
+    const second = await reader.read();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(taken).toEqual([first.value?.byteLength, second.value?.byteLength]);
+    // What the transport buffers is sent; the rest waits for the reader.
     expect(store.sent.bytes).toBeLessThan(size / 4);
     await reader.cancel();
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+    expect(store.sent.bytes).toBeLessThan(size / 4);
+  });
+
+  it("ends the stream at its range's last byte, and lets the answer go, though the answer goes on", async () => {
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? { status: 206, headers: { "content-range": "bytes 3-5/10" }, body: "abc", holdOpen: true }
+        : { status: 200, body: metadata(10) },
+    );
+    const read = await storeAt(store.origin).readObject(ASSET, { kind: "FROM", start: 3, end: 5 });
+    expect(Buffer.from(joined(await chunksOf(read))).toString()).toBe("abc");
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+  });
+
+  it("ends the stream with a code at the first chunk past its range, and lets the rest go", async () => {
+    const size = 64 * MEBIBYTE;
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? {
+            status: 206,
+            headers: { "content-range": "bytes 3-5/10" },
+            repeat: Buffer.alloc(64 * 1024, 1),
+            times: size / (64 * 1024),
+          }
+        : { status: 200, body: metadata(10) },
+    );
+    const read = await storeAt(store.origin).readObject(ASSET, { kind: "FROM", start: 3, end: 5 });
+    if (read.kind !== "READ") throw new Error("expected a read");
+    const error = await failureOf(() => read.body.getReader().read());
+    expect(error).toBeInstanceOf(GoogleCloudStorageError);
+    expect(error).toMatchObject({ code: "STORAGE_UNEXPECTED_ANSWER", message: "STORAGE_UNEXPECTED_ANSWER" });
     await vi.waitFor(() => expect(store.open()).toBe(0));
     expect(store.sent.bytes).toBeLessThan(size / 4);
   });

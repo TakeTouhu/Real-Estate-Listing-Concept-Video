@@ -38,8 +38,8 @@ reported as skipped. CI runs them in the `media` job on Ubuntu 24.04.
 
 Suites that speak to the Cloud Storage emulator (ADR-0156, ADR-0157): the
 Google Cloud Storage adapter storing, reading, streaming and deleting objects
-in a bucket of each test's own. They are **excluded** from `pnpm test` and run explicitly, with
-the emulator running and named:
+in a bucket of each test's own. They are **excluded** from `pnpm test` and
+run explicitly, with the emulator running and named:
 
 ```bash
 export GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT=http://127.0.0.1:4443

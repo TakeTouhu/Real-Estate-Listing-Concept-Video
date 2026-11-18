@@ -259,10 +259,12 @@ function emptyStream(): ReadableStream<Uint8Array> {
 
 /**
  * The `length` bytes an answer carries, as a stream read only as the caller
- * pulls: one of the transport's chunks for each pull, none before the first.
- * It ends only when the answer ends having carried exactly `length` bytes; an
- * answer that ends short, runs over or fails errors it with a code alone. The
- * answer is let go at its end, on cancel and on failure (ADR-0157).
+ * pulls: one read of the answer, all it holds then, for each pull, and none
+ * before the first.
+ * It ends once it has handed over exactly `length` bytes, whether or not the
+ * answer has ended; an answer that ends short of them, brings a chunk past
+ * them or fails errors it with a code alone. The answer is let go at the
+ * stream's end, on cancel and on failure (ADR-0157).
  */
 function answerStream(body: Readable, length: number): ReadableStream<Uint8Array> {
   let chunks: AsyncIterator<unknown> | undefined;
@@ -292,13 +294,9 @@ function answerStream(body: Readable, length: number): ReadableStream<Uint8Array
           return;
         }
         if (released) return;
+        // Every byte asked for closes the stream when it is handed over, so an end now is short of them.
         if (next.done === true) {
-          if (received !== length) {
-            fail(controller, "STORAGE_UNEXPECTED_ANSWER");
-            return;
-          }
-          release();
-          controller.close();
+          fail(controller, "STORAGE_UNEXPECTED_ANSWER");
           return;
         }
         const chunk: unknown = next.value;
@@ -308,6 +306,11 @@ function answerStream(body: Readable, length: number): ReadableStream<Uint8Array
         }
         received += chunk.byteLength;
         controller.enqueue(chunk);
+        // The last byte is handed over: the answer is let go now, not on a later pull.
+        if (received === length) {
+          release();
+          controller.close();
+        }
       },
       cancel() {
         release();

@@ -76,8 +76,9 @@ again before the first of them is taken, as the shared folder's contract
 holds, and a store that refuses them is a thrown error, which the route
 answers `500`, not a response that breaks partway. That costs a request for
 every read, the `HEAD` the route answers among them, which lets it go at
-once: on the emulator, 295,913 bytes of a 64 MiB object, the size's answer
-included, had reached the process when it did.
+once: on the emulator, over sixteen runs, between 1,946 and 66,481 bytes of
+a 64 MiB object had reached the process on its one connection when it did,
+the size's answer included.
 
 The answer is asked for as stored: `accept-encoding: identity`, and gaxios
 told not to decode (`compress: false`, passed through to node-fetch).
@@ -110,24 +111,28 @@ is told, by a code.
 ## Decision 3 — The stream
 
 The bytes are a web `ReadableStream` written by hand, with a high-water mark
-of 0, which takes one of the transport's chunks from the answer for each
-read of it and none before the first. Node.js's own `Readable.toWeb` took
-130,943 bytes before the first read; a stream written this way took none.
+of 0, which takes one read of the answer, all it holds then, for each read
+of the stream, and none before the first. Node.js's own `Readable.toWeb`
+took 130,943 bytes before the first read; a stream written this way took
+none.
 
-- **It counts.** It ends only when the answer ends having carried exactly
-  the bytes asked for. An answer that ends short or runs over ends the
-  stream with `STORAGE_UNEXPECTED_ANSWER`, and a transport failure with its
-  own one-word code; nothing of the failure, which can name the request's
-  address, is kept.
-- **It lets go.** The answer is destroyed at the stream's end, on cancel and
-  on failure. After a cancel, what the release ends is not reported: the
-  reader has gone.
-- **What bounds it.** A chunk is the transport's, up to 130,943 bytes
-  measured. Below the stream, about 256 KiB is taken from the connection
-  before the reader asks, and the operating system holds more: of a 64 MiB
-  answer the stand-in had sent 3,866,624 bytes when the reader, having read
-  one chunk, stopped. HTTP's own flow control holds the rest until the
-  reader asks.
+- **It counts.** It ends once it has handed over exactly the bytes asked
+  for, whether or not the answer has ended, so an answer that goes on past
+  them holds nothing. An answer that ends short of them, or brings a chunk
+  past them, ends the stream with `STORAGE_UNEXPECTED_ANSWER`, and a
+  transport failure with its own one-word code; nothing of the failure,
+  which can name the request's address, is kept.
+- **It lets go.** The answer is destroyed when the last byte is handed over,
+  on cancel and on failure. A read to its end still keeps its connection for
+  the next request: on the emulator it did 24 times of 24, for objects of 10
+  bytes, 200,000 bytes and 3 MiB. After a cancel, what the release ends is
+  not reported: the reader has gone.
+- **What bounds it.** A chunk is what the answer holds when it is read, up
+  to 130,943 bytes measured. Below the stream, about 256 KiB is taken from
+  the connection before the reader asks, and the operating system holds
+  more: of a 64 MiB answer the stand-in had sent between 3,866,624 and
+  5,570,560 bytes, over six runs, when the reader, having read two chunks,
+  stopped. TCP's flow control holds the rest until the reader asks.
 
 The plan named an `AbortController` for cancel. None is used: the read
 returns only after the headers, when destroying the answer lets its
@@ -194,26 +199,34 @@ against stand-ins on `127.0.0.1`:
   object written again after the read began, read as it was; an empty
   object, asking nothing. The suite's escaped keys, refused keys and missing
   bucket now read too.
-- The stand-in suite, 37 tests, 12 of them new: the two requests, once each,
+- The stand-in suite, 39 tests, 14 of them new: the two requests, once each,
   pinned and ranged as above; a whole object answered `200`, a range
-  answered `200` refused; nothing asked past the size when no byte is;
-  absence before the size and before the bytes, and a key written again
-  between them; the sizes, generations and encodings refused before the
-  bytes; each answer refused, by its code alone; a short and a long answer
-  ending the stream; a store that hangs up partway ending it with
-  `ECONNRESET`, keeping nothing, its connection closed; a reader that stops,
-  its connection closed with 3,866,624 of 67,108,864 bytes sent; a refused
-  answer of 64 MiB let go likewise; the size given 3.0 seconds; the bytes
-  given more than 3.5. The read is added to the tests of keys, statuses, a
-  missing bucket and a store that hangs up.
+  answered `200` refused, one from the first byte among them; nothing asked
+  past the size when no byte is; absence before the size and before the
+  bytes, and a key written again between them; the sizes, generations and
+  encodings refused before the bytes; each answer refused, by its code
+  alone; a short and a long answer ending the stream; a store that hangs up
+  partway ending it with `ECONNRESET`, keeping nothing, its connection
+  closed; nothing read from the answer before the first read of the stream,
+  and one read of it for each; a reader that stops, its connection closed
+  with at most 5,570,560 of 67,108,864 bytes sent over six runs; a stream
+  ended at its range's last byte, and its connection let go, while the
+  answer goes on; a chunk past the range ending the stream, the rest let go;
+  a refused answer of 64 MiB let go likewise; the size given 3.0 seconds;
+  the bytes given more than 3.5. The read is added to the tests of keys,
+  statuses, a missing bucket and a store that hangs up.
 - Both suites pass with `HTTPS_PROXY` naming a proxy that is not there.
 
 ## Consequences
 
 - No production behaviour changes: nothing constructs the adapter, the route
   is unchanged, and no migration is added.
-- A read costs two requests against the bucket, three after a `404`, and
-  needs `storage.objects.get` and, for a `404`, `storage.objects.list`.
+- A read that finds its object costs two requests against the bucket, the
+  size and the bytes, and three when the bytes' request answers `404` and
+  the list follows. An absent object or a missing bucket costs two, the size
+  and the list; a range or an object that holds no bytes costs one, the size
+  alone. A read needs `storage.objects.get` and, after a `404`,
+  `storage.objects.list`.
 - RD-3c wires the adapter into the web app (ADR-0158).
 - Nothing is activated: no timer, loop or schedule, no paid call, no
   production credential, no deploy, no Google account.
