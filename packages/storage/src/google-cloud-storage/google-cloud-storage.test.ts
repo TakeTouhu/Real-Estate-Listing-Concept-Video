@@ -1659,14 +1659,18 @@ describe("the staging sink's upload (ADR-0161)", () => {
     expect(store.seen).toHaveLength(4);
   });
 
-  it("sends a single part whole when the upload is completed", async () => {
-    const store = await resumableStore();
-    const client = clientAt(store.origin);
-    const { uploadId } = await client.createMultipartUpload(target);
-    await client.uploadPart(part(uploadId, 1, filled(3, 7)));
-    await client.completeMultipartUpload(complete(uploadId, refs([filled(3, 7)])));
-    expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-2/3`]);
-    expect(store.seen[1]!.body).toEqual(Buffer.from([7, 7, 7]));
+  it("sends a single part whole when the upload is completed, finished at 200 or 201", async () => {
+    for (const status of [200, 201]) {
+      const store = await resumableStore((request) => (request.method === "PUT" ? { status, body: "{}" } : undefined));
+      const client = clientAt(store.origin);
+      const { uploadId } = await client.createMultipartUpload(target);
+      await client.uploadPart(part(uploadId, 1, filled(3, 7)));
+      await client.completeMultipartUpload(complete(uploadId, refs([filled(3, 7)])));
+      // Finished, the upload is let go: there is nothing left to cancel.
+      await client.abortMultipartUpload({ ...target, uploadId });
+      expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-2/3`]);
+      expect(store.seen[1]!.body).toEqual(Buffer.from([7, 7, 7]));
+    }
   });
 
   it("keeps a copy of each part, so the sink may fill its array again", async () => {
@@ -1761,6 +1765,7 @@ describe("the staging sink's upload (ADR-0161)", () => {
       [ref(2, last), ref(1, body)],
       [ref(1, body), { ...ref(2, last), etag: '"other"' }],
       [ref(1, body), { ...ref(2, last), checksumSha256Base64: sum(body, "base64") }],
+      [{ ...ref(1, body), partNumber: 3 }, ref(2, last)],
     ]) {
       expect(await failureOf(() => client.completeMultipartUpload(complete(uploadId, parts)))).toMatchObject({
         code: "STORAGE_PART_REFUSED",
@@ -1774,6 +1779,12 @@ describe("the staging sink's upload (ADR-0161)", () => {
     expect(store.seen).toHaveLength(2);
     await client.completeMultipartUpload(complete(uploadId, refs([body, last])));
     expect(store.seen).toHaveLength(3);
+    // An upload that took no part is not finished as an empty object.
+    const none = await client.createMultipartUpload(target);
+    expect(await failureOf(() => client.completeMultipartUpload(complete(none.uploadId, [])))).toMatchObject({
+      code: "STORAGE_PART_REFUSED",
+    });
+    expect(store.seen).toHaveLength(4);
   });
 
   it("knows only the uploads it started, for the key it started them for", async () => {
@@ -1939,6 +1950,7 @@ describe("the staging sink's upload (ADR-0161)", () => {
       (origin: string) => `${origin}${SESSION}`.replace(`upload_id=${SESSION_ID}`, "upload_id="),
       (origin: string) => `${origin}${SESSION}`.replace(`upload_id=${SESSION_ID}`, `id=${SESSION_ID}`),
       (origin: string) => `${origin}${SESSION}`.replace("http://", `http://${SESSION_ID}@`),
+      (origin: string) => `${origin}${SESSION}`.replace("http://", `http://:${SESSION_ID}@`),
       (origin: string) => `${origin}${SESSION}#${SESSION_ID}`,
       () => SESSION,
       () => `http://[${SESSION_ID}`,
@@ -1971,6 +1983,11 @@ describe("the staging sink's upload (ADR-0161)", () => {
       for (const text of [inspect(error, { depth: 10 }), JSON.stringify(error), String(error)]) {
         expect(text).not.toContain(SESSION_ID);
       }
+      // However it failed, the upload sends nothing more.
+      expect(await failureOf(() => client.uploadPart(part(uploadId, 2, filled(1, 2))))).toMatchObject({
+        code: "STORAGE_UPLOAD_FAILED",
+      });
+      expect(store.seen).toHaveLength(2);
     }
   });
 
