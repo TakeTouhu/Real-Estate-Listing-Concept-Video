@@ -197,6 +197,10 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       `s3:ListBucket` is. What Google answers without that permission is
       not measured: the emulator has no permissions. The worker's seams are
       RD-4's.*
+      *RD-3d (ADR-0159): the web app keeps its objects in Google Cloud
+      Storage in production, built only where both `NODE_ENV` values say
+      production. The worker's copies and deliverables are RD-4's, and this
+      item closes with them.*
 - [ ] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
       an approved vendor) behind the `MalwareScanner` port. Still required — the
       guard blocks production use, it does not provide real scanning.
@@ -1559,6 +1563,9 @@ blocks activation. The production email service is tracked below, under
       limited by gaxios's own 3 seconds too, so `exists` waits at most the
       two limits, about six seconds, when a token must be asked for. RD-3d,
       not RD-3c, wires the adapter in.*
+      *RD-3d (ADR-0159) wires it in. In a real production build, a store
+      that never answered was read as `STORAGE_TIMEOUT` at about 3.0 seconds
+      (Decision 7).*
 - [ ] **Decide whether the web app's own database client is limited.** It
       keeps Prisma's defaults: 5 seconds to open a connection, 10 to wait
       for one from its pool, and no limit on a query it has sent (ADR-0152
@@ -1589,6 +1596,10 @@ blocks activation. The production email service is tracked below, under
       of the web app's own client is one more step, and not within those
       seconds: 5 by Prisma's defaults, or what the deployment's address
       sets (ADR-0155 Decision 3).
+      *Amended in RD-3d (ADR-0159 Decision 8): with Google's store, the
+      storage check is one list in the bucket per readiness request, an
+      operation Google charges for, and waits up to about six seconds when a
+      token must be asked for. How often readiness is asked bears on both.*
 - [x] **Have readiness, or the start check, refuse an address the web app's
       own client cannot read.** The probe's client is given the address
       taken apart and put together again, with four settings replaced
@@ -1654,6 +1665,9 @@ blocks activation. The production email service is tracked below, under
       reads it, or refusing to start with it, was not tried: where that
       would run depends on how the server is started. RD-10 adds the
       container image and its start command, and is to decide.
+      *Amended in RD-3d (ADR-0159): such a server given a bucket chooses
+      Google's store and asks it, and readiness's `start` check still reads
+      the scanner and email as refused until RD-5 and RD-6.*
 
 ## Found after RD-2d — two CI jobs that failed now and then
 
@@ -1817,13 +1831,19 @@ into on 2026-11-17.
       *Amended in RD-3c (ADR-0158 Decision 6): every request now goes on HTTP
       agents of the adapter's own, so such a limit would bypass nothing. None
       is set.*
-- [ ] **Prove the production build with gaxios.** gaxios imports
+- [x] **Prove the production build with gaxios.** gaxios imports
       `node-fetch` 3 when it first sends a request. Nothing in the web app
       loads the adapter yet; RD-3c, which wires it in, is to prove that
       `next build` and a production start send its requests, or to keep
       gaxios out of the server bundle (`serverExternalPackages`).
       *Amended in RD-3c (ADR-0158 Decision 8): RD-3d wires the adapter in,
       and proves this.*
+      *Done in RD-3d (ADR-0159 Decision 7): `next build` bundles gaxios and
+      node-fetch with no warning and no change to Next.js's configuration,
+      the start hook's chunk holds neither, and a production build's
+      requests, for the token and to the store, went to stand-ins for
+      Google's names in a network namespace; a store that never answered was
+      read as `STORAGE_TIMEOUT`.*
 - [x] **Limit the request that fetches the store's credential.** The
       3-second limit is the list's (ADR-0156 Decision 3). RD-3c fetches a
       credential from the metadata server before the store is asked: that
@@ -1878,11 +1898,35 @@ into on 2026-11-17.
       again (ADR-0156). Until then a request that needs a first token during
       such an answer fails with `STORAGE_CREDENTIAL_UNAVAILABLE`; at a
       renewal, the held token is sent while it lasts (ADR-0158 Decision 3).
-- [ ] **Keep `NODE_DEBUG` off in production.** Naming `https`, it makes
+- [x] **Keep `NODE_DEBUG` off in production.** Naming `https`, it makes
       Node.js write each new connection's request to Google's store, the
       token's `Authorization` header and the object's path included, to the
       process's error output (ADR-0158 Decision 6). RD-3d's start check
       decides whether to refuse it.
+      *Done in RD-3d (ADR-0159 Decision 5), in the environment's schema
+      rather than the start check: any non-empty `NODE_DEBUG` is refused
+      where the configured `NODE_ENV` is production, for the web app and the
+      worker alike. Node.js reads it once, as the process starts, so the
+      start is refused before any request.*
+
+## Open in RD-3d — what the web app's Cloud Storage leaves open
+
+- [ ] **Run the production image against Google's names redirected.**
+      ADR-0159 Decision 7 measured a production build in a network
+      namespace by hand, with the start hook skipped, since the start check
+      refuses every production start until RD-5 and RD-6. RD-11's
+      production-mode test is to run the image RD-10 builds the same way,
+      with Google's two names pointed at stand-ins and a test certificate,
+      and its start checked.
+- [ ] **Give the worker the same construction rules.** RD-4 gives the
+      worker Cloud Storage. It is to build Google's store only where both
+      `NODE_ENV` values say production, and refuse the emulator where
+      either does, as the web app's adapters do (ADR-0159 Decision 2).
+- [ ] **Let the development pipeline run beside the emulator.** A bucket is
+      refused beside `SHARED_STORAGE_DIR` (ADR-0159 Decision 6), and the
+      pipeline reads only the folder, so a development machine that keeps
+      the web app's objects in the emulator cannot run the pipeline on them.
+      RD-4 is to decide.
 
 ## Open in RD-3b — what the Google Cloud Storage adapter's streamed read leaves open
 
@@ -2516,6 +2560,8 @@ them is **built**. Each item below records the settled decision and what remains
       *RD-3c (ADR-0158) adds the token Google's store asks for, from the
       metadata server, and keeps every request from a proxy. RD-3d
       (ADR-0159) is to wire the adapter in.*
+      *RD-3d (ADR-0159) wires the adapter into the web app. The worker's
+      seams are RD-4's.*
 - [x] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`. *Done in Phase 6C

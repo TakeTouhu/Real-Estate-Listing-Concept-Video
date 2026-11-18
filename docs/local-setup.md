@@ -96,6 +96,30 @@ run from different folders, and the setting is refused in production. The
 development pipeline (section 4a) reads the same folder. Delete the folder to
 start over.
 
+### Or in the Cloud Storage emulator
+
+The web app can keep its objects in the Cloud Storage emulator instead, as
+it keeps them in Google's own store in production (ADR-0159). Start the
+emulator (section 5, *Cloud Storage emulator tests*), make a bucket in it,
+and name both in `.env.local`, without `SHARED_STORAGE_DIR`:
+
+```bash
+curl -sS -X POST -H 'content-type: application/json' \
+  -d '{"name":"vtavision-dev"}' http://127.0.0.1:4443/storage/v1/b
+```
+
+```bash
+GOOGLE_CLOUD_STORAGE_BUCKET=vtavision-dev
+GOOGLE_CLOUD_STORAGE_ENDPOINT=http://127.0.0.1:4443
+```
+
+Readiness then reads `adapter=gcs-emulator`. Outside production a bucket
+needs the endpoint, and an endpoint at Google's own domain is refused, so
+development never uses Google's own store or its token. The emulator keeps
+its objects in memory until it stops. The development pipeline does not read
+the emulator: run it with the folder, and so does the browser test, which
+refuses to start while either setting is in its environment.
+
 ## 3c. Sign up and verify your email address
 
 A new account sees only the verify page until it opens the link mailed to its
@@ -305,7 +329,9 @@ pnpm test:gcs   # vitest.gcs.config.ts
 
 Without that variable the run fails, and an origin that is not on this
 machine is refused. Each test makes a bucket of its own, held in the
-emulator's memory until it stops. CI runs them in the `storage` job.
+emulator's memory until it stops. The web app's own storage, as its settings
+choose it, is tested there too (ADR-0159). CI runs them in the `storage`
+job.
 
 ### Browser tests
 

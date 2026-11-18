@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { serverEnvSchema, type ServerEnv } from "@app/shared";
+import { loadServerEnv, resetServerEnvCache, serverEnvSchema, type ServerEnv } from "@app/shared";
 import { chooseWebAdapters } from "./adapter-choice";
 import {
   checkWebStart,
@@ -29,7 +29,7 @@ const production = serverEnvSchema.parse({
 });
 
 /**
- * No environment passes until RD-3, RD-5 and RD-6 add production adapters.
+ * No environment passes until RD-5 and RD-6 add production adapters.
  * This list and environment stand for one that does: every chosen adapter
  * allowed, every setting set.
  */
@@ -66,20 +66,42 @@ describe("productionStartProblems", () => {
     ]);
   });
 
-  it("refuses every adapter storage, scanning and email can choose today", () => {
+  it("refuses every development adapter storage, scanning and email can choose", () => {
     const dirs = { SHARED_STORAGE_DIR: "/tmp/shared", EMAIL_OUTBOX_DIR: "/tmp/outbox" };
     const folders = serverEnvSchema.parse({ ...base, ...dirs });
+    const emulator = serverEnvSchema.parse({
+      ...base,
+      GOOGLE_CLOUD_STORAGE_BUCKET: "vtavision-objects",
+      GOOGLE_CLOUD_STORAGE_ENDPOINT: "http://127.0.0.1:4443",
+    });
     expect(productionStartProblems(folders)).toEqual(
       expect.arrayContaining([
         'object storage: "shared-folder" is not a production adapter',
         'email: "outbox" is not a production adapter',
       ]),
     );
-    for (const choice of [chooseWebAdapters(development), chooseWebAdapters(folders)]) {
+    expect(productionStartProblems(emulator)[0]).toBe('object storage: "gcs-emulator" is not a production adapter');
+    for (const choice of [chooseWebAdapters(development), chooseWebAdapters(folders), chooseWebAdapters(emulator)]) {
       for (const port of ["storage", "malwareScanner", "email"] as const) {
         expect(PRODUCTION_ADAPTERS[port]).not.toContain(choice[port]);
       }
     }
+  });
+
+  it("allows Google's own Cloud Storage, and only it, for object storage (ADR-0159)", () => {
+    expect(PRODUCTION_ADAPTERS.storage).toEqual(["gcs"]);
+    const google = serverEnvSchema.parse({
+      ...base,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://user:password@db.internal:5432/app",
+      MFA_SECRET_KEY: "11".repeat(32),
+      APP_BASE_URL: "https://app.example.com",
+      GOOGLE_CLOUD_STORAGE_BUCKET: "vtavision-objects",
+    });
+    expect(productionStartProblems(google)).toEqual([
+      'malware scanning: "passthrough" is not a production adapter',
+      "email: none is configured, so sign-up cannot send its verification link",
+    ]);
   });
 
   it("names each production setting that is not set, and no setting's value", () => {
@@ -171,6 +193,28 @@ describe("webStartProblems", () => {
     // None in a development start and in a production start with nothing wrong; one where only the
     // two values of NODE_ENV differ; the adapters and the settings beside it where they are wrong too.
     expect(counts).toEqual([0, 3, 0, 1, 1, 5]);
+  });
+});
+
+describe("NODE_DEBUG (ADR-0158 Decision 6, ADR-0159)", () => {
+  it("ends a production start that sets it, with the schema's line, naming none of its value", () => {
+    const raw = { ...base, NODE_ENV: "production" as const, NODE_DEBUG: "foo,HTTPS" };
+    vi.stubEnv("NODE_ENV", "production");
+    // `loadServerEnv` keeps what it parsed for the process: start from nothing kept.
+    resetServerEnvCache();
+    const { start, reports, exits } = recorded(() => loadServerEnv(raw));
+    checkWebStart(start, allowingTodays);
+    expect(exits).toEqual([1]);
+    expect(reports).toEqual([
+      "The web app cannot start in production. Invalid server environment configuration:\n" +
+        "  - NODE_DEBUG: NODE_DEBUG must not be set in production: " +
+        "Node.js would write requests, their tokens included, to the error output",
+    ]);
+    // A production build given another NODE_ENV is refused for the mismatch; the schema refuses NODE_DEBUG only
+    // where the configured value is production.
+    const { start: other, reports: otherReports } = recorded(() => serverEnvSchema.parse({ ...raw, NODE_ENV: "test" }));
+    checkWebStart(other, allowingTodays);
+    expect(otherReports.join("\n")).toContain('NODE_ENV is not "production", but this is a production build');
   });
 });
 

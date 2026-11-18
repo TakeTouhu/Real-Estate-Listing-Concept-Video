@@ -8,8 +8,10 @@ import {
   type PromptModerator,
 } from "@app/domain";
 import { createImageAnalysisProvider } from "@app/ai-providers";
-import type { ServerEnv } from "@app/shared";
+import { AppError, GOOGLE_CLOUD_STORAGE_ORIGIN, type ServerEnv } from "@app/shared";
+import { createGoogleCloudStorage } from "@app/storage/google-cloud-storage";
 import {
+  assertNotProduction,
   LocalObjectStorage,
   PassthroughMalwareScanner,
   SharpImageProcessor,
@@ -52,11 +54,37 @@ export function createWebAdapters(env: ServerEnv): WebAdapters {
   const nodeEnv = () => (process.env.NODE_ENV === "production" ? "production" : env.NODE_ENV);
   return {
     choice,
-    storage: once(() =>
-      env.SHARED_STORAGE_DIR !== undefined
+    storage: once(() => {
+      const bucket = env.GOOGLE_CLOUD_STORAGE_BUCKET;
+      const endpoint = env.GOOGLE_CLOUD_STORAGE_ENDPOINT;
+      if (bucket !== undefined && endpoint === undefined) {
+        // Google's own store, with the process's token, is a production build's alone. The schema allows a
+        // bucket with no endpoint only where the configured value says production, and the ambient value must
+        // too: neither vouches for the other (ADR-0150 Decision 2), so development never asks Google's store
+        // (ADR-0159).
+        if (env.NODE_ENV !== "production" || process.env.NODE_ENV !== "production") {
+          throw new AppError("CONFIGURATION_ERROR", "Google's own Cloud Storage is used only by a production build");
+        }
+        return createGoogleCloudStorage({ bucket, endpoint: GOOGLE_CLOUD_STORAGE_ORIGIN, secret });
+      }
+      if (bucket !== undefined && endpoint !== undefined) {
+        // An emulator refuses production by either value, as each development adapter does (ADR-0085).
+        assertNotProduction(
+          "GoogleCloudStorageEmulator",
+          "objects are kept by the emulator the endpoint names, for development and CI",
+          "set GOOGLE_CLOUD_STORAGE_BUCKET alone, for Google's own Cloud Storage",
+          { nodeEnv: nodeEnv() },
+        );
+        // The schema refuses Google's domain here; the adapter would send Google's origin the process's token.
+        if (URL.canParse(endpoint) && new URL(endpoint).origin === GOOGLE_CLOUD_STORAGE_ORIGIN) {
+          throw new AppError("CONFIGURATION_ERROR", "A Cloud Storage emulator cannot be Google's own store");
+        }
+        return createGoogleCloudStorage({ bucket, endpoint, secret });
+      }
+      return env.SHARED_STORAGE_DIR !== undefined
         ? createSharedFolderStorage({ root: env.SHARED_STORAGE_DIR, secret, nodeEnv: nodeEnv() }).objectStorage
-        : new LocalObjectStorage({ secret, nodeEnv: nodeEnv() }),
-    ),
+        : new LocalObjectStorage({ secret, nodeEnv: nodeEnv() });
+    }),
     malwareScanner: once(() => new PassthroughMalwareScanner({ nodeEnv: nodeEnv() })),
     images: once(() => new SharpImageProcessor()),
     imageAnalysis: once(() => createImageAnalysisProvider(env)),

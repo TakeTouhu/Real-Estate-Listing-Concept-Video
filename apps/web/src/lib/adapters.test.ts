@@ -1,9 +1,12 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { createServer, type IncomingHttpHeaders } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { outgoingEmail } from "@app/domain";
-import { serverEnvSchema } from "@app/shared";
+import { AppError, serverEnvSchema } from "@app/shared";
 import { NonProductionAdapterError, readDevelopmentEmailOutbox } from "@app/storage";
 import { chooseWebAdapters } from "./adapter-choice";
 import { createWebAdapters } from "./adapters";
@@ -61,6 +64,111 @@ describe("the web app's adapter choice", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("the web app's Cloud Storage (ADR-0159)", () => {
+  const bucket = { GOOGLE_CLOUD_STORAGE_BUCKET: "vtavision-objects" };
+  const emulator = { ...bucket, GOOGLE_CLOUD_STORAGE_ENDPOINT: "http://127.0.0.1:1" };
+  const configurationError = (build: () => unknown): string | null => {
+    try {
+      build();
+    } catch (error) {
+      return error instanceof AppError ? `${error.code}: ${error.message}` : String(error);
+    }
+    return null;
+  };
+
+  it("takes Google's store for a bucket alone, and an emulator for a bucket with an endpoint", () => {
+    const google = serverEnvSchema.parse({ ...base, NODE_ENV: "production", ...bucket });
+    expect(chooseWebAdapters(google).storage).toBe("gcs");
+    expect(chooseWebAdapters(serverEnvSchema.parse({ ...base, ...emulator })).storage).toBe("gcs-emulator");
+    // The schema refuses a bucket beside the folder; made without it, the choice names what is built.
+    const both = { ...serverEnvSchema.parse({ ...base, ...emulator }), SHARED_STORAGE_DIR: dir };
+    expect(chooseWebAdapters(both).storage).toBe("gcs-emulator");
+  });
+
+  it("builds an emulator outside production, once, asking nothing as it is built", () => {
+    const adapters = createWebAdapters(serverEnvSchema.parse({ ...base, ...emulator }));
+    expect(adapters.storage()).toBe(adapters.storage());
+  });
+
+  it("refuses an emulator where either NODE_ENV says production, as every development adapter does", () => {
+    const env = serverEnvSchema.parse({ ...base, ...emulator });
+    // The schema refuses an endpoint in production; an environment made without it is refused when built.
+    expect(() => createWebAdapters({ ...env, NODE_ENV: "production" }).storage()).toThrow(NonProductionAdapterError);
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      expect(() => createWebAdapters(env).storage()).toThrow(NonProductionAdapterError);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("refuses an emulator at Google's own origin, which the schema refuses too", () => {
+    const env = serverEnvSchema.parse({ ...base, ...emulator });
+    const google = { ...env, GOOGLE_CLOUD_STORAGE_ENDPOINT: "https://STORAGE.googleapis.com:443/" };
+    expect(configurationError(() => createWebAdapters(google).storage())).toBe(
+      "CONFIGURATION_ERROR: A Cloud Storage emulator cannot be Google's own store",
+    );
+    // An address that does not parse is the adapter's to refuse, by a code: Node's own error would carry it.
+    const unparsed = { ...env, GOOGLE_CLOUD_STORAGE_ENDPOINT: "http://" };
+    expect(configurationError(() => createWebAdapters(unparsed).storage())).toBe(
+      "CONFIGURATION_ERROR: The storage endpoint must be an http or https origin",
+    );
+  });
+
+  it("builds Google's store only where both NODE_ENV values say production, so development never asks it", () => {
+    const env = serverEnvSchema.parse({ ...base, NODE_ENV: "production", ...bucket });
+    const refused = "CONFIGURATION_ERROR: Google's own Cloud Storage is used only by a production build";
+    // This process is not a production build: configured production alone does not vouch for it.
+    expect(configurationError(() => createWebAdapters(env).storage())).toBe(refused);
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      expect(configurationError(() => createWebAdapters({ ...env, NODE_ENV: "development" }).storage())).toBe(refused);
+      const adapters = createWebAdapters(env);
+      expect(configurationError(() => adapters.storage())).toBeNull();
+      expect(adapters.storage()).toBe(adapters.storage());
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("asks the emulator the endpoint names, with no token", async () => {
+    const seen: { url: string; headers: IncomingHttpHeaders }[] = [];
+    const server = createServer((request, response) => {
+      seen.push({ url: request.url ?? "", headers: request.headers });
+      response.writeHead(200, { "content-type": "application/json" }).end("{}");
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    try {
+      const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const env = { ...bucket, GOOGLE_CLOUD_STORAGE_ENDPOINT: endpoint };
+      const adapters = createWebAdapters(serverEnvSchema.parse({ ...base, ...env }));
+      expect(await adapters.storage().exists(KEY)).toBe(false);
+      expect(seen.map(({ url }) => url.split("?")[0])).toEqual(["/storage/v1/b/vtavision-objects/o"]);
+      expect(seen[0]?.headers.authorization).toBeUndefined();
+    } finally {
+      await new Promise((done) => server.close(done));
+    }
+  });
+
+  it("is reached only through getWebAdapters(), so the process keeps one token", () => {
+    const src = join(__dirname, "..");
+    const files = (dir: string): string[] =>
+      readdirSync(dir).flatMap((name) => {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) return files(path);
+        return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+      });
+    const naming = (pattern: RegExp) =>
+      files(src).filter((file) => pattern.test(readFileSync(file, "utf8"))).map((file) => file.slice(src.length + 1));
+    expect(naming(/\.storage\(\)/).sort()).toEqual(["lib/property.ts", "lib/readiness.ts"]);
+    for (const file of naming(/\.storage\(\)/)) {
+      expect(readFileSync(join(src, file), "utf8")).toMatch(/getWebAdapters\(\)/);
+    }
+    // The mailer makes its own for each email, and never asks it for storage.
+    expect(naming(/createWebAdapters\(/).sort()).toEqual(["lib/adapters.ts", "lib/mailer.ts"]);
   });
 });
 

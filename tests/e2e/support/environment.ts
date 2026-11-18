@@ -68,11 +68,17 @@ export function e2eDatabaseUrl(source: NodeJS.ProcessEnv = process.env): string 
  * The environment of the web app and of every command the test runs: one
  * database, one shared folder and one signing secret, so a photo the web app
  * stored is the one a command reads, and one outbox. Refused under
- * `NODE_ENV=production`.
+ * `NODE_ENV=production`, and beside a Cloud Storage setting.
  */
 export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   if (source.NODE_ENV === "production") {
     throw new Error("The browser test never runs with NODE_ENV=production");
+  }
+  // It keeps objects in its own folder, which the schema refuses beside a bucket (ADR-0159).
+  if (source.GOOGLE_CLOUD_STORAGE_BUCKET !== undefined || source.GOOGLE_CLOUD_STORAGE_ENDPOINT !== undefined) {
+    throw new Error(
+      "The browser test keeps objects in its own folder: unset GOOGLE_CLOUD_STORAGE_BUCKET and _ENDPOINT",
+    );
   }
   return {
     DATABASE_URL: e2eDatabaseUrl(source),

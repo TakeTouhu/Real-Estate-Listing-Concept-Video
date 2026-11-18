@@ -28,10 +28,38 @@ const booleanish = z
 export const WAVESPEED_OPEN_VIDEO_MODEL_ID = "wavespeed-ai/open-video/image-to-video";
 
 /**
- * Why an application base address cannot start an emailed link, or null when
- * it can (ADR-0129): it must be an http(s) origin, with no user, path, query or
- * fragment, so a link built on it cannot lead anywhere else; https in
- * production.
+ * Google's own Cloud Storage: the one origin its adapter sends the process's
+ * token to (ADR-0158 Decision 2), and the one store a production start uses,
+ * named by no setting (ADR-0159). It lives here, as the model id above does:
+ * the environment's rules, the web app's choice and the adapter all need it,
+ * and `@app/storage` depends on `@app/shared`, not the reverse.
+ */
+export const GOOGLE_CLOUD_STORAGE_ORIGIN = "https://storage.googleapis.com";
+
+/**
+ * Lowercase letters, digits, `-`, `_` and `.`, 3 to 63 of them, beginning and
+ * ending with a letter or a digit. Every name Cloud Storage allows of at most
+ * 63 characters, and some it refuses (an address such as `192.168.5.4`, a name
+ * beginning `goog`), which no bucket can have; none can reach another path.
+ */
+const CLOUD_STORAGE_BUCKET_NAME = /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/;
+
+/** Whether `name` can be a bucket's: the one rule the environment and the adapter share (ADR-0159). */
+export function isCloudStorageBucketName(name: string): boolean {
+  return CLOUD_STORAGE_BUCKET_NAME.test(name);
+}
+
+/** Whether an address is at Google's API domain, `googleapis.com` or a name below it, with a final dot or not. */
+function isGoogleApiAddress(value: string): boolean {
+  const host = new URL(value).hostname.replace(/\.$/, "");
+  return host === "googleapis.com" || host.endsWith(".googleapis.com");
+}
+
+/**
+ * Why an address is not an http(s) origin, or null when it is: no user, path,
+ * query or fragment, so nothing built on it can lead anywhere else; https in
+ * production. An application base address must be one to start an emailed
+ * link (ADR-0129), and an emulator's endpoint to be asked (ADR-0159).
  */
 function baseUrlProblem(value: string, production: boolean): string | null {
   let url: URL;
@@ -80,6 +108,22 @@ export const serverEnvSchema = z
     // keeps objects in its own memory. Refused in production.
     SHARED_STORAGE_DIR: z.string().min(1).optional(),
 
+    // The Cloud Storage bucket the web app keeps objects in (ADR-0159): 3 to
+    // 63 lowercase letters, digits, '.', '-' or '_', beginning and ending with
+    // a letter or a digit (`isCloudStorageBucketName`, the adapter's rule too).
+    // Set, it is used instead of the shared folder or memory: in production,
+    // Google's own store, at an origin no setting names, with the token of the
+    // account the process runs as (ADR-0158); elsewhere, the emulator the
+    // endpoint names. Never beside the shared folder, which the worker reads.
+    GOOGLE_CLOUD_STORAGE_BUCKET: z.string().optional(),
+
+    // A Cloud Storage emulator's origin, in development and CI only
+    // (ADR-0159): http(s), with no path, query or fragment, and not at
+    // Google's API domain. Outside production a bucket requires it, so
+    // development never uses Google's own store or its token. Refused in
+    // production, and refused without a bucket.
+    GOOGLE_CLOUD_STORAGE_ENDPOINT: z.string().url().optional(),
+
     // The folder the product's emails are written to instead of being sent,
     // in development and CI only (ADR-0126). Absolute, for the same reason as
     // the shared folder. Unset, the web app sends no email (ADR-0129).
@@ -119,6 +163,13 @@ export const serverEnvSchema = z
     WAVESPEED_POLL_MAX_MS: z.coerce.number().int().positive().default(15000),
     WAVESPEED_POLL_TIMEOUT_MS: z.coerce.number().int().positive().default(600000),
 
+    // Node.js's own debug output, read only to be refused in production
+    // (ADR-0159). Naming `https`, or matching it as `*` or `h*` do, it writes
+    // each new connection's request, its token included, to the error output
+    // (ADR-0158 Decision 6). Node.js reads it once, as the process starts, so
+    // nothing can turn it off later: a start is refused instead.
+    NODE_DEBUG: z.string().optional(),
+
     LOG_LEVEL: z
       .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
       .default("info"),
@@ -157,6 +208,65 @@ export const serverEnvSchema = z
           message: "EMAIL_OUTBOX_DIR is for development and CI only; it must not be set in production",
         });
       }
+    }
+
+    const bucket = env.GOOGLE_CLOUD_STORAGE_BUCKET;
+    const endpoint = env.GOOGLE_CLOUD_STORAGE_ENDPOINT;
+    const production = env.NODE_ENV === "production";
+    const storageIssue = (name: "BUCKET" | "ENDPOINT", message: string): void =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [`GOOGLE_CLOUD_STORAGE_${name}`], message });
+    if (bucket !== undefined) {
+      if (!isCloudStorageBucketName(bucket)) {
+        storageIssue(
+          "BUCKET",
+          "GOOGLE_CLOUD_STORAGE_BUCKET must be 3 to 63 lowercase letters, digits, '.', '-' or '_', " +
+            "beginning and ending with a letter or a digit",
+        );
+      }
+      if (env.SHARED_STORAGE_DIR !== undefined) {
+        storageIssue(
+          "BUCKET",
+          "GOOGLE_CLOUD_STORAGE_BUCKET and SHARED_STORAGE_DIR must not both be set: " +
+            "the web app would keep objects in the bucket, and the worker look for them in the folder",
+        );
+      }
+      if (endpoint === undefined && !production) {
+        storageIssue(
+          "ENDPOINT",
+          "GOOGLE_CLOUD_STORAGE_ENDPOINT must name an emulator when GOOGLE_CLOUD_STORAGE_BUCKET is set " +
+            "outside production: only production uses Google's own store",
+        );
+      }
+    }
+    if (endpoint !== undefined) {
+      const problem = baseUrlProblem(endpoint, false);
+      if (problem !== null) storageIssue("ENDPOINT", `GOOGLE_CLOUD_STORAGE_ENDPOINT ${problem}`);
+      if (production) {
+        storageIssue(
+          "ENDPOINT",
+          "GOOGLE_CLOUD_STORAGE_ENDPOINT is for development and CI only; it must not be set in production",
+        );
+      } else if (problem === null && isGoogleApiAddress(endpoint)) {
+        storageIssue(
+          "ENDPOINT",
+          "GOOGLE_CLOUD_STORAGE_ENDPOINT must name an emulator, not Google's own API domain: " +
+            "only production uses Google's own store",
+        );
+      }
+      if (bucket === undefined) {
+        storageIssue("BUCKET", "GOOGLE_CLOUD_STORAGE_BUCKET is required when GOOGLE_CLOUD_STORAGE_ENDPOINT is set");
+      }
+    }
+
+    // Any value: which names write what is Node.js's to change. An empty value names nothing.
+    if (production && (env.NODE_DEBUG ?? "") !== "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["NODE_DEBUG"],
+        message:
+          "NODE_DEBUG must not be set in production: " +
+          "Node.js would write requests, their tokens included, to the error output",
+      });
     }
 
     if (env.APP_BASE_URL !== undefined) {
