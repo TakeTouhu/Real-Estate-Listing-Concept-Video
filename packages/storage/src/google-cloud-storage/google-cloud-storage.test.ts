@@ -976,13 +976,15 @@ describe("the token (ADR-0158)", () => {
       code: "ECONNREFUSED",
     });
     expect(used.map((spy) => spy.mock.calls.length > 0)).toEqual([false, false, true, true]);
-    // Node.js 22's own options for its global agents, less a proxy (ADR-0158 Decision 6).
-    const optionsOf = (agent: object): Record<string, unknown> => {
-      const { proxyEnv: _proxyEnv, ...options } = (agent as { readonly options: Record<string, unknown> }).options;
+    // Node.js 22's own options for its global agents, less the proxy they may be given (ADR-0158 Decision 6).
+    const optionsOf = (agent: object): Record<string, unknown> =>
+      (agent as { readonly options: Record<string, unknown> }).options;
+    const lessProxy = (agent: object): Record<string, unknown> => {
+      const { proxyEnv: _proxyEnv, ...options } = optionsOf(agent);
       return options;
     };
-    expect(optionsOf(googleCloudStorageAgents.http)).toEqual(optionsOf(globalAgent));
-    expect(optionsOf(googleCloudStorageAgents.https)).toEqual(optionsOf(globalTlsAgent));
+    expect(optionsOf(googleCloudStorageAgents.http)).toEqual(lessProxy(globalAgent));
+    expect(optionsOf(googleCloudStorageAgents.https)).toEqual(lessProxy(globalTlsAgent));
   });
 });
 
@@ -1195,8 +1197,8 @@ describe("where it is constructed", () => {
       "packages/storage/src/google-cloud-storage/client.ts",
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
     ]);
-    const environment =
-      /\bprocess\s*[.[]|["'`](?:node:)?process["'`]|GCE_METADATA|GOOGLE_APPLICATION_CREDENTIALS|STORAGE_EMULATOR_HOST/;
+    const reads = /\bprocess\s*(?:\?\.|[.[;,)}])|[=(,{:]\s*process\b|["'`](?:node:)?process["'`]/.source;
+    const environment = new RegExp(`${reads}|GCE_METADATA|GOOGLE_APPLICATION_CREDENTIALS|STORAGE_EMULATOR_HOST`);
     expect(naming(environment)).not.toContainEqual(expect.stringContaining("google-cloud-storage/"));
     // Any quoted path beginning with gaxios, or naming the folder or anything below it, so an alias is caught too.
     const loading = /["'`]gaxios(?:\/[^"'`]*)?["'`]|google-cloud-storage(?:\/[\w.-]*)*["'`]/;

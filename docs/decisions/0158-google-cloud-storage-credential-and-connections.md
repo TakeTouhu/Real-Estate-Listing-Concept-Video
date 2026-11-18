@@ -139,11 +139,13 @@ true`, `scheduling: "lifo"`, `timeout: 5000`.
   its global agents. So no variable can send the token, or the customers'
   objects, elsewhere. The proxy agent and `debug` are never loaded for these
   requests, so ADR-0156's `DEBUG` that writes a proxy's password does not
-  reach them. Node.js's own `NODE_DEBUG` still does: naming `https`, or
-  `net` for an `http` origin, it writes each new connection's request, its
+  reach them. Node.js's own `NODE_DEBUG` still does: naming `https`, it
+  writes each new connection's request to Google's store, its
   `Authorization` header and the object's path included, to the process's
-  error output (measured in review). Production must not set it; recorded
-  as open, for RD-3d's start check.
+  error output (measured in review). Naming `net`, it writes an `http`
+  origin's request, which carries no token: the metadata server's path, or
+  an emulator's object paths. Production must not set it; recorded as
+  open, for RD-3d's start check.
 - **The idle limit.** `timeout: 5000` lets a pooled connection go once it
   has been idle for five seconds; it ends no request. It is the agent's own
   setting, a limit that ends one connection, which the product owner's
