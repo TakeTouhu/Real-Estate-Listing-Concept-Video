@@ -232,6 +232,16 @@ ignores that precondition too.
     when another upload finished first while it was sent;
   - stores nothing when aborted, and a later upload then publishes;
   - is retryable where the bucket is missing.
+- **Mutation**: 49 mutants of the new code, each run against the unit
+  tests; 40 failed a test at first. Tests were added for the five gaps the
+  survivors showed: a session whose address holds a password alone; an
+  upload whose request failed in transit, which would have sent its part
+  again; a completion of an upload that took no part, or naming a part by
+  another number; and a last chunk answered `201`. Each of those mutants
+  now fails a named test. The four that survive are equivalent: a part, or
+  the MD5, still kept for an upload already lost, a start refused with
+  `412` marked open with no session, and the session's address sent as
+  given rather than as parsed.
 
 ## What cannot be shown here
 
