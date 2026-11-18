@@ -2,9 +2,9 @@ import { randomBytes } from "node:crypto";
 
 /**
  * The Cloud Storage emulator the `test:gcs` suites speak to (ADR-0156): its
- * origin, from `GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT`. A run without it fails
- * rather than skipping, and only this machine is accepted, so no suite can
- * reach a real store.
+ * origin, from `GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT`. A run without it fails,
+ * and only this machine is accepted; with the proxy variables the suite clears,
+ * no suite can reach a real store.
  */
 export function emulatorEndpoint(): string {
   const raw = process.env.GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT;

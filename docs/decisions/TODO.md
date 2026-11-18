@@ -467,6 +467,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       `SceneGeneration` — `assetId` is deliberately un-foreign-keyed — so the
       worker must check generation state explicitly; the database will not stop
       it. **Required before any physical deletion ships.**
+      *Amended in RD-3a: `deleteObject` has one production caller now,
+      `AssetService.discardUnreferencedDerivatives`, which deletes only
+      derivatives no row references, never a source object, so the point
+      stands. On Cloud Storage, deleting a key that is not there succeeds
+      once a list proves the bucket (ADR-0156 Decision 2).*
 - [ ] **Unreferenced derivatives still need storage-side reconciliation.**
       **Partly closed in Phase 4C-3A-1** (ADR-0028 §8): when the final
       `PROCESSING -> READY` write loses **and the authoritative re-read shows
@@ -1542,12 +1547,14 @@ blocks activation. The production email service is tracked below, under
       adapters ask over no network. RD-3 adds the first production adapter:
       it is to decide how its `exists` is ended, within the rule on timers,
       and to measure it against a stand-in that says nothing.
-      *Decided in RD-3a (ADR-0156 Decision 3): `exists` is one list in the
-      bucket, given gaxios's own `timeout` of 3 seconds, a setting of the
-      client's, with no deadline in the repository's code. Against a
-      stand-in that says nothing it ends after 3.0 seconds, asked once, as
-      `STORAGE_TIMEOUT`. The limit holds for every caller of `exists`;
-      readiness asks it once RD-3c wires the adapter in.*
+      *Decided in RD-3a for the request the adapter sends (ADR-0156
+      Decision 3): `exists` is one list in the bucket, given gaxios's own
+      `timeout` of 3 seconds, a setting of the client's, with no deadline in
+      the repository's code. Against a stand-in that says nothing it ends
+      after 3.0 seconds, asked once, as `STORAGE_TIMEOUT`, for every caller
+      of `exists`; readiness asks it once RD-3c wires the adapter in. The
+      credential RD-3c adds is fetched by a request of its own, whose limit
+      is open below (Open in RD-3a).*
 - [ ] **Decide whether the web app's own database client is limited.** It
       keeps Prisma's defaults: 5 seconds to open a connection, 10 to wait
       for one from its pool, and no limit on a query it has sent (ADR-0152
@@ -1778,7 +1785,11 @@ into on 2026-11-17.
       `404` for a missing object itself needs it, and how a `403` reads.
       The bucket is to keep uniform bucket-level access and public access
       prevention, and the account no `storage.buckets.*`, `setIamPolicy` or
-      `iam.serviceAccounts.signBlob`. To be checked against a real bucket
+      `iam.serviceAccounts.signBlob`. The bucket's soft-delete retention and
+      object versioning are to be decided too: with either on, an object
+      `deleteObject` removed is still kept, and billed, until it lapses,
+      which bears on physical deletion after the recovery window
+      (`docs/SecurityCompliance.md`). To be checked against a real bucket
       under the product owner's approval of that deployment.
 - [ ] **Decide how long a put, a delete and a whole object's read may
       take.** The adapter gives them no limit (ADR-0156 Decision 3): a put
@@ -1793,11 +1804,23 @@ into on 2026-11-17.
       loads the adapter yet; RD-3c, which wires it in, is to prove that
       `next build` and a production start send its requests, or to keep
       gaxios out of the server bundle (`serverExternalPackages`).
+- [ ] **Limit the request that fetches the store's credential.** The
+      3-second limit is the list's (ADR-0156 Decision 3). RD-3c fetches a
+      credential from the metadata server before the store is asked: that
+      request is to carry a limit of gaxios's own too, or a credential that
+      never comes holds `exists`, and readiness, unended. `exists` then
+      waits at most both limits.
 - [ ] **Keep proxy variables out of the web app's environment unless one
-      is meant.** gaxios sends the store's requests through `HTTPS_PROXY` or
-      `HTTP_PROXY` when either is set, unless `NO_PROXY` names the host
-      (ADR-0156 Decision 1). RD-10, which builds the container image, is to
-      set neither.
+      is meant.** gaxios sends the store's requests through `HTTPS_PROXY`,
+      `HTTP_PROXY` or their lowercase spellings when one is set, an `https`
+      proxy even to an `http` origin, unless `NO_PROXY` names the host or a
+      domain it ends in; a range, `*` or a host with its port there is
+      ignored. A proxy's refusal reads as the store's own status, and a
+      `DEBUG` naming the proxy agent logs the proxy's password (ADR-0156
+      Decision 1). RD-3c, whose credential request would go the same way,
+      is to keep its requests from an ambient proxy or refuse one at start;
+      RD-10's image is to set none of them, and the deployment (part 2)
+      none unless a proxy is meant.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

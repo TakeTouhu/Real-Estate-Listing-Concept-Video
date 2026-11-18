@@ -18,7 +18,7 @@ A subpath of its own, so nothing that loads `@app/storage` loads gaxios.
 | Export | Shape |
 | --- | --- |
 | `createGoogleCloudStorage(options)` | the port's operations but the streamed read, over one bucket: `createSignedUploadUrl`, `createSignedDownloadUrl`, `putObject`, `getObject`, `deleteObject`, `exists`; throws `CONFIGURATION_ERROR`, naming nothing given, for a bucket or an endpoint it cannot use |
-| `GoogleCloudStorageOptions` | `bucket` (Cloud Storage's naming rules, 3 to 63 characters), `endpoint` (an `http` or `https` origin), `secret` (signs the application's own links), `basePath` (default `/api/storage`), `now` |
+| `GoogleCloudStorageOptions` | `bucket` (3 to 63 lowercase letters, digits, `-`, `_` and `.`), `endpoint` (an `http` or `https` origin), `secret` (signs the application's own links), `basePath` (default `/api/storage`), `now` |
 | `GoogleCloudStorageObjects` | `ObjectStorage` without `readObject` |
 | `GoogleCloudStorageError` | a refusal whose `code` and message are one code: `STORAGE_TIMEOUT`, `STORAGE_FORBIDDEN`, `STORAGE_RATE_LIMITED`, `STORAGE_UNAVAILABLE`, `STORAGE_BUCKET_MISSING`, `STORAGE_REFUSED`, `STORAGE_UNEXPECTED_ANSWER`, the transport's one-word code, or `STORAGE_UNREACHABLE` |
 | `GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS` | `3000`: gaxios's own limit on a list (`exists`, and the list after a `404`) |

@@ -24,7 +24,7 @@ speaks to it.
 The plan's RD-3 adds the adapter for the web app's port and tests it against
 an emulator in CI, with no Google account, credential or deploy. Before it
 was written, five investigations, each alone, measured the port's callers,
-two clients, how each fails and is ended, the CI and configuration, and then
+three clients, how each fails and is ended, the CI and configuration, and then
 attacked the design the first four put together. Their reports are in
 `/mnt/project-files/cto/rd-3/`. What decides this record:
 
@@ -35,8 +35,10 @@ attacked the design the first four put together. Their reports are in
 - Cancelling one of that library's read streams destroys the keep-alive
   agent every request in the process shares: the other requests failed with
   `ECONNRESET`, in each of three ways of cancelling, two runs of two. A read
-  cancelled before its headers kept its connection 2.95 seconds, until the
-  store answered, where gaxios with an `AbortController` let go after 0.48.
+  cancelled before its headers, from a store that never answered, kept its
+  connection until the process ended: 2.95 seconds in a harness that ends at
+  3, still open after 10 in another. gaxios with an `AbortController` let go
+  after 0.48.
 - gaxios 7.3.1, Google's HTTP client for Node.js, ends a request it gave
   `timeout: 3000` within 3.04 seconds, in every silent or stalled case
   measured.
@@ -53,8 +55,9 @@ The adapter speaks the Cloud Storage JSON API through gaxios 7.3.1, pinned
 exactly as a dependency of `@app/storage`. It does not use
 `@google-cloud/storage` or `google-auth-library`.
 
-- **Why not the library.** Its cancel resets other requests, which ADR-0115's
-  rule that a cancelled read holds nothing open cannot live with; its own
+- **Why not the library.** A read it cancels before the headers keeps its
+  connection, which ADR-0115's rule that a cancelled read holds nothing open
+  cannot live with; by default its cancel resets other requests; its own
   limit does not end a question; it reads credential variables the process
   is given (`GOOGLE_APPLICATION_CREDENTIALS` among them) without the
   application's say; it brings packages under two weeks old; and it prints
@@ -69,11 +72,18 @@ exactly as a dependency of `@app/storage`. It does not use
 
 gaxios adds ten packages, all published more than two weeks before this
 record; the oldest dates from 2018. One, `node-domexception`, is marked
-deprecated by its author; `node-fetch` 3 uses it. gaxios reads the proxy
-variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, and their lowercase
-spellings) and no other; the `debug` package under its proxy agent, loaded
-only when a proxy is used, reads `DEBUG`. A deployment that sets a proxy
-variable sends the store's requests through it.
+deprecated by its author; `fetch-blob`, under `node-fetch` 3, uses it.
+gaxios reads the proxy variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`,
+and their lowercase spellings) and no other; the `debug` package under its
+proxy agent, loaded only when a proxy is used, reads `DEBUG` and every
+`DEBUG_*` variable. A process that sets a proxy variable sends the store's
+requests through it, `HTTPS_PROXY` even to an `http` origin, unless
+`NO_PROXY` names the host or a domain it ends in: gaxios ignores a range,
+`*` and a host with its port there. A proxy's refusal then reads as the
+store's own status, and a `DEBUG` that names the proxy agent writes the
+proxy's address, password and all, to the log. Measured against a stand-in
+proxy. The suites clear the proxy variables; keeping them from production
+is open (`docs/decisions/TODO.md`).
 
 Every request is sent once (`retry: false`), every status is read by the
 adapter (`validateStatus` accepts all), and a redirect is a refusal, never
@@ -91,7 +101,8 @@ a list answers `404` for its bucket alone.
   `404` do they list, and a list that answers makes the object absent: an
   empty read, or nothing to delete.
 - An upload names no object, so its `404` is the bucket's.
-- A missing bucket is `STORAGE_BUCKET_MISSING` for every operation.
+- A missing bucket is `STORAGE_BUCKET_MISSING` for every operation that
+  asks the store.
 - A list that cannot be read, or one with nothing on its page and more to
   come, proves no absence: `STORAGE_UNEXPECTED_ANSWER`.
 
@@ -117,8 +128,14 @@ store that says nothing, as `STORAGE_TIMEOUT`, having been asked once.
 That holds for each caller of `exists`: readiness, once RD-3c wires the
 adapter in, and a queued generation's preparation, which asks whether its
 source photo is stored and counts a failure as one to try again, once the
-worker uses the store (RD-4). Three seconds is the limit the readiness
-probe gives the database (ADR-0153).
+worker's production runtime uses the port (part 2). Three seconds is the
+limit the readiness probe gives the database (ADR-0153).
+
+The limit is the list's, one request's. In production RD-3c adds a
+credential, fetched before the list: that request is to carry a limit of
+gaxios's own as well, or a credential that never comes holds `exists`
+unended, and `exists` then waits at most both limits
+(`docs/decisions/TODO.md`).
 
 A put, a delete and a whole object's read are given no limit. A put or a
 delete that is given up leaves the caller not knowing whether it happened,
@@ -165,7 +182,9 @@ a name in Japanese reaches the object it names; measured on the emulator.
 
 A bucket is 3 to 63 lowercase letters, digits, `-`, `_` and `.`, beginning
 and ending with a letter or a digit. Cloud Storage also takes names with
-dots up to 222 characters; this adapter does not.
+dots up to 222 characters; this adapter does not. It takes some names Cloud
+Storage refuses, such as one written as an address or beginning `goog`,
+which no bucket can have; no name it takes reaches another path.
 
 The endpoint is an `http` or `https` origin with nothing after it. Which
 endpoints production may use, and with what credential, is RD-3c's to
@@ -198,9 +217,10 @@ service container, configured by its `FAKE_GCS_*` variables, since a
 service container takes no arguments, and checked by its health route.
 
 The suites read the emulator's origin from
-`GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT`. Without it they fail rather than
-skip, and they refuse an origin that is not on this machine, so none can
-reach a real store. Each test makes a bucket of its own.
+`GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT`. Without it the run fails: Vitest
+marks the file failed and its tests skipped. They refuse an origin that is
+not on this machine and clear the proxy variables, so none can reach a real
+store. Each test makes a bucket of its own.
 
 The emulator proves the adapter's logic only. It has no permissions and
 ignores the fields a request asks for, so the adapter reads nothing that a
@@ -216,21 +236,28 @@ against stand-ins on `127.0.0.1`:
   shared folder's tests hold it, but the streamed read; an empty object and
   one of 5 MiB byte for byte; a key found by its whole name, never by a
   longer one; keys with characters a URL escapes; a missing bucket refused
-  by every operation; keys refused without a request.
-- The stand-in suite, 23 tests: the requests sent, once each and with no
-  credential; each status's code, with nothing of the answer in the error;
-  a redirect not followed; the lists that prove nothing; `ECONNREFUSED`; a
-  silent store ending `exists` after 3.0 seconds, asked once; the list after
-  a `404` likewise; a whole object answered after 3.5 seconds still read;
-  and that no production code constructs the adapter or loads gaxios.
+  by every operation that asks the store; keys refused, nothing stored, the
+  limit counted in bytes.
+- The stand-in suite, 25 tests: the requests sent, once each and with no
+  credential; keys refused with nothing sent, a lone half of a surrogate
+  pair and a key over 1,024 bytes in fewer characters among them; signing
+  sends nothing; each status's code, with nothing of the answer in the
+  error; a redirect not followed; the lists that prove nothing;
+  `ECONNREFUSED`; a store that hangs up, asked once, `ECONNRESET`; a
+  silent store ending `exists` after 3.0 seconds, asked once; the list
+  after a `404` likewise; a whole object answered after 3.5 seconds still
+  read; and that no production code constructs the adapter or imports
+  gaxios or the adapter's folder by any path, `@app/storage`'s own index
+  included.
+- Both suites pass with `HTTPS_PROXY` naming a proxy that is not there.
 
 ## Consequences
 
 - `@app/storage` depends on gaxios 7.3.1; the lockfile gains ten packages.
 - CI gains a fifth job, `storage`, which installs no system package.
-- No production code changes: nothing constructs the adapter, the
-  environment schema, the choice of adapters, the start check and readiness
-  are as they were, and no migration is added.
+- No production behaviour changes: the adapter is new source that nothing
+  constructs, the environment schema, the choice of adapters, the start
+  check and readiness are as they were, and no migration is added.
 - RD-3b adds the streamed read (ADR-0157); RD-3c wires the adapter, with a
   credential from the metadata server, and decides the endpoints production
   may use (ADR-0158).

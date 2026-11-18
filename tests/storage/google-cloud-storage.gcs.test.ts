@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { managedCleanMasterKey } from "@app/domain";
 import { AppError } from "@app/shared";
 import { verifyStorageToken } from "@app/storage";
@@ -31,6 +31,13 @@ let bucket: string;
 
 beforeAll(() => {
   endpoint = emulatorEndpoint();
+  // The adapter's client honours the proxy variables (ADR-0156 Decision 1); the
+  // emulator is on this machine, so none may send the suite's requests elsewhere.
+  for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) vi.stubEnv(name, "");
+});
+
+afterAll(() => {
+  vi.unstubAllEnvs();
 });
 
 beforeEach(async () => {
@@ -101,12 +108,28 @@ describe("the web app's view, in Cloud Storage", () => {
     expect(await emulatorObjectNames(endpoint, bucket)).toEqual([]);
   });
 
-  it("refuses a key that is not canonical, or one Cloud Storage cannot name, and sends nothing", async () => {
+  it("refuses a key that is not canonical, or one Cloud Storage cannot name, and stores nothing", async () => {
     const longest = `org/${"a".repeat(GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES - 4)}`;
     await store.putObject(longest, bytes(1));
     expect(await store.exists(longest)).toBe(true);
     await store.deleteObject(longest);
-    for (const key of ["", "../x", "org//x", "org/./x", "org\\x", "org/a\nb", "org/a\rb", `${longest}a`]) {
+    // The limit counts bytes: `é` is two.
+    const multibyte = `org/${"é".repeat(510)}`;
+    await store.putObject(multibyte, bytes(2));
+    expect(await store.exists(multibyte)).toBe(true);
+    await store.deleteObject(multibyte);
+    for (const key of [
+      "",
+      "../x",
+      "org//x",
+      "org/./x",
+      "org\\x",
+      "org/a\nb",
+      "org/a\rb",
+      `${longest}a`,
+      `${multibyte}é`,
+      "org/\uD800x",
+    ]) {
       await expect(store.putObject(key, bytes(1))).rejects.toBeInstanceOf(AppError);
       await expect(store.getObject(key)).rejects.toBeInstanceOf(AppError);
       await expect(store.deleteObject(key)).rejects.toBeInstanceOf(AppError);

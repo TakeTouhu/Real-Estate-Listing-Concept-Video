@@ -46,8 +46,9 @@ export GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT=http://127.0.0.1:4443
 pnpm test:gcs
 ```
 
-Without the variable the run fails rather than skipping, and an origin that
-is not on this machine is refused, so no suite reaches a real store. The
+Without the variable the run fails: Vitest marks the file failed and its
+tests skipped. An origin that is not on this machine is refused, and the
+suite clears the proxy variables, so no suite reaches a real store. The
 emulator has no permissions, so what Google answers a caller that may not
 read or list is not seen here. CI runs them in the `storage` job beside the
 emulator's service container.

@@ -47,8 +47,9 @@ export const GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES = 1024;
 
 /**
  * Lowercase letters, digits, `-`, `_` and `.`, 3 to 63 of them, beginning and
- * ending with a letter or a digit: Cloud Storage's bucket names without dots
- * beyond 63 characters.
+ * ending with a letter or a digit. Every name Cloud Storage allows of at most
+ * 63 characters, and some it refuses (an address such as `192.168.5.4`, a name
+ * beginning `goog`), which no bucket can have; none can reach another path.
  */
 const BUCKET_NAME = /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/;
 
@@ -201,6 +202,8 @@ export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): Go
     if (
       !isCanonicalStorageKey(key) ||
       /[\r\n]/.test(key) ||
+      // Half of a surrogate pair is no Unicode, which Cloud Storage names in.
+      /\p{Cs}/u.test(key) ||
       Buffer.byteLength(key, "utf8") > GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES
     ) {
       throw new AppError("INTERNAL_ERROR", "A stored object's key must be canonical, and one Cloud Storage can name");

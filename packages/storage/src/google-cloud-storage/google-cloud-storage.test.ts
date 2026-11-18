@@ -2,9 +2,10 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppError } from "@app/shared";
 import {
+  GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES,
   GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS,
   GoogleCloudStorageError,
   createGoogleCloudStorage,
@@ -29,8 +30,8 @@ interface Seen {
   readonly body: Buffer;
 }
 
-/** What a stand-in does with a request: answer it, after a wait or at once, or say nothing. */
-type Answer = { readonly status: number; readonly body?: string; readonly afterMs?: number } | "SILENT";
+/** What a stand-in does with a request: answer it, after a wait or at once, say nothing, or hang up. */
+type Answer = { readonly status: number; readonly body?: string; readonly afterMs?: number } | "SILENT" | "HANG_UP";
 
 interface StandIn {
   readonly origin: string;
@@ -54,6 +55,10 @@ async function standIn(answer: (request: Seen) => Answer): Promise<StandIn> {
       seen.push(asked);
       const answered = answer(asked);
       if (answered === "SILENT") return;
+      if (answered === "HANG_UP") {
+        request.socket.destroy();
+        return;
+      }
       const send = () => {
         const headers: Record<string, string> = { "content-type": "application/json" };
         if (answered.status >= 300 && answered.status < 400) headers.location = "http://127.0.0.1:9/elsewhere";
@@ -68,7 +73,14 @@ async function standIn(answer: (request: Seen) => Answer): Promise<StandIn> {
   return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen };
 }
 
+// The adapter's client honours the proxy variables (ADR-0156 Decision 1); the
+// stand-ins are on this machine, so none may send them elsewhere.
+beforeEach(() => {
+  for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) vi.stubEnv(name, "");
+});
+
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
     server.close();
@@ -90,7 +102,7 @@ const LISTED = (name: string) => JSON.stringify({ kind: "storage#objects", items
 const LISTED_NONE = JSON.stringify({ kind: "storage#objects" });
 
 describe("constructing it", () => {
-  it("takes a bucket named by Cloud Storage's rules, and nothing else", () => {
+  it("takes every bucket name Cloud Storage allows up to 63 characters, and none that reaches another path", () => {
     for (const bucket of ["abc", "a-b_c.d", "0bucket9", "a".repeat(63)]) {
       expect(() => createGoogleCloudStorage({ bucket, endpoint: "http://127.0.0.1:1", secret: SECRET })).not.toThrow();
     }
@@ -112,7 +124,11 @@ describe("constructing it", () => {
   });
 
   it("takes an http or https origin, and names nothing it was given when it refuses one", () => {
-    for (const endpoint of ["http://127.0.0.1:4443", "https://storage.googleapis.com", "https://storage.googleapis.com/"]) {
+    for (const endpoint of [
+      "http://127.0.0.1:4443",
+      "https://storage.googleapis.com",
+      "https://storage.googleapis.com/",
+    ]) {
       expect(() => createGoogleCloudStorage({ bucket: BUCKET, endpoint, secret: SECRET })).not.toThrow();
     }
     for (const endpoint of [
@@ -185,6 +201,48 @@ describe("what it asks", () => {
   it("finds only the name itself, never a longer name the list puts first", async () => {
     const store = await standIn(() => ({ status: 200, body: LISTED(`${ASSET}.bak`) }));
     expect(await storeAt(store.origin).exists(ASSET)).toBe(false);
+  });
+
+  it("sends nothing for a key that is not canonical, or one Cloud Storage cannot name, and names no key", async () => {
+    const store = await standIn(() => ({ status: 200, body: LISTED_NONE }));
+    const storage = storeAt(store.origin);
+    const longest = `org/${"a".repeat(GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES - 4)}`;
+    // 1,026 bytes in 515 characters: the limit counts bytes.
+    const multibyte = `org/${"é".repeat(511)}`;
+    for (const key of [
+      "",
+      "../x",
+      "org//x",
+      "org/./x",
+      "org\\x",
+      "org/a\nb",
+      "org/a\rb",
+      `${longest}a`,
+      multibyte,
+      "org/\uD800x",
+    ]) {
+      for (const call of [
+        () => storage.putObject(key, new Uint8Array([1])),
+        () => storage.getObject(key),
+        () => storage.deleteObject(key),
+        () => storage.exists(key),
+      ]) {
+        const error = await failureOf(call);
+        expect(error).toBeInstanceOf(AppError);
+        expect(error).toMatchObject({
+          code: "INTERNAL_ERROR",
+          message: "A stored object's key must be canonical, and one Cloud Storage can name",
+        });
+      }
+    }
+    expect(store.seen).toEqual([]);
+    // Signing asks the store nothing; the longest names, by bytes, are asked.
+    await storage.createSignedUploadUrl(ASSET, 60);
+    await storage.createSignedDownloadUrl(ASSET, 60);
+    expect(store.seen).toEqual([]);
+    expect(await storage.exists(longest)).toBe(false);
+    expect(await storage.exists(`org/${"é".repeat(510)}`)).toBe(false);
+    expect(store.seen).toHaveLength(2);
   });
 });
 
@@ -267,6 +325,21 @@ describe("what it makes of a refusal", () => {
       message: "ECONNREFUSED",
     });
   });
+
+  it("asks once when the store hangs up, and never again", async () => {
+    const store = await standIn(() => "HANG_UP");
+    const storage = storeAt(store.origin);
+    const calls: ReadonlyArray<() => Promise<unknown>> = [
+      () => storage.putObject(ASSET, new Uint8Array([1])),
+      () => storage.getObject(ASSET),
+      () => storage.deleteObject(ASSET),
+      () => storage.exists(ASSET),
+    ];
+    for (const call of calls) {
+      expect(await failureOf(call)).toMatchObject({ code: "ECONNRESET", message: "ECONNRESET" });
+    }
+    expect(store.seen).toHaveLength(calls.length);
+  });
 });
 
 describe("how long it waits", () => {
@@ -281,9 +354,14 @@ describe("how long it waits", () => {
     expect(store.seen).toHaveLength(1);
   });
 
-  it("gives the list after a read that found nothing the same limit", async () => {
+  it("gives the list after a read that found nothing the same limit, and asks it once", async () => {
     const store = await standIn((request) => (request.url.includes("/o?prefix=") ? "SILENT" : { status: 404 }));
+    const started = performance.now();
     expect(await failureOf(() => storeAt(store.origin).getObject(ASSET))).toMatchObject({ code: "STORAGE_TIMEOUT" });
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS - 50);
+    expect(elapsed).toBeLessThan(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 1_500);
+    expect(store.seen).toHaveLength(2);
   });
 
   it("gives a whole object's read no limit", async () => {
@@ -303,7 +381,7 @@ describe("where it is constructed", () => {
         const path = join(dir, name);
         if (name === "node_modules" || name === ".next" || name === "dist") return [];
         if (statSync(path).isDirectory()) return sources(path);
-        return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+        return /\.[cm]?[jt]sx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
       });
     const production = ["packages", "apps"].flatMap((root) => sources(join(repo, root)));
     const naming = (pattern: RegExp): string[] =>
@@ -311,9 +389,13 @@ describe("where it is constructed", () => {
     expect(naming(/createGoogleCloudStorage\(/)).toEqual([
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
     ]);
-    expect(naming(/["']gaxios["']|@app\/storage\/google-cloud-storage|google-cloud-storage["']/).sort()).toEqual([
+    // Any import of gaxios or of the folder, by any path below it, so an alias is caught too.
+    const loading = /["']gaxios(?:\/[^"']*)?["']|google-cloud-storage(?:\/[\w.-]+)*["']/;
+    expect(naming(loading).sort()).toEqual([
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
       "packages/storage/src/google-cloud-storage/index.ts",
     ]);
+    const barrel = readFileSync(join(repo, "packages/storage/src/index.ts"), "utf8");
+    expect(barrel).not.toMatch(/google-cloud-storage|gaxios/);
   });
 });

@@ -7,7 +7,7 @@ import baseConfig from "./vitest.config";
  * emulator; CI runs them in the `storage` job beside the emulator's service
  * container, and `pnpm test:gcs` runs them locally once
  * `GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT` names a running emulator. Without it
- * they fail, never skip.
+ * the run fails: Vitest marks the file failed and its tests skipped.
  *
  * The base `test` block is spread rather than merged, because Vite's
  * mergeConfig concatenates arrays and would re-add the unit-test globs.
