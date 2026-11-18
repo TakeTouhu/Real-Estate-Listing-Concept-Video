@@ -202,10 +202,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       production. The worker's copies and deliverables are RD-4's, and this
       item closes with them.*
       *Amended in RD-4a (ADR-0160): the adapter gives the worker's reads and
-      first-wins writes, with absence proved by a list as for the web app;
-      nothing constructs them yet. RD-4b adds the staging sink's upload and
-      RD-4c the development pipeline beside the emulator. The item closes at
-      part 2, when the worker's view is first constructed in production.*
+      first-wins writes, a key called absent only once a list shows its
+      bucket is there, as for the web app; nothing constructs them yet.
+      RD-4b adds the staging sink's upload and RD-4c the development
+      pipeline beside the emulator. The item closes at part 2, when the
+      worker's view is first constructed in production.*
 - [ ] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
       an approved vendor) behind the `MalwareScanner` port. Still required — the
       guard blocks production use, it does not provide real scanning.

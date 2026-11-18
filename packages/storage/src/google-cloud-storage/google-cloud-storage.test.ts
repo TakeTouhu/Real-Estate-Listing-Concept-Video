@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { createServer, globalAgent, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import { globalAgent as globalTlsAgent } from "node:https";
 import type { AddressInfo, Socket } from "node:net";
@@ -26,6 +26,20 @@ import {
   metadataAccessToken,
 } from "./access-token";
 import { googleCloudStorageAgents, googleCloudStorageClient } from "./client";
+
+/** Every file stream the adapter opens, so a test can see that each is closed. */
+const readStreams = vi.hoisted((): Array<{ readonly closed: boolean }> => []);
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...fs,
+    createReadStream: (...args: Parameters<typeof fs.createReadStream>) => {
+      const stream = fs.createReadStream(...args);
+      readStreams.push(stream);
+      return stream;
+    },
+  };
+});
 
 /**
  * The adapter against stand-ins for the store and the metadata server, on this
@@ -1181,6 +1195,7 @@ describe("a production build's transport", () => {
 
 describe("the worker's view (ADR-0160)", () => {
   const TEN = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const MEBIBYTE = 1024 * 1024;
   const MASTER = managedCleanMasterKey({ organizationId: "org_1", deliverableVersionId: "gdv_1" });
   const UPLOAD = `POST /upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${encodeURIComponent(MASTER)}`;
   const target = (key: string) => ({ bucket: BUCKET, key, expectedBucketOwner: undefined });
@@ -1251,6 +1266,8 @@ describe("the worker's view (ADR-0160)", () => {
       code: "STORAGE_UNEXPECTED_ANSWER",
       message: "STORAGE_UNEXPECTED_ANSWER",
     });
+    // A body that has failed is let go quietly.
+    await expect(body!.cancel()).resolves.toBeUndefined();
   });
 
   it("refuses a read once the body is cancelled", async () => {
@@ -1264,6 +1281,40 @@ describe("the worker's view (ADR-0160)", () => {
     });
   });
 
+  it("refuses a read still waiting when the body is cancelled, and lets the answer go", async () => {
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? { status: 206, headers: { "content-range": "bytes 0-9/10" }, body: TEN.subarray(0, 3), holdOpen: true }
+        : { status: 200, body: metadata(10) },
+    );
+    const { body } = await clientAt(store.origin).getObject(target(ASSET));
+    let read = 0;
+    while (read < 3) read += (await body!.read())!.byteLength;
+    const waiting = failureOf(() => body!.read());
+    await body!.cancel();
+    expect(await waiting).toMatchObject({ code: "STORAGE_BODY_CANCELLED", message: "STORAGE_BODY_CANCELLED" });
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+  });
+
+  it("lets go of the answer when the body is cancelled partway", async () => {
+    const size = 64 * MEBIBYTE;
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? {
+            status: 206,
+            headers: { "content-range": `bytes 0-${size - 1}/${size}`, "content-length": String(size) },
+            repeat: Buffer.alloc(64 * 1024, 1),
+            times: size / (64 * 1024),
+          }
+        : { status: 200, body: metadata(size) },
+    );
+    const { body } = await clientAt(store.origin).getObject(target(ASSET));
+    expect((await body!.read())!.byteLength).toBeGreaterThan(0);
+    await body!.cancel();
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+    expect(store.sent.bytes).toBeLessThan(size / 4);
+  });
+
   it("sends nothing for another bucket, an owner, or a key that is not canonical, and names none", async () => {
     const store = await standIn(() => ({ status: 200, body: "{}" }));
     const client = clientAt(store.origin);
@@ -1271,6 +1322,7 @@ describe("the worker's view (ADR-0160)", () => {
     for (const input of [
       { ...target(ASSET), bucket: "vtavision-other" },
       { ...target(ASSET), expectedBucketOwner: "123456789012" },
+      { ...target(ASSET), expectedBucketOwner: "" },
     ]) {
       for (const call of [
         () => client.getObject(input),
@@ -1309,6 +1361,59 @@ describe("the worker's view (ADR-0160)", () => {
     expect(sent!.headers.authorization).toBeUndefined();
   });
 
+  it("sends the MD5 of every byte of a file, however many reads it takes", async () => {
+    for (const data of [Buffer.from([7]), Buffer.from(Array.from({ length: MEBIBYTE + 3 }, (_, i) => i % 251))]) {
+      const store = await standIn(() => ({ status: 200, body: "{}" }));
+      expect(await put(clientAt(store.origin), await file(data))).toEqual({ kind: "CREATED" });
+      expect(store.seen[0]!.headers["x-goog-hash"]).toBe(`md5=${createHash("md5").update(data).digest("base64")}`);
+      expect(store.seen[0]!.body).toEqual(data);
+    }
+  });
+
+  it("fails a put whose file is shorter as it is sent than when it was hashed, and sends only what was", async () => {
+    const data = Buffer.alloc(200 * 1024, 5);
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const send = requests.getMockImplementation()!;
+    const shorter = await file(data);
+    requests.mockImplementationOnce(async function (this: Gaxios, options) {
+      await truncate(shorter, 100 * 1024);
+      return send.call(this, options);
+    });
+    // Refused, where the store would wait for the bytes its length promised.
+    expect(await failureOf(() => put(clientAt(store.origin), shorter))).toMatchObject({
+      code: "STORAGE_FILE_CHANGED",
+      message: "STORAGE_FILE_CHANGED",
+    });
+    expect(store.seen).toEqual([]);
+    const longer = await file(data);
+    requests.mockImplementationOnce(async function (this: Gaxios, options) {
+      await appendFile(longer, Buffer.from([9, 9]));
+      return send.call(this, options);
+    });
+    expect(await put(clientAt(store.origin), longer)).toEqual({ kind: "CREATED" });
+    expect(store.seen[0]!.body).toEqual(data);
+  });
+
+  it("opens the file to send only as it is sent, and lets it go however the put ends", async () => {
+    readStreams.splice(0);
+    const localPath = await file(Buffer.alloc(256 * 1024, 3));
+    // No token: refused before anything is sent, so only the MD5's read opened the file.
+    answeringAsGoogle((url) => (url.origin === METADATA_SERVER ? { status: 503 } : asGoogleStore(url)));
+    const google = createGoogleCloudStorageViews({ bucket: BUCKET, endpoint: GOOGLE, secret: SECRET }).objectClient;
+    expect(await failureOf(() => put(google, localPath))).toMatchObject({ code: "STORAGE_CREDENTIAL_UNAVAILABLE" });
+    expect(readStreams).toHaveLength(1);
+    // Answered once the first bytes are taken, the rest unsent.
+    requests.mockImplementation(async (options?: GaxiosOptions) => {
+      const data = options?.data as Readable;
+      await new Promise((resolve) => data.once("readable", resolve));
+      expect(data.read()).not.toBeNull();
+      return { status: 412, statusText: "", headers: new Headers(), data: "", config: options } as GaxiosResponse;
+    });
+    expect(await put(clientAt("http://127.0.0.1:9"), localPath)).toEqual({ kind: "ALREADY_EXISTS" });
+    expect(readStreams).toHaveLength(3);
+    await vi.waitFor(() => expect(readStreams.every((stream) => stream.closed)).toBe(true));
+  });
+
   it("sends an empty file as no bytes, with the MD5 of none", async () => {
     const store = await standIn(() => ({ status: 200, body: "{}" }));
     expect(await put(clientAt(store.origin), await file(new Uint8Array(0)))).toEqual({ kind: "CREATED" });
@@ -1328,6 +1433,9 @@ describe("the worker's view (ADR-0160)", () => {
       [429, "STORAGE_RATE_LIMITED"],
       [503, "STORAGE_UNAVAILABLE"],
       [307, "STORAGE_REFUSED"],
+      // Only 200 is a stored object.
+      [201, "STORAGE_REFUSED"],
+      [204, "STORAGE_REFUSED"],
     ];
     for (const [status, outcome] of answers) {
       const store = await standIn(() => ({ status, body: "{\"error\":\"org/org_1\"}" }));

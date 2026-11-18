@@ -22,8 +22,10 @@ composition's sources and published video, media validation and the Clean
 Master store use two: a read, `getObject`, and `putObjectIfAbsent`, which
 stores a local file at a key only if nothing is stored there. Every caller
 reads the object back whatever that write answers. Only the shared folder
-implements them, and only the development pipeline constructs it
-(ADR-0106); the worker has no production runtime yet, which is part 2's.
+implements all six (a mapping onto S3's client implements the sink's five,
+ADR-0043, and nothing constructs it), and only the development pipeline
+gives the worker its view (ADR-0106); the worker has no production runtime
+yet, which is part 2's.
 
 Five investigations, recorded in `/mnt/project-files/cto/rd-4/`, read the
 seams and Cloud Storage's API, measured both on the emulator, and checked
@@ -37,7 +39,8 @@ each other. What decides this record:
   only where none is stored, and answers `412` otherwise, in the same
   request. Generation 0 is no object.
 - Cloud Storage takes an MD5 or a CRC-32C of an upload in `X-Goog-Hash`, and
-  refuses a body that does not match with `400`; it takes no SHA-256. MD5 is
+  by its documents refuses a body that does not match with `400`; it takes
+  no SHA-256. MD5 is
   `node:crypto`'s. CRC-32C is not: `zlib.crc32` is CRC-32, another sum. The
   emulator ignores the header.
 - Cloud Storage has no check of a bucket's owner, which the seams' input
@@ -77,9 +80,10 @@ makes. So:
 - **The read is of one generation.** An object written again between the
   size and the bytes is `STORAGE_OBJECT_CHANGED`, never another object's
   bytes.
-- **A cancelled body is not read again.** A `read` after `cancel` is refused
-  with a new code, `STORAGE_BODY_CANCELLED`, not answered with an end, which
-  would read as an object shorter than it is. A second `cancel` does
+- **A cancelled body is not read again.** A `read` after `cancel`, or one
+  still waiting when `cancel` is called, is refused with a new code,
+  `STORAGE_BODY_CANCELLED`, not answered with an end, which would read as an
+  object shorter than it is. The answer is let go. A second `cancel` does
   nothing, and a stream that has already failed is let go quietly.
 
 `contentLength` is the size read first; the seams count the bytes
@@ -98,11 +102,20 @@ themselves, as they do for the folder.
   first to that size's last, with that `content-length`. The worker's files
   are a deliverable of up to 512 MiB and a Clean Master of up to 1 GiB.
 - **Its MD5 travels with it.** The file is read once for its MD5 before it
-  is sent, and the sum goes in `X-Goog-Hash`. Google refuses an upload whose
-  bytes do not match, so a file that changed between the two reads, or bytes
-  changed on the way, are refused before first-wins makes them permanent.
-  MD5 rather than CRC-32C, which Google prefers: the hash is
+  is sent, and the sum goes in `X-Goog-Hash`. By Google's documents, an
+  upload whose bytes do not match is refused, so bytes changed between the
+  two reads, or on the way, are refused before first-wins makes them
+  permanent. MD5 rather than CRC-32C, which Google prefers: the hash is
   `node:crypto`'s, and CRC-32C would need a table written here.
+- **Exactly the bytes hashed are sent.** A file shorter, as it is sent,
+  than when it was hashed fails the upload with a new code,
+  `STORAGE_FILE_CHANGED`, where the store would wait for the bytes its
+  length promised; a file longer sends only its first bytes, which the MD5
+  is of.
+- **The file is held open only while it is sent.** It is opened to be sent
+  only when its first bytes are asked for, and let go however the request
+  ends: a put refused before anything is sent, for want of a token, holds
+  nothing open, and one answered partway lets the rest go.
 - **The content type is the caller's,** as the seam gives it.
 - **A file that cannot be read is refused** with its transport code, such
   as `ENOENT`, naming no path, and nothing is sent.
@@ -144,14 +157,22 @@ The worker's production construction is part 2's, with its runtime.
 
 ## What was measured
 
-- **Unit tests, on a stand-in for the store** (11 new): a generation read as
+- **Unit tests, on a stand-in for the store** (16 new): a generation read as
   the worker pulls it; absence only once the bucket is proved, and a
-  missing bucket never; a short answer failing with a code; a read after
-  cancel refused; another bucket, an owner and a non-canonical key sending
-  nothing; the put's precondition, length, content type and MD5, the MD5 of
-  an empty file included; `412` as `ALREADY_EXISTS` and every other status
-  as its code; a missing file naming no path; the put with no limit; on
-  Google's origin, one token for both views, sent on the worker's requests.
+  missing bucket never; a short answer failing with a code, and its body
+  let go quietly; a read after cancel, and one waiting when it came,
+  refused; the answer let go on a cancel partway through 64 MiB; another
+  bucket, an owner, an empty owner and a non-canonical key sending
+  nothing; the put's precondition, length, content type and MD5; the MD5
+  of every byte of an empty file, a one-byte file and one of 1 MiB and 3
+  bytes; a file shortened
+  after its MD5 failing with a code and sending nothing, and one lengthened
+  sending only what was hashed; the file opened to send only as it is sent,
+  and closed when a put is refused before sending or answered partway;
+  `412` as `ALREADY_EXISTS` and every other status, `201` and `204`
+  included, as its code; a missing file naming no path; the put with no
+  limit; on Google's origin, one token for both views, sent on the worker's
+  requests.
 - **On the emulator** (12 new, beside the web app's): a missing key absent;
   a 3 MiB object streamed in several chunks; an empty object; a read after
   cancel refused; a missing bucket refused for both calls; a file stored
@@ -159,10 +180,17 @@ The worker's production construction is part 2's, with its runtime.
   exactly one `CREATED`; and the worker's existing seams on the view:
   composition's materializer and publisher, media validation, the Clean
   Master store, and a photo the web app stored read by the worker.
-- **A 256 MiB put on the emulator**, twice: `CREATED` in 2.5 and 2.7
-  seconds, the process's memory rising by about 36 MiB at most, its
-  buffers by 64 MiB; the same key again answered `ALREADY_EXISTS`. The file
-  is streamed, not held.
+- **A 256 MiB put on the emulator**, twice before the file was opened only
+  as it is sent and twice after: `CREATED` in 1.4 to 2.7 seconds, the
+  process's memory rising by 36 MiB at most and its buffers by 64 MiB; the
+  same key again answered `ALREADY_EXISTS`. The file is streamed, not held.
+- **Mutation.** 56 mutants of the new code were run against these tests;
+  41 failed them at first. Tests were added for the gaps the survivors
+  showed: the MD5 of a file longer than one read, the answer let go on a
+  cancel, a failed body's cancel, an empty owner, a `2xx` other than `200`,
+  and the bytes sent bounded by those hashed. The fixes the review asked
+  for, the file held open only while it is sent, the shortened file and the
+  waiting read, each have a test that fails without them.
 
 ## What cannot be shown here
 

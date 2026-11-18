@@ -23,16 +23,18 @@ The worker's view:
 
 | Call | What it does |
 | --- | --- |
-| `getObject({ bucket, key, expectedBucketOwner })` | the object's size and generation, then that generation's bytes as a body read one chunk at a time; `{ contentLength: null, body: null }` only once a list proves the key absent; a missing bucket is `STORAGE_BUCKET_MISSING` |
-| `putObjectIfAbsent({ bucket, key, localPath, contentType, expectedBucketOwner })` | one media upload with `ifGenerationMatch=0`, streamed from the file with its length and its MD5 in `X-Goog-Hash`; `CREATED` on `200`, `ALREADY_EXISTS` on `412` |
+| `getObject({ bucket, key, expectedBucketOwner })` | the object's size and generation, then that generation's bytes as a body read one chunk at a time; `{ contentLength: null, body: null }` only when the object answers `404` and a list in the bucket then answers; a missing bucket is `STORAGE_BUCKET_MISSING` |
+| `putObjectIfAbsent({ bucket, key, localPath, contentType, expectedBucketOwner })` | one media upload with `ifGenerationMatch=0`, streamed from the file with its length and its MD5 in `X-Goog-Hash`, the file open only while it is sent; `CREATED` on `200`, `ALREADY_EXISTS` on `412` |
 
 Both refuse, with `CONFIGURATION_ERROR` and nothing sent, a bucket other
 than the store's and any `expectedBucketOwner`; a key the adapter cannot
 name is `INTERNAL_ERROR`, as for the web app's port.
 
-A new code, `STORAGE_BODY_CANCELLED`, refuses a body's `read` after its
-`cancel`. A file that cannot be read is refused with its transport code,
-such as `ENOENT`, naming no path.
+Two new codes: `STORAGE_BODY_CANCELLED` refuses a body's `read` after its
+`cancel`, or still waiting when it came; `STORAGE_FILE_CHANGED` fails a put
+whose file is shorter, as it is sent, than when its MD5 was read. A file
+that cannot be read is refused with its transport code, such as `ENOENT`,
+naming no path.
 
 ### Changed
 

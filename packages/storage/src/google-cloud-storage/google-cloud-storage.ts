@@ -101,6 +101,8 @@ export interface GoogleCloudStorageOptions {
  * - `STORAGE_UNEXPECTED_ANSWER`: an answer that cannot be read, proves nothing,
  *   or is not the bytes asked for;
  * - `STORAGE_BODY_CANCELLED`: a worker's read of a body it cancelled;
+ * - `STORAGE_FILE_CHANGED`: a worker's file that was shorter, as it was sent,
+ *   than when it was hashed;
  * - the transport's own one-word code, such as `ECONNREFUSED`;
  * - `STORAGE_UNREACHABLE`: a failure that names none.
  */
@@ -353,8 +355,8 @@ export interface GoogleCloudStorageViews {
 
 /**
  * A stream as the worker's body: one chunk for each `read`, `null` at its end.
- * A read once it is cancelled is refused, not answered with an end, which would
- * read as an object shorter than it is.
+ * A read once it is cancelled, or still waiting when it is, is refused, not
+ * answered with an end, which would read as an object shorter than it is.
  */
 function pulledBody(stream: ReadableStream<Uint8Array>): S3ObjectBody {
   const reader = stream.getReader();
@@ -363,6 +365,8 @@ function pulledBody(stream: ReadableStream<Uint8Array>): S3ObjectBody {
     async read(): Promise<Uint8Array | null> {
       if (cancelled) throw new GoogleCloudStorageError("STORAGE_BODY_CANCELLED");
       const next = await reader.read();
+      // A cancel while this read waited ends the stream: that end is not the object's.
+      if (cancelled) throw new GoogleCloudStorageError("STORAGE_BODY_CANCELLED");
       return next.done ? null : next.value;
     },
     async cancel(): Promise<void> {
@@ -393,6 +397,26 @@ async function fileToSend(path: string): Promise<{ readonly size: number; readon
   } catch (error) {
     throw new GoogleCloudStorageError(transportCode(error));
   }
+}
+
+/**
+ * The file's first `size` bytes as they are sent, the file opened only once
+ * the first is asked for, and closed with the stream. A file shorter now than
+ * when it was hashed fails the upload, which would otherwise wait for bytes
+ * that never come; one longer sends only the bytes its MD5 is of.
+ */
+function sentFile(path: string, size: number): Readable {
+  return Readable.from(
+    (async function* (): AsyncGenerator<Buffer> {
+      let sent = 0;
+      for await (const chunk of createReadStream(path, { start: 0, end: size - 1 })) {
+        sent += (chunk as Buffer).byteLength;
+        yield chunk as Buffer;
+      }
+      if (sent !== size) throw new GoogleCloudStorageError("STORAGE_FILE_CHANGED");
+    })(),
+    { objectMode: false },
+  );
 }
 
 export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): ObjectStorage {
@@ -608,15 +632,22 @@ export function createGoogleCloudStorageViews(options: GoogleCloudStorageOptions
     async putObjectIfAbsent(input): Promise<{ readonly kind: "CREATED" | "ALREADY_EXISTS" }> {
       const name = workerKey(input);
       const { size, md5 } = await fileToSend(input.localPath);
-      const response = await ask({
-        method: "POST",
-        // Generation 0 is no object: the store writes only where none is stored, and answers 412 otherwise.
-        url: `${uploadUrl}?uploadType=media&name=${escape(name)}&ifGenerationMatch=0`,
-        headers: { "content-type": input.contentType, "content-length": String(size), "x-goog-hash": `md5=${md5}` },
-        // The bytes the MD5 was read from, and no more: a file that changed since is refused by the store.
-        data: size === 0 ? Buffer.alloc(0) : createReadStream(input.localPath, { start: 0, end: size - 1 }),
-        responseType: "text",
-      });
+      // As many bytes as the MD5 was read from, and no more: bytes changed since are refused by the store.
+      const data = size === 0 ? Buffer.alloc(0) : sentFile(input.localPath, size);
+      let response: GaxiosResponse<unknown>;
+      try {
+        response = await ask({
+          method: "POST",
+          // Generation 0 is no object: the store writes only where none is stored, and answers 412 otherwise.
+          url: `${uploadUrl}?uploadType=media&name=${escape(name)}&ifGenerationMatch=0`,
+          headers: { "content-type": input.contentType, "content-length": String(size), "x-goog-hash": `md5=${md5}` },
+          data,
+          responseType: "text",
+        });
+      } finally {
+        // The file is let go however the request ended, sent whole, in part or not at all.
+        if (data instanceof Readable) data.destroy();
+      }
       if (response.status === 200) return { kind: "CREATED" };
       // Not a failure: what is stored is read back by every caller.
       if (response.status === 412) return { kind: "ALREADY_EXISTS" };
