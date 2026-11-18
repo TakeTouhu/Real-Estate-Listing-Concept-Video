@@ -36,13 +36,14 @@ reported as skipped. CI runs them in the `media` job on Ubuntu 24.04.
 
 ## `tests/storage/*.gcs.test.ts`
 
-Suites that speak to the Cloud Storage emulator (ADR-0156 to ADR-0160):
+Suites that speak to the Cloud Storage emulator (ADR-0156 to ADR-0161):
 the Google Cloud Storage adapter storing, reading, streaming and deleting
 objects in a bucket of each test's own, the web app's own storage as a
 bucket and an endpoint choose it, and the worker's view of a bucket under
-its composition, media validation and Clean Master seams, with the proxy
-variables naming a proxy that is not there. They are **excluded** from
-`pnpm test` and run explicitly, with the emulator running and named:
+its staging sink, composition, media validation and Clean Master seams,
+with the proxy variables naming a proxy that is not there. They are
+**excluded** from `pnpm test` and run explicitly, with the emulator
+running and named:
 
 ```bash
 export GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT=http://127.0.0.1:4443
@@ -54,8 +55,10 @@ tests skipped. An origin that is not on this machine is refused, and the
 adapter sends no request through a proxy and no token to any store but
 Google's, so no suite reaches a real store. The
 emulator has no permissions, so what Google answers a caller that may not
-read or list is not seen here. CI runs them in the `storage` job beside the
-emulator's service container.
+read or list is not seen here. Nor does it check a resumable upload's
+precondition before its last chunk, or cancel one, so when Google checks
+the precondition, and that a cancel cancels, are not seen here either. CI
+runs them in the `storage` job beside the emulator's service container.
 
 ## `tests/e2e/*.spec.ts`
 

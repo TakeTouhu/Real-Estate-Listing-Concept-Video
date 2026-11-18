@@ -207,6 +207,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       yet. RD-4b adds the staging sink's upload and RD-4c the development
       pipeline beside the emulator. The item closes at part 2, when the
       worker is first given its view in production.*
+      *Amended in RD-4b (ADR-0161): the adapter gives the staging sink's
+      upload too, one resumable upload per scene, published by its last
+      chunk only where nothing is stored; the worker is not given it yet.
+      RD-4c gives the development pipeline the view beside the emulator.
+      The item still closes at part 2.*
 - [ ] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
       an approved vendor) behind the `MalwareScanner` port. Still required — the
       guard blocks production use, it does not provide real scanning.
@@ -930,6 +935,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       RBAC, and organization scoping (Phase 1).
 - [ ] Introduce OpenTelemetry exporters; the Phase 0 logger is a local
       structured logger with redaction only.
+      *Amended in RD-4b (ADR-0161 Decision 4): whatever exporter is chosen
+      must not record the URLs of the worker's storage requests; see* Open
+      in RD-4b*.*
 
 ## Phase 4C-3B-2G-1 — production stale-`SUBMITTING` threshold
 
@@ -1825,6 +1833,9 @@ into on 2026-11-17.
       answers, and which for the worker means work done again or
       `CLEAN_MASTER_MISSING`; and what a write that loses its race is
       answered from an account without `storage.objects.delete`.*
+      *Amended in RD-4b (ADR-0161): the staging sink's upload needs
+      `storage.objects.create` by Google's documents; that its cancel needs
+      nothing more is inferred, and to be checked with the rest.*
 - [ ] **Decide how long a put, a delete and a whole object's read may
       take.** The adapter gives them no limit (ADR-0156 Decision 3): a put
       or a delete given up leaves its caller not knowing whether it
@@ -1850,6 +1861,9 @@ into on 2026-11-17.
       worker's leases and concurrency, decides how long its transfers may
       take; a deadline in the repository's own code goes to the product
       owner first.*
+      *Amended in RD-4b (ADR-0161 Decision 5): the staging sink's chunks are
+      given no limit either; its upload's start and cancel, which move no
+      bytes, are given the 3-second question limit.*
 - [x] **Prove the production build with gaxios.** gaxios imports
       `node-fetch` 3 when it first sends a request. Nothing in the web app
       loads the adapter yet; RD-3c, which wires it in, is to prove that
@@ -1952,6 +1966,33 @@ into on 2026-11-17.
       the web app's objects in the emulator cannot run the pipeline on them.
       RD-4 is to decide.
       *Decided in RD-4a (ADR-0160 Decision 6): yes, as RD-4c.*
+
+## Open in RD-4b — what the staging sink's upload leaves open
+
+- [ ] **Check when Google checks a resumable upload's precondition, before
+      part 2 lets the worker store a scene.** The emulator checks
+      `ifGenerationMatch=0` when the last chunk comes, and Google's
+      documents do not say. If Google checks it only at the start, two
+      sessions started before either finishes both finish, the later
+      replacing the earlier, and first-wins fails without a sign. The
+      fallback, a staging object rewritten to its key with
+      `ifGenerationMatch=0`, is in ADR-0161. To be checked against a real
+      bucket under the product owner's approval of that deployment.
+- [ ] **Check the rest of the upload at the first deployment** (ADR-0161):
+      that Google refuses a last chunk whose MD5 does not match; what it
+      answers a chunk that breaks the 256 KiB rule; the form of its `308`
+      answers and of the session's `Location`, and whether it ever keeps
+      fewer bytes of a chunk than it was sent, which the adapter fails as
+      retryable rather than send the rest; that a `DELETE` cancels a
+      session, and what it is answered after a last chunk refused with
+      `412`; and whether an abandoned session's bytes are billed for the
+      week before Google ends it, which under Cloud Storage takes the place
+      of the S3 bucket's lifecycle rule (ADR-0043).
+- [ ] **Keep resumable sessions' URLs out of part 2's tracing.** A
+      session's URL lets whoever holds it write to the bucket for a week,
+      with no other credential. The adapter keeps it in memory and no error
+      names it, but an HTTP client's tracer usually records each request's
+      whole URL (ADR-0161 Decision 4).
 
 ## Open in RD-4a — what the worker's Cloud Storage view leaves open
 
@@ -2603,6 +2644,8 @@ them is **built**. Each item below records the settled decision and what remains
       *RD-4a (ADR-0160) gives it the worker's reader and first-wins write,
       not yet given to the worker; RD-4b is to add the staging sink's
       upload.*
+      *RD-4b (ADR-0161) adds the staging sink's upload, one resumable
+      upload; RD-4c is to give the development pipeline the view.*
 - [x] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`. *Done in Phase 6C

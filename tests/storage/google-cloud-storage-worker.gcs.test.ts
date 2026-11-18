@@ -13,7 +13,9 @@ import {
 } from "@app/domain";
 import { AppError } from "@app/shared";
 import {
+  ManagedOutputStagingRetryableFailure,
   S3ManagedOutputMediaValidator,
+  S3ManagedOutputStagingSink,
   createCleanMasterStore,
   createDeliverableCompositionSourceMaterializer,
   createDeliverableOutputPublisher,
@@ -28,11 +30,13 @@ import {
 import { createEmulatorBucket, emulatorEndpoint, emulatorObjectNames } from "./emulator";
 
 /**
- * The worker's view of a Cloud Storage bucket against the emulator (ADR-0160):
- * the reads and the first-wins write the worker's managed output makes, held
- * as the shared folder's tests hold them, and the seams that use them. The
- * emulator does not check the MD5 an upload carries, nor any permission; the
- * stand-in suite holds what the adapter sends.
+ * The worker's view of a Cloud Storage bucket against the emulator (ADR-0160,
+ * ADR-0161): the reads, the first-wins write and the staging sink's upload the
+ * worker's managed output makes, held as the shared folder's tests hold them,
+ * and the seams that use them. The emulator does not check the MD5 an upload
+ * carries, nor any permission, nor a resumable upload's precondition before
+ * its last bytes, and its cancel cancels nothing; the stand-in suite holds what
+ * the adapter sends.
  */
 
 const SECRET = "google-cloud-storage-signing-secret";
@@ -262,5 +266,91 @@ describe("the worker's existing seams, in Cloud Storage", () => {
     await createGoogleCloudStorage({ bucket, endpoint, secret: SECRET }).putObject(ASSET, bytes(3, 1, 4));
     const result = await store.objectClient.getObject(target(ASSET));
     expect((await drain(result.body!)).data).toEqual(bytes(3, 1, 4));
+  });
+});
+
+describe("the staging sink, in Cloud Storage (ADR-0161)", () => {
+  /** The sink's least part size, a whole number of 256 KiB, so a few mebibytes make several parts. */
+  const PART = 5 * MEBIBYTE;
+  const OTHER = managedGenerationOutputKey({ organizationId: "org_1", attemptId: "att_2" });
+  const receiptOf = (data: Uint8Array) => ({
+    sha256: sha256Digest(hex(data)),
+    sizeBytes: safePositiveByteCount(data.byteLength),
+  });
+
+  /** A session of the unchanged sink, written `data` a mebibyte at a time. */
+  async function staged(data: Uint8Array, key = OUTPUT) {
+    const sink = new S3ManagedOutputStagingSink({ bucket, partSizeBytes: PART }, { client: store.objectClient });
+    const session = await sink.begin({ destinationKey: key });
+    for (let at = 0; at < data.byteLength; at += MEBIBYTE) await session.write(data.subarray(at, at + MEBIBYTE));
+    return session;
+  }
+
+  async function stored(key: string): Promise<string> {
+    const { body } = await store.objectClient.getObject(target(key));
+    return hex((await drain(body!)).data);
+  }
+
+  it("publishes an object of several parts only once its last is sent", async () => {
+    const data = randomBytes(2 * PART + 7);
+    const session = await staged(data);
+    // Two parts are sent by now, and nothing is stored.
+    expect(await emulatorObjectNames(endpoint, bucket)).toEqual([]);
+    expect(await session.commit({ receipt: receiptOf(data) })).toEqual({ kind: "PUBLISHED" });
+    expect((await store.objectClient.getObject(target(OUTPUT))).contentLength).toBe(data.byteLength);
+    expect(await stored(OUTPUT)).toBe(hex(data));
+    expect(await emulatorObjectNames(endpoint, bucket)).toEqual([OUTPUT]);
+  });
+
+  it("publishes an object of whole parts, and one of a single byte", async () => {
+    const whole = randomBytes(2 * PART);
+    expect(await (await staged(whole)).commit({ receipt: receiptOf(whole) })).toEqual({ kind: "PUBLISHED" });
+    expect(await stored(OUTPUT)).toBe(hex(whole));
+    const one = bytes(42);
+    expect(await (await staged(one, OTHER)).commit({ receipt: receiptOf(one) })).toEqual({ kind: "PUBLISHED" });
+    expect(await stored(OTHER)).toBe(hex(one));
+  });
+
+  it("reads the winner back when the key was stored before it began", async () => {
+    const winner = randomBytes(3 * MEBIBYTE);
+    await store.objectStorage.putObject(OUTPUT, winner);
+    const loser = randomBytes(PART + 3);
+    expect(await (await staged(loser)).commit({ receipt: receiptOf(loser) })).toEqual({
+      kind: "EXISTING",
+      receipt: receiptOf(winner),
+    });
+    expect(await stored(OUTPUT)).toBe(hex(winner));
+  });
+
+  it("reads the winner back when another upload finishes first while it is sent", async () => {
+    const first = randomBytes(2 * PART + 1);
+    const second = randomBytes(PART + 9);
+    const late = await staged(first);
+    const early = await staged(second);
+    expect(await early.commit({ receipt: receiptOf(second) })).toEqual({ kind: "PUBLISHED" });
+    expect(await late.commit({ receipt: receiptOf(first) })).toEqual({ kind: "EXISTING", receipt: receiptOf(second) });
+    expect(await stored(OUTPUT)).toBe(hex(second));
+    expect(await emulatorObjectNames(endpoint, bucket)).toEqual([OUTPUT]);
+  });
+
+  it("stores nothing when it is aborted, and a later upload publishes", async () => {
+    // The emulator's cancel cancels nothing: this shows only that the sink did not finish the upload.
+    await (await staged(randomBytes(2 * PART + 5))).abort();
+    expect(await emulatorObjectNames(endpoint, bucket)).toEqual([]);
+    const data = randomBytes(PART + 1);
+    expect(await (await staged(data)).commit({ receipt: receiptOf(data) })).toEqual({ kind: "PUBLISHED" });
+    expect(await stored(OUTPUT)).toBe(hex(data));
+  });
+
+  it("is retryable where the bucket is missing, storing nothing", async () => {
+    const elsewhere = `vtavision-missing-${randomBytes(6).toString("hex")}`;
+    const missing = createGoogleCloudStorageViews({ bucket: elsewhere, endpoint, secret: SECRET });
+    const sink = new S3ManagedOutputStagingSink(
+      { bucket: elsewhere, partSizeBytes: PART },
+      { client: missing.objectClient },
+    );
+    const session = await sink.begin({ destinationKey: OUTPUT });
+    await expect(session.write(randomBytes(PART))).rejects.toBeInstanceOf(ManagedOutputStagingRetryableFailure);
+    await session.abort();
   });
 });

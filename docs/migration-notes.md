@@ -2848,3 +2848,32 @@ that it refuses an upload whose MD5 does not match, whether it answers
 **On a development machine.** Nothing to do.
 
 **Rolling back.** To RD-3d's build: safe. Nothing used the worker's view.
+
+## RD-4b — the staging sink's upload in Google Cloud Storage
+
+**No migration** (ADR-0161). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing: no setting or package is added, the
+web app's storage is unchanged, and the worker is not given its view.
+
+**Before the worker stores a scene in Cloud Storage** (part 2): check on a
+real bucket when Google checks a resumable upload's `ifGenerationMatch=0`.
+If it checks only at the start, two uploads of one scene would both finish
+and the later would replace the earlier; the fallback is in ADR-0161. Part
+2 may not let the worker store a scene until this passes.
+
+**For the first deployment that uses it**: the worker's account needs
+`storage.objects.create`, as for RD-4a; that a session's cancel needs
+nothing more is inferred. Not measured, and checks for that deployment
+(`docs/decisions/TODO.md`): that Google refuses a last chunk whose MD5 does
+not match, what it answers a chunk that breaks the 256 KiB rule, the form
+of its `308` answers and its session URI, whether it keeps fewer bytes of
+a chunk than it was sent, that a `DELETE` cancels a session and what it
+answers one after a last chunk refused with `412`, and whether an
+abandoned session's bytes are billed until Google ends it after a week.
+Part 2's tracing must not record the URLs of these requests: a session's
+URI lets anyone who holds it write to the bucket.
+
+**On a development machine.** Nothing to do.
+
+**Rolling back.** To RD-4a's build: safe. Nothing used the worker's view.

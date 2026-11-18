@@ -1154,6 +1154,21 @@ The worker is not given it yet: RD-4 is split in three, and RD-4b adds
 the staging sink's upload, RD-4c the development pipeline beside the
 emulator.
 
+**RD-4b — the staging sink's upload in Google Cloud Storage** (ADR-0161,
+no migration): the worker's view takes the four calls the staging sink
+makes to store a provider's scene video. The sink is unchanged, and the
+worker is not given the view yet. Its
+multipart upload is one resumable upload, started with
+`ifGenerationMatch=0` so that it is finished only where nothing is stored.
+Each part is sent when the next comes, from where the store's bytes end,
+and the last with the object's size and MD5. A `412`, at the start or at
+the end, reaches the sink as the lost race it reads, so it reads the winner
+back. The session's URI, which lets anyone who holds it write, stays in the
+adapter. Against the emulator, the unchanged sink published, lost races and
+read the winner back. When Google checks the precondition is not in its
+documents: part 2 may not let the worker store a scene until a real bucket
+shows it is checked at the end.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
