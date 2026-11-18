@@ -75,12 +75,14 @@ record; the oldest dates from 2018. One, `node-domexception`, is marked
 deprecated by its author; `fetch-blob`, under `node-fetch` 3, uses it.
 gaxios reads the proxy variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`,
 and their lowercase spellings) and no other; the `debug` package under its
-proxy agent, loaded only when a proxy is used, reads `DEBUG` and every
-`DEBUG_*` variable. A process that sets a proxy variable sends the store's
-requests through it, `HTTPS_PROXY` even to an `http` origin, unless
-`NO_PROXY` names the host or a domain it ends in: gaxios ignores a range,
-`*` and a host with its port there. A proxy's refusal then reads as the
-store's own status, and a `DEBUG` that names the proxy agent writes the
+proxy agent, loaded only when a proxy is used, reads `DEBUG`, every
+`DEBUG_*` variable and, where `supports-color` resolves, the colour
+variables that reads. A process that sets a proxy variable sends the
+store's requests through it, `HTTPS_PROXY` even to an `http` origin, unless
+`NO_PROXY` names the host or its origin exactly, or a domain it ends in
+written with a leading `.` or `*.`: gaxios ignores a bare parent domain, a
+range, `*` and a host with its port there. A proxy's refusal then reads as
+the store's own status, and a `DEBUG` that names the proxy agent writes the
 proxy's address, password and all, to the log. Measured against a stand-in
 proxy. The suites clear the proxy variables; keeping them from production
 is open (`docs/decisions/TODO.md`).
@@ -134,7 +136,7 @@ limit the readiness probe gives the database (ADR-0153).
 The limit is the list's, one request's. In production RD-3c adds a
 credential, fetched before the list: that request is to carry a limit of
 gaxios's own as well, or a credential that never comes holds `exists`
-unended, and `exists` then waits at most both limits
+unended. With both limited, `exists` waits at most the two together
 (`docs/decisions/TODO.md`).
 
 A put, a delete and a whole object's read are given no limit. A put or a
@@ -175,10 +177,11 @@ Node's error for an address it cannot read carries the whole address.
 ## Decision 5 — The keys and the bucket it accepts
 
 A key is sent only when it is canonical (ADR-0074), holds no carriage
-return or line feed, and is at most 1,024 bytes, which Cloud Storage
-refuses otherwise. Every character of a key that is not unreserved is
-escaped, in a path and in a query alike, so a space, `+`, `%`, `?`, `#` or
-a name in Japanese reaches the object it names; measured on the emulator.
+return, line feed or lone half of a surrogate pair, and is at most 1,024
+bytes, which Cloud Storage refuses otherwise. Every character of a key that
+is not unreserved is escaped, in a path and in a query alike, so a space,
+`+`, `%`, `?`, `#` or a name in Japanese reaches the object it names;
+measured on the emulator.
 
 A bucket is 3 to 63 lowercase letters, digits, `-`, `_` and `.`, beginning
 and ending with a letter or a digit. Cloud Storage also takes names with
@@ -246,9 +249,9 @@ against stand-ins on `127.0.0.1`:
   `ECONNREFUSED`; a store that hangs up, asked once, `ECONNRESET`; a
   silent store ending `exists` after 3.0 seconds, asked once; the list
   after a `404` likewise; a whole object answered after 3.5 seconds still
-  read; and that no production code constructs the adapter or imports
-  gaxios or the adapter's folder by any path, `@app/storage`'s own index
-  included.
+  read; and that no production code constructs the adapter or names
+  gaxios or the adapter's folder in a quoted import path, and that
+  `@app/storage`'s own index names neither.
 - Both suites pass with `HTTPS_PROXY` naming a proxy that is not there.
 
 ## Consequences

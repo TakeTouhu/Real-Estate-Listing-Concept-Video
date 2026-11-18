@@ -233,6 +233,8 @@ describe("what it asks", () => {
           code: "INTERNAL_ERROR",
           message: "A stored object's key must be canonical, and one Cloud Storage can name",
         });
+        expect((error as AppError).details).toBeUndefined();
+        expect(JSON.stringify(error)).not.toMatch(/org|\.\./);
       }
     }
     expect(store.seen).toEqual([]);
@@ -242,7 +244,9 @@ describe("what it asks", () => {
     expect(store.seen).toEqual([]);
     expect(await storage.exists(longest)).toBe(false);
     expect(await storage.exists(`org/${"é".repeat(510)}`)).toBe(false);
-    expect(store.seen).toHaveLength(2);
+    // A whole surrogate pair is a character like any other.
+    expect(await storage.exists("org/\u{1F600}")).toBe(false);
+    expect(store.seen).toHaveLength(3);
   });
 });
 
@@ -350,7 +354,7 @@ describe("how long it waits", () => {
     const elapsed = performance.now() - started;
     expect(error).toMatchObject({ code: "STORAGE_TIMEOUT", message: "STORAGE_TIMEOUT" });
     expect(elapsed).toBeGreaterThanOrEqual(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS - 50);
-    expect(elapsed).toBeLessThan(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 1_500);
+    expect(elapsed).toBeLessThan(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 1_000);
     expect(store.seen).toHaveLength(1);
   });
 
@@ -360,7 +364,7 @@ describe("how long it waits", () => {
     expect(await failureOf(() => storeAt(store.origin).getObject(ASSET))).toMatchObject({ code: "STORAGE_TIMEOUT" });
     const elapsed = performance.now() - started;
     expect(elapsed).toBeGreaterThanOrEqual(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS - 50);
-    expect(elapsed).toBeLessThan(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 1_500);
+    expect(elapsed).toBeLessThan(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 1_000);
     expect(store.seen).toHaveLength(2);
   });
 
@@ -389,8 +393,8 @@ describe("where it is constructed", () => {
     expect(naming(/createGoogleCloudStorage\(/)).toEqual([
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
     ]);
-    // Any import of gaxios or of the folder, by any path below it, so an alias is caught too.
-    const loading = /["']gaxios(?:\/[^"']*)?["']|google-cloud-storage(?:\/[\w.-]+)*["']/;
+    // Any quoted path naming gaxios or the folder, or anything below either, so an alias is caught too.
+    const loading = /["'`]gaxios(?:\/[^"'`]*)?["'`]|google-cloud-storage(?:\/[\w.-]*)*["'`]/;
     expect(naming(loading).sort()).toEqual([
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
       "packages/storage/src/google-cloud-storage/index.ts",

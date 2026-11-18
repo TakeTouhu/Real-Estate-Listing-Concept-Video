@@ -1787,10 +1787,11 @@ into on 2026-11-17.
       prevention, and the account no `storage.buckets.*`, `setIamPolicy` or
       `iam.serviceAccounts.signBlob`. The bucket's soft-delete retention and
       object versioning are to be decided too: with either on, an object
-      `deleteObject` removed is still kept, and billed, until it lapses,
-      which bears on physical deletion after the recovery window
-      (`docs/SecurityCompliance.md`). To be checked against a real bucket
-      under the product owner's approval of that deployment.
+      `deleteObject` removed is still kept, and billed, under soft delete
+      until its retention lapses, under versioning until it or a lifecycle
+      rule removes it. That bears on physical deletion after the recovery
+      window (`docs/SecurityCompliance.md`). To be checked against a real
+      bucket under the product owner's approval of that deployment.
 - [ ] **Decide how long a put, a delete and a whole object's read may
       take.** The adapter gives them no limit (ADR-0156 Decision 3): a put
       or a delete given up leaves its caller not knowing whether it
@@ -1808,14 +1809,16 @@ into on 2026-11-17.
       3-second limit is the list's (ADR-0156 Decision 3). RD-3c fetches a
       credential from the metadata server before the store is asked: that
       request is to carry a limit of gaxios's own too, or a credential that
-      never comes holds `exists`, and readiness, unended. `exists` then
-      waits at most both limits.
+      never comes holds `exists`, and readiness, unended. With both
+      limited, `exists` waits at most the two together.
 - [ ] **Keep proxy variables out of the web app's environment unless one
       is meant.** gaxios sends the store's requests through `HTTPS_PROXY`,
-      `HTTP_PROXY` or their lowercase spellings when one is set, an `https`
-      proxy even to an `http` origin, unless `NO_PROXY` names the host or a
-      domain it ends in; a range, `*` or a host with its port there is
-      ignored. A proxy's refusal reads as the store's own status, and a
+      `HTTP_PROXY` or their lowercase spellings when one is set,
+      `HTTPS_PROXY` even to an `http` origin, unless `NO_PROXY` names the
+      host or its origin exactly, or a domain it ends in written with a
+      leading `.` or `*.`; a bare parent domain, a range, `*` or a host
+      with its port there is ignored. A proxy's refusal reads as the
+      store's own status, and a
       `DEBUG` naming the proxy agent logs the proxy's password (ADR-0156
       Decision 1). RD-3c, whose credential request would go the same way,
       is to keep its requests from an ambient proxy or refuse one at start;
