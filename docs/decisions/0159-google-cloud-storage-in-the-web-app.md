@@ -48,9 +48,10 @@ against each other and the sources. What decides this record:
 
 `@app/shared`'s environment schema gains two optional settings:
 
-- `GOOGLE_CLOUD_STORAGE_BUCKET`: the bucket, named by Cloud Storage's rules,
-  3 to 63 lowercase letters, digits, `.`, `-` or `_`, beginning and ending
-  with a letter or a digit. The schema and the adapter apply the same rule,
+- `GOOGLE_CLOUD_STORAGE_BUCKET`: the bucket, 3 to 63 lowercase letters,
+  digits, `.`, `-` or `_`, beginning and ending with a letter or a digit:
+  every name Cloud Storage allows of at most 63 characters, and a few it
+  refuses (ADR-0156). The schema and the adapter apply the same rule,
   `isCloudStorageBucketName()`, which moves to `@app/shared`.
 - `GOOGLE_CLOUD_STORAGE_ENDPOINT`: an emulator's origin, `http` or `https`,
   with no user, path, query or fragment, the rule an application base
@@ -64,7 +65,7 @@ depends on `@app/shared`, not the reverse. The metadata server's address
 stays the adapter's own constant (ADR-0158 Decision 1). Everywhere, an
 endpoint needs a bucket.
 
-## Decision 2 — Development never asks Google
+## Decision 2 — Development never uses Google's store
 
 Three rules, each where a mistake would otherwise pass:
 
@@ -84,7 +85,9 @@ Three rules, each where a mistake would otherwise pass:
   parse.
 
 So a token is asked for only by a production build configured for
-production, and sent only to Google's origin.
+production, and sent only to Google's origin. The endpoint rule refuses
+Google's API domain alone: an emulator's endpoint at another host, the
+metadata server's included, is asked as an emulator is, with no token.
 
 ## Decision 3 — The choice, and one store for the process
 
@@ -163,7 +166,7 @@ open.
   rules, and it constructs no Cloud Storage adapter. RD-4 gives it one,
   under the same construction rules, recorded as open.
 - No change to the health and readiness code, the start hook, Next.js's
-  configuration, a package or CI. The web app's emulator suite runs in the
+  configuration, a dependency or CI. The web app's emulator suite runs in the
   existing `storage` job.
 - `LocalObjectStorage`'s refusal names the Google Cloud Storage adapter as
   what production uses, in place of "S3/Azure".
@@ -198,13 +201,16 @@ open.
   address that does not parse. The sixth, the endpoint's fallback in the
   branch that has none, changes nothing.
 - **A production build**, offline: built with no warning; the start hook's
-  chunk holds no gaxios, no node-fetch and no Google name; the adapter's
-  chunk reads a timeout by `type`.
+  chunk holds no gaxios, no node-fetch, no `storage.googleapis.com` and no
+  `metadata.google.internal`, its one Google name being the schema's
+  `googleapis.com` test; the adapter's chunk reads a timeout by `type`.
 - **Checked production starts** of that build, each ended with exit code 1:
   a bucket alone, only for malware scanning and email; with an endpoint,
   for the endpoint; configured for development, for the mismatch and the
   emulator; with `NODE_DEBUG` naming `https` or `*`, for `NODE_DEBUG`, with
-  no debug line and no `Bearer` written; beside the folder, for both.
+  no `HTTPS` debug line and no `Bearer` written (with `*`, Node.js's own
+  module-loading debug lines came before the refusal); beside the folder,
+  for both.
 - **Rounds in the namespace**, the start hook skipped by
   `NEXT_PHASE=phase-production-build` and no code changed. Everything
   answering: readiness read `adapter=gcs, answers`, and the metadata server
@@ -222,8 +228,10 @@ open.
   asked nothing.
 
 The build, the starts and the rounds ran on the commit that wires the
-adapter in; the later commits of this change touch tests and documents
-alone. Records: `/mnt/project-files/cto/rd-3/rd-3d-measured.md`.
+adapter in; the later commits of this change touch tests, documents,
+comments and the wording of two refusals alone. Records:
+`/mnt/project-files/cto/rd-3/rd-3d-measured.md`, whose last section also
+gives the mutation run and the measurements this record's context cites.
 
 ## What cannot be shown here
 

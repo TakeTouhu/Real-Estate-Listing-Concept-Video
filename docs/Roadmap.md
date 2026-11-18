@@ -1130,10 +1130,10 @@ production the web app keeps its objects in Google's own Cloud Storage,
 named by a bucket alone, at an origin no setting names, with the token of
 the service account it runs as; in development and CI it may keep them in
 the Cloud Storage emulator, named by a bucket and an endpoint. Development
-never asks Google: outside production a bucket needs an endpoint and one at
-Google's domain is refused, Google's store is built only where both
-`NODE_ENV` values say production, and the emulator is refused where either
-does. A bucket beside the shared folder is refused. The production start
+never uses Google's store: outside production a bucket needs an endpoint
+and one at Google's domain is refused, Google's store is built only where
+both `NODE_ENV` values say production, and the emulator is refused where
+either does. A bucket beside the shared folder is refused. The production start
 check allows Google's store, so a production start is now refused only for
 malware scanning and email, and `NODE_DEBUG`, which would write the token,
 is refused in production. A real production build was measured reading a

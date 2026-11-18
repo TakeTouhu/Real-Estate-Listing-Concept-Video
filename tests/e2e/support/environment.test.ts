@@ -60,6 +60,9 @@ describe("the browser test's environment", () => {
     // Next sets the mode itself (`next dev`); a production one is refused.
     expect(env).not.toHaveProperty("NODE_ENV");
     expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, NODE_ENV: "production" })).toThrow("never runs with NODE_ENV");
+    for (const name of ["GOOGLE_CLOUD_STORAGE_BUCKET", "GOOGLE_CLOUD_STORAGE_ENDPOINT"]) {
+      expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, [name]: "set" })).toThrow("keeps objects in its own folder");
+    }
     expect(() => e2eEnvironment({ DATABASE_URL: "postgresql://u:p@db.example.com/x" })).toThrow("on this machine");
     expect(() => e2eEnvironment({})).toThrow("needs DATABASE_URL");
   });

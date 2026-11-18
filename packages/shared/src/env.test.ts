@@ -119,10 +119,10 @@ describe("serverEnvSchema", () => {
       "beginning and ending with a letter or a digit";
     const NEEDS_EMULATOR =
       "GOOGLE_CLOUD_STORAGE_ENDPOINT must name an emulator when GOOGLE_CLOUD_STORAGE_BUCKET is set " +
-      "outside production, so that development never asks Google";
+      "outside production: only production uses Google's own store";
     const NOT_GOOGLE =
       "GOOGLE_CLOUD_STORAGE_ENDPOINT must name an emulator, not Google's own API domain: " +
-      "outside production nothing asks Google";
+      "only production uses Google's own store";
     const IN_PRODUCTION =
       "GOOGLE_CLOUD_STORAGE_ENDPOINT is for development and CI only; it must not be set in production";
     const NEEDS_BUCKET = "GOOGLE_CLOUD_STORAGE_BUCKET is required when GOOGLE_CLOUD_STORAGE_ENDPOINT is set";
@@ -169,7 +169,7 @@ describe("serverEnvSchema", () => {
       }
     });
 
-    it("refuses a bucket without an emulator outside production, so development never asks Google", () => {
+    it("refuses a bucket without an emulator outside production, where Google's own store is never used", () => {
       for (const NODE_ENV of ["development", "test"]) {
         expect(issuesOf({ NODE_ENV, GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET })).toEqual([
           `GOOGLE_CLOUD_STORAGE_ENDPOINT: ${NEEDS_EMULATOR}`,

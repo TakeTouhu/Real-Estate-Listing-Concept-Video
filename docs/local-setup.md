@@ -115,9 +115,10 @@ GOOGLE_CLOUD_STORAGE_ENDPOINT=http://127.0.0.1:4443
 
 Readiness then reads `adapter=gcs-emulator`. Outside production a bucket
 needs the endpoint, and an endpoint at Google's own domain is refused, so
-development never asks Google. The emulator keeps its objects in memory
-until it stops. The development pipeline does not read the emulator: run it
-with the folder.
+development never uses Google's own store or its token. The emulator keeps
+its objects in memory until it stops. The development pipeline does not read
+the emulator: run it with the folder, and so does the browser test, which
+refuses to start while either setting is in its environment.
 
 ## 3c. Sign up and verify your email address
 

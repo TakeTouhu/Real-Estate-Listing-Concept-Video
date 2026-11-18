@@ -119,7 +119,7 @@ export const serverEnvSchema = z
     // A Cloud Storage emulator's origin, in development and CI only
     // (ADR-0159): http(s), with no path, query or fragment, and not at
     // Google's API domain. Outside production a bucket requires it, so
-    // development never asks Google or a metadata server. Refused in
+    // development never uses Google's own store or its token. Refused in
     // production, and refused without a bucket.
     GOOGLE_CLOUD_STORAGE_ENDPOINT: z.string().url().optional(),
 
@@ -233,7 +233,7 @@ export const serverEnvSchema = z
         storageIssue(
           "ENDPOINT",
           "GOOGLE_CLOUD_STORAGE_ENDPOINT must name an emulator when GOOGLE_CLOUD_STORAGE_BUCKET is set " +
-            "outside production, so that development never asks Google",
+            "outside production: only production uses Google's own store",
         );
       }
     }
@@ -249,7 +249,7 @@ export const serverEnvSchema = z
         storageIssue(
           "ENDPOINT",
           "GOOGLE_CLOUD_STORAGE_ENDPOINT must name an emulator, not Google's own API domain: " +
-            "outside production nothing asks Google",
+            "only production uses Google's own store",
         );
       }
       if (bucket === undefined) {

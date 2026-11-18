@@ -60,7 +60,8 @@ export function createWebAdapters(env: ServerEnv): WebAdapters {
       if (bucket !== undefined && endpoint === undefined) {
         // Google's own store, with the process's token, is a production build's alone. The schema allows a
         // bucket with no endpoint only where the configured value says production, and the ambient value must
-        // too: neither vouches for the other (ADR-0150 Decision 2), so development never asks Google (ADR-0159).
+        // too: neither vouches for the other (ADR-0150 Decision 2), so development never asks Google's store
+        // (ADR-0159).
         if (env.NODE_ENV !== "production" || process.env.NODE_ENV !== "production") {
           throw new AppError("CONFIGURATION_ERROR", "Google's own Cloud Storage is used only by a production build");
         }

@@ -21,7 +21,7 @@ choices:
 
 | Variable | Rule |
 | --- | --- |
-| `GOOGLE_CLOUD_STORAGE_BUCKET` (new, optional) | named by Cloud Storage's rules; not beside `SHARED_STORAGE_DIR`; outside production, only with an endpoint |
+| `GOOGLE_CLOUD_STORAGE_BUCKET` (new, optional) | 3 to 63 lowercase letters, digits, `.`, `-` or `_`, beginning and ending with a letter or a digit; not beside `SHARED_STORAGE_DIR`; outside production, only with an endpoint |
 | `GOOGLE_CLOUD_STORAGE_ENDPOINT` (new, optional) | an `http` or `https` origin with no user, path, query or fragment; only with a bucket; refused in production; outside production, refused at `googleapis.com` or any name below it |
 | `NODE_DEBUG` (now read) | refused in production when not empty |
 
@@ -43,7 +43,7 @@ shared folder or memory is refused for object storage, as before.
 | Export | What it is |
 | --- | --- |
 | `GOOGLE_CLOUD_STORAGE_ORIGIN` | `https://storage.googleapis.com`, Google's store, the one origin the adapter sends a token to; moved from the adapter |
-| `isCloudStorageBucketName(name)` | whether `name` follows Cloud Storage's naming rule; the schema's and the adapter's |
+| `isCloudStorageBucketName(name)` | whether `name` is 3 to 63 lowercase letters, digits, `.`, `-` or `_`, beginning and ending with a letter or a digit: every Cloud Storage name of at most 63 characters, and a few Cloud Storage refuses (ADR-0156); the schema's and the adapter's |
 
 ### Changed: `apps/web`
 
