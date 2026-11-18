@@ -175,7 +175,55 @@ open.
 
 ## What was measured
 
-To be completed from `/mnt/project-files/cto/rd-3/rd-3d-measured.md`.
+- **The settings.** Bucket names that are and are not Cloud Storage's;
+  Google's API domain written six ways, refused outside production, and two
+  near names that are not it, allowed; an endpoint's refused forms; an
+  endpoint in production; a bucket with no endpoint outside production; a
+  bucket beside the folder; `NODE_DEBUG`'s values refused in production and
+  allowed elsewhere. Each refusal is one fixed line, and none names its
+  value.
+- **The choice and construction.** Each choice from its settings; the
+  emulator built once, and refused by either `NODE_ENV`; Google's origin
+  refused as an emulator, as is an address that does not parse; Google's
+  store built only where both values say production; the emulator asked at
+  a stand-in on this machine with no `authorization` header; storage
+  reached only through `getWebAdapters()`. The start check: `gcs` alone
+  allowed, and a production start that sets `NODE_DEBUG` ended with the
+  schema's line. The web app's emulator suite stores, reads and deletes
+  through the adapters its settings choose.
+- **Mutation.** 58 mutants of the new code were run against these tests and
+  the emulator suites; 52 failed them at first. Of the six left, tests now
+  catch five: an uppercase letter inside or at the end of a bucket's name, a
+  domain test without its dot, the folder chosen before the bucket, and an
+  address that does not parse. The sixth, the endpoint's fallback in the
+  branch that has none, changes nothing.
+- **A production build**, offline: built with no warning; the start hook's
+  chunk holds no gaxios, no node-fetch and no Google name; the adapter's
+  chunk reads a timeout by `type`.
+- **Checked production starts** of that build, each ended with exit code 1:
+  a bucket alone, only for malware scanning and email; with an endpoint,
+  for the endpoint; configured for development, for the mismatch and the
+  emulator; with `NODE_DEBUG` naming `https` or `*`, for `NODE_DEBUG`, with
+  no debug line and no `Bearer` written; beside the folder, for both.
+- **Rounds in the namespace**, the start hook skipped by
+  `NEXT_PHASE=phase-production-build` and no code changed. Everything
+  answering: readiness read `adapter=gcs, answers`, and the metadata server
+  was asked once, with `Metadata-Flavor: Google`. With
+  `NODE_USE_ENV_PROXY=1` and the proxy variables naming a recording proxy,
+  it saw nothing. A store that accepts and never answers: `STORAGE_TIMEOUT`
+  9 times in 9, at 3.005 to 3.051 seconds. A silent metadata server:
+  `STORAGE_CREDENTIAL_UNAVAILABLE` 6 times in 6, and nothing sent to the
+  store. The same build with only the `type === "aborted"` reading changed:
+  `STORAGE_UNREACHABLE` 6 times in 6. In a lab copy whose scanner let
+  everything through, a 3 MiB object went up and came down through the
+  signed routes byte for byte, three times.
+- **`next dev` with the emulator**: readiness read
+  `adapter=gcs-emulator, answers`, and listeners on Google's two names were
+  asked nothing.
+
+The build, the starts and the rounds ran on the commit that wires the
+adapter in; the later commits of this change touch tests and documents
+alone. Records: `/mnt/project-files/cto/rd-3/rd-3d-measured.md`.
 
 ## What cannot be shown here
 

@@ -83,6 +83,9 @@ describe("the web app's Cloud Storage (ADR-0159)", () => {
     const google = serverEnvSchema.parse({ ...base, NODE_ENV: "production", ...bucket });
     expect(chooseWebAdapters(google).storage).toBe("gcs");
     expect(chooseWebAdapters(serverEnvSchema.parse({ ...base, ...emulator })).storage).toBe("gcs-emulator");
+    // The schema refuses a bucket beside the folder; made without it, the choice names what is built.
+    const both = { ...serverEnvSchema.parse({ ...base, ...emulator }), SHARED_STORAGE_DIR: dir };
+    expect(chooseWebAdapters(both).storage).toBe("gcs-emulator");
   });
 
   it("builds an emulator outside production, once, asking nothing as it is built", () => {
@@ -107,6 +110,11 @@ describe("the web app's Cloud Storage (ADR-0159)", () => {
     const google = { ...env, GOOGLE_CLOUD_STORAGE_ENDPOINT: "https://STORAGE.googleapis.com:443/" };
     expect(configurationError(() => createWebAdapters(google).storage())).toBe(
       "CONFIGURATION_ERROR: A Cloud Storage emulator cannot be Google's own store",
+    );
+    // An address that does not parse is the adapter's to refuse, by a code: Node's own error would carry it.
+    const unparsed = { ...env, GOOGLE_CLOUD_STORAGE_ENDPOINT: "http://" };
+    expect(configurationError(() => createWebAdapters(unparsed).storage())).toBe(
+      "CONFIGURATION_ERROR: The storage endpoint must be an http or https origin",
     );
   });
 

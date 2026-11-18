@@ -160,9 +160,10 @@ describe("serverEnvSchema", () => {
         expect(isCloudStorageBucketName(good)).toBe(true);
         expect(issuesOf({ NODE_ENV: "production", GOOGLE_CLOUD_STORAGE_BUCKET: good })).toEqual([]);
       }
-      for (const bad of ["", "ab", "a".repeat(64), "Bucket", "-abc", "abc-", "a/b", "a b", "abc%2F", "abc\n"]) {
-        expect(isCloudStorageBucketName(bad)).toBe(false);
-        expect(issuesOf({ NODE_ENV: "production", GOOGLE_CLOUD_STORAGE_BUCKET: bad })).toEqual([
+      const bad = ["", "ab", "a".repeat(64), "Bucket", "aBc", "abC", "-abc", "abc-", "a/b", "a b", "abc%2F", "abc\n"];
+      for (const name of bad) {
+        expect(isCloudStorageBucketName(name)).toBe(false);
+        expect(issuesOf({ NODE_ENV: "production", GOOGLE_CLOUD_STORAGE_BUCKET: name })).toEqual([
           `GOOGLE_CLOUD_STORAGE_BUCKET: ${NAMING}`,
         ]);
       }
@@ -190,8 +191,9 @@ describe("serverEnvSchema", () => {
           `GOOGLE_CLOUD_STORAGE_ENDPOINT: ${NOT_GOOGLE}`,
         ]);
       }
-      const near = "https://storage.googleapis.com.example.test";
-      expect(issuesOf({ GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET, GOOGLE_CLOUD_STORAGE_ENDPOINT: near })).toEqual([]);
+      for (const near of ["https://storage.googleapis.com.example.test", "http://notgoogleapis.com"]) {
+        expect(issuesOf({ GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET, GOOGLE_CLOUD_STORAGE_ENDPOINT: near })).toEqual([]);
+      }
     });
 
     it("refuses an endpoint in production, Google's own included", () => {
