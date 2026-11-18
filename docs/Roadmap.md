@@ -1081,6 +1081,15 @@ adds a storage adapter production may use. RD-2 is now in five parts:
 RD-2e is to decide where an address the web app's own database client
 cannot read is refused.
 
+**RD-2e — readiness asks the web app's own client to connect** (ADR-0155,
+no migration): once the database has answered the probe's own client, the
+readiness probe asks the web app's own client to connect, so an address
+that client cannot read (`P1012`, `P1013`) reads `503` with the code in the
+log, where it read `ready`. It is asked last and never beside the probe's
+client, and no deadline is set: its first connection waits by its own
+settings. The start check does not refuse such an address. RD-2 is complete
+in five parts for the web app.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

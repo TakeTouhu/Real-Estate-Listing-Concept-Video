@@ -1,4 +1,4 @@
-import { getReadinessPrismaClient } from "@app/database";
+import { getPrismaClient, getReadinessPrismaClient } from "@app/database";
 import { createLogger, type Logger } from "@app/observability";
 import { createVideoProvider } from "@app/video-providers";
 import { getWebAdapters } from "./adapters";
@@ -14,7 +14,11 @@ export const READINESS_STORAGE_KEY = "readiness/probe";
  * open and a query to be answered; it waits one second more for its one
  * connection. They are settings of the client's own: Prisma's engine keeps
  * the deadlines that end the probe when a database says nothing, and none is
- * set here (ADR-0153 Decision 1).
+ * set here (ADR-0153 Decision 1). The first connection of the web app's own
+ * client, which the probe asks for last, is ended by that client's settings
+ * alone and not by these seconds, and those settings set no end when its
+ * address sets both `connect_timeout=0` and `pool_timeout=0` (ADR-0155
+ * Decision 3).
  */
 export const READINESS_DATABASE_LIMIT_SECONDS = 3;
 
@@ -35,9 +39,10 @@ export function probeFailureCode(error: unknown): string {
 
 /**
  * Readiness of the running web app, from its configured environment, provider,
- * database and storage (ADR-0152, ADR-0153) and from what the start check
- * refuses (ADR-0154). Kept apart from `health.ts`, so the liveness route
- * loads none of them.
+ * database and storage (ADR-0152, ADR-0153), from whether its own database
+ * client connects (ADR-0155) and from what the start check refuses
+ * (ADR-0154). Kept apart from `health.ts`, so the liveness route loads none
+ * of them.
  */
 export async function buildReadiness(): Promise<Readiness> {
   const env = getServerEnv();
@@ -61,6 +66,12 @@ export async function buildReadiness(): Promise<Readiness> {
       // it is asked to connect, which does nothing once it has.
       await client.$connect();
       await client.$queryRaw`SELECT 1`;
+      // The probe's client is given the address put together again, which puts right some that Prisma refuses
+      // as written; the web app's own client reads it as written, and says so (`P1012`, `P1013`) only when it
+      // is asked to connect (ADR-0155 Decision 1). Asked last, and never beside the probe's client: a database
+      // that says nothing has ended the probe above by the probe's own limits, and the process's first
+      // connection is over before this line can make the web app's client (Decision 2).
+      await getPrismaClient().$connect();
     },
     // Building the adapter is part of the question: one that refuses to be built does not answer.
     storage: async () => {

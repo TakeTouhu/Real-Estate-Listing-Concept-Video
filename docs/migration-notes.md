@@ -2697,3 +2697,39 @@ finds five.
 
 **Rolling back.** To RD-2c's build: safe. Readiness answers with four
 checks again.
+
+## RD-2e — readiness asks the web app's own client to connect
+
+**No migration** (ADR-0155). Migration 34 stays the last.
+
+**What changes at deploy.** `GET /api/health/ready` answers `503`, and the
+server logs `P1012` or `P1013` for the `database` probe, with a
+`DATABASE_URL` that the web app's own client cannot read: one that does not
+begin with `postgresql://` or `postgres://` exactly as written, or whose
+own value for `connection_limit`, `connect_timeout`, `socket_timeout` or
+`pool_timeout` Prisma cannot read. RD-2c's note above says readiness reads
+`ready` with such an address; from this build it does not. Correct the
+address and restart: a process keeps the address it first read. `503`
+follows too, where readiness read `ready`, when the database answers the
+probe's client and refuses or does not answer the web app's own first
+connection (`P1001`, `P2024`, `P2037`, `P1000`). `P1012` with an address
+that is right as written: restart the process (ADR-0155 Decision 5).
+
+The web app's own client now opens its first connection when readiness is
+first asked and the database answers, where a request opened it before: a
+process that has only been asked for readiness holds two connections, not
+one. That step waits by the web app's own client's settings, 5 seconds by
+Prisma's defaults, so RD-2c's "at the very most a probe takes 10 seconds"
+is 15 by those defaults. Do not set both `connect_timeout=0` and
+`pool_timeout=0` in the address: a first connection that is never answered
+then leaves readiness waiting without end, as it leaves the app's own
+requests. Do not set `socket_timeout=0` either: with it the web app's
+queries were measured to fail now and then, and readiness does not see
+that (`docs/decisions/TODO.md`).
+
+**On a development machine.** Nothing to do. A `DATABASE_URL` written with
+a space before it now reads `degraded`, where it read `ready` while every
+request that used the database failed.
+
+**Rolling back.** To RD-2d's build: safe. Readiness again reads `ready`
+with an address the web app's own client cannot read.
