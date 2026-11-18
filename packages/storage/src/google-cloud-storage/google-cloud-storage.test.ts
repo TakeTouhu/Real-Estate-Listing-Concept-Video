@@ -1227,6 +1227,7 @@ describe("the worker's view (ADR-0160)", () => {
   };
   const put = (client: GoogleCloudStorageObjectClient, localPath: string) =>
     client.putObjectIfAbsent({ ...target(MASTER), localPath, contentType: "video/mp4" });
+  const sha256Of = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
   /** Every byte a body holds, read to its end. */
   async function drained(body: S3ObjectBody): Promise<Uint8Array> {
@@ -1373,7 +1374,8 @@ describe("the worker's view (ADR-0160)", () => {
       const store = await standIn(() => ({ status: 200, body: "{}" }));
       expect(await put(clientAt(store.origin), await file(data))).toEqual({ kind: "CREATED" });
       expect(store.seen[0]!.headers["x-goog-hash"]).toBe(`md5=${createHash("md5").update(data).digest("base64")}`);
-      expect(store.seen[0]!.body).toEqual(data);
+      // By digest: element-wise equality over a mebibyte takes seconds and says no more.
+      expect(sha256Of(store.seen[0]!.body)).toBe(sha256Of(data));
     }
   });
 
@@ -1398,7 +1400,7 @@ describe("the worker's view (ADR-0160)", () => {
       return send.call(this, options);
     });
     expect(await put(clientAt(store.origin), longer)).toEqual({ kind: "CREATED" });
-    expect(store.seen[0]!.body).toEqual(data);
+    expect(sha256Of(store.seen[0]!.body)).toBe(sha256Of(data));
     // An empty file written to before it is sent is still sent as no bytes.
     const empty = await file(new Uint8Array(0));
     requests.mockImplementationOnce(async function (this: Gaxios, options) {
