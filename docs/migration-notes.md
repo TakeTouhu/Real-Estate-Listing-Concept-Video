@@ -2755,3 +2755,21 @@ the emulator and name it (`docs/local-setup.md`, *Cloud Storage emulator
 tests*).
 
 **Rolling back.** To RD-2e's build: safe. Nothing used the adapter.
+
+## RD-3b — the Google Cloud Storage adapter's streamed read
+
+**No migration** (ADR-0157). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing: no application constructs the adapter,
+and no setting or package is added.
+
+**For the first deployment that uses it** (RD-3c onward): a read needs
+`storage.objects.get`, and `storage.objects.list` after a `404`, which
+RD-3a's list already needs. Each read is two requests against the bucket.
+What Google answers for a generation overwritten between them, and for an
+answer cut while it streams, are checks for that deployment
+(`docs/decisions/TODO.md`).
+
+**On a development machine.** Nothing to do.
+
+**Rolling back.** To RD-3a's build: safe. Nothing used the adapter.

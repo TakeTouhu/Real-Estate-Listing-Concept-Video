@@ -36,9 +36,9 @@ reported as skipped. CI runs them in the `media` job on Ubuntu 24.04.
 
 ## `tests/storage/*.gcs.test.ts`
 
-Suites that speak to the Cloud Storage emulator (ADR-0156): the Google Cloud
-Storage adapter storing, reading and deleting objects in a bucket of each
-test's own. They are **excluded** from `pnpm test` and run explicitly, with
+Suites that speak to the Cloud Storage emulator (ADR-0156, ADR-0157): the
+Google Cloud Storage adapter storing, reading, streaming and deleting objects
+in a bucket of each test's own. They are **excluded** from `pnpm test` and run explicitly, with
 the emulator running and named:
 
 ```bash
