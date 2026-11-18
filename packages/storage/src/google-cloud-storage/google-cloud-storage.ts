@@ -11,6 +11,8 @@ import {
 } from "@app/domain";
 import { AppError } from "@app/shared";
 import { signedStorageUrl, type SignedPurpose } from "../signing";
+import { METADATA_SERVER_ORIGIN, metadataAccessToken } from "./access-token";
+import { googleCloudStorageClient } from "./client";
 
 /**
  * Object storage in one Google Cloud Storage bucket, spoken to over the Cloud
@@ -32,12 +34,17 @@ import { signedStorageUrl, type SignedPurpose } from "../signing";
  * - **A streamed read reads one generation.** It asks the object's size and
  *   generation, then that generation's bytes alone, as the caller pulls them
  *   (ADR-0157).
+ * - **A token goes to Google alone.** Google's own store is sent the token of
+ *   the service account the process runs as, from the metadata server; any
+ *   other store, such as the emulator the tests use, is sent none (ADR-0158).
+ * - **Every request goes straight to its origin**, on connections of the
+ *   adapter's own, never through a proxy (ADR-0158).
  *
- * Nothing constructs it yet: the change that wires it does (RD-3c).
- *
- * It sends no credential: as written it can speak only to a store that asks
- * for none, such as the emulator the tests use.
+ * Nothing constructs it yet: the change that wires it does (RD-3d).
  */
+
+/** The one origin a token is sent to: Google's own store (ADR-0158 Decision 2). */
+const GOOGLE_CLOUD_STORAGE_ORIGIN = "https://storage.googleapis.com";
 
 /**
  * The milliseconds a question that moves no object's bytes is given to be
@@ -85,6 +92,8 @@ export interface GoogleCloudStorageOptions {
  * A request the store did not answer as asked. The message is the code:
  *
  * - `STORAGE_TIMEOUT`: a question was not answered within its limit;
+ * - `STORAGE_CREDENTIAL_UNAVAILABLE`: no token could be had for Google's
+ *   store, and nothing was sent to it;
  * - `STORAGE_FORBIDDEN`: `401` or `403`;
  * - `STORAGE_RATE_LIMITED`: `429`;
  * - `STORAGE_UNAVAILABLE`: a `5xx`;
@@ -119,9 +128,20 @@ function transportCode(error: unknown): string {
   try {
     let current: unknown = error;
     for (let depth = 0; depth < 4 && typeof current === "object" && current !== null; depth += 1) {
-      const { name, code } = current as { readonly name?: unknown; readonly code?: unknown };
-      // node-fetch ends an aborted request with an `AbortError`; only a limit aborts one here.
-      if (name === "AbortError" || name === "TimeoutError" || code === "AbortError" || code === "TimeoutError") {
+      const { name, code, type } = current as {
+        readonly name?: unknown;
+        readonly code?: unknown;
+        readonly type?: unknown;
+      };
+      // node-fetch ends an aborted request with an `AbortError` of type `aborted`; only a limit aborts one
+      // here. A production build renames the class, so its type is read too (ADR-0158 Decision 7).
+      if (
+        name === "AbortError" ||
+        name === "TimeoutError" ||
+        code === "AbortError" ||
+        code === "TimeoutError" ||
+        type === "aborted"
+      ) {
         return "STORAGE_TIMEOUT";
       }
       if (typeof code === "string" && TRANSPORT_CODE.test(code)) return code;
@@ -333,13 +353,26 @@ export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): Ob
   const secret = options.secret;
 
   // Every status is read here, nothing is asked twice, and a redirect is a refusal, never followed.
-  const http = new Gaxios({ retry: false, validateStatus: () => true, redirect: "manual" });
+  const http = googleCloudStorageClient();
+  const credential =
+    origin === GOOGLE_CLOUD_STORAGE_ORIGIN ? metadataAccessToken(http, METADATA_SERVER_ORIGIN, now) : null;
   const ask = async (request: GaxiosOptions): Promise<GaxiosResponse<unknown>> => {
+    // Had before the request, outside its `try`: a missing token is its own failure.
+    const token = credential === null ? undefined : await credential.get();
+    if (token === null) throw new GoogleCloudStorageError("STORAGE_CREDENTIAL_UNAVAILABLE");
+    const sent =
+      token === undefined
+        ? request
+        : { ...request, headers: Gaxios.mergeHeaders(request.headers, { authorization: `Bearer ${token}` }) };
+    let response: GaxiosResponse<unknown>;
     try {
-      return await http.request<unknown>(request);
+      response = await http.request<unknown>(sent);
     } catch (error) {
       throw new GoogleCloudStorageError(transportCode(error));
     }
+    // A token the store no longer takes is let go, so the next request has another; this one is not asked again.
+    if (token !== undefined && response.status === 401) credential?.drop(token);
+    return response;
   };
 
   // A defect in the caller, never a customer's doing: every key is built by the

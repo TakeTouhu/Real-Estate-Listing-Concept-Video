@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { globalAgent } from "node:http";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { managedCleanMasterKey, managedDeliverableOutputKey, type ObjectRead, type ObjectStorage } from "@app/domain";
 import { AppError } from "@app/shared";
@@ -9,11 +8,12 @@ import {
   GoogleCloudStorageError,
   createGoogleCloudStorage,
 } from "@app/storage/google-cloud-storage";
+import { googleCloudStorageAgents } from "../../packages/storage/src/google-cloud-storage/client";
 import { createEmulatorBucket, emulatorEndpoint, emulatorObjectNames } from "./emulator";
 
 /**
  * The Google Cloud Storage adapter against the Cloud Storage emulator
- * (ADR-0156, ADR-0157): the web app's view of the port, as the shared folder's
+ * (ADR-0156, ADR-0157, ADR-0158): the web app's view of the port, as the shared folder's
  * tests hold it. The emulator proves the adapter's logic only: it has no
  * permissions, so what Google answers a caller that may not read or list is
  * not seen here, and it cannot be made to fail partway through an answer, which
@@ -32,9 +32,9 @@ let bucket: string;
 
 beforeAll(() => {
   endpoint = emulatorEndpoint();
-  // The adapter's client honours the proxy variables (ADR-0156 Decision 1); the
-  // emulator is on this machine, so none may send the suite's requests elsewhere.
-  for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) vi.stubEnv(name, "");
+  // A proxy that is not there: the adapter's requests go straight to the emulator, never through one (ADR-0158).
+  for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) vi.stubEnv(name, "http://127.0.0.1:9");
+  for (const name of ["NO_PROXY", "no_proxy"]) vi.stubEnv(name, "");
 });
 
 afterAll(() => {
@@ -200,8 +200,9 @@ function joined(chunks: Uint8Array[]): Uint8Array {
   return new Uint8Array(Buffer.concat(chunks));
 }
 
-/** Connections the adapter's client is using now; one left idle for the next request holds nothing. */
-const inUse = (): number => Object.values(globalAgent.sockets).reduce((count, list) => count + (list?.length ?? 0), 0);
+/** Connections the adapter is using now, on its own agent; one left idle for the next request holds nothing. */
+const inUse = (): number =>
+  Object.values(googleCloudStorageAgents.http.sockets).reduce((count, list) => count + (list?.length ?? 0), 0);
 
 describe("the web app's streamed read, in Cloud Storage (ADR-0157)", () => {
   const VIDEO = managedDeliverableOutputKey({ organizationId: "org_1", deliverableVersionId: "gdv_1" });

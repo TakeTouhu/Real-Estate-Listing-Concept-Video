@@ -2742,7 +2742,7 @@ with an address the web app's own client cannot read.
 adapter, and no setting is read. `@app/storage` depends on gaxios 7.3.1, so
 an install adds ten packages.
 
-**For the first deployment that uses it** (RD-3c onward): the account the
+**For the first deployment that uses it** (RD-3d onward): the account the
 web app runs as needs `storage.objects.get`, `storage.objects.create`,
 `storage.objects.delete` and `storage.objects.list` on the one bucket. The
 list permission is how the adapter tells a missing object from a missing
@@ -2763,7 +2763,7 @@ tests*).
 **What changes at deploy.** Nothing: no application constructs the adapter,
 and no setting or package is added.
 
-**For the first deployment that uses it** (RD-3c onward): a read needs
+**For the first deployment that uses it** (RD-3d onward): a read needs
 `storage.objects.get`, and `storage.objects.list` after a `404`, which
 RD-3a's list already needs. A read that finds its object is two requests
 against the bucket, the size and the bytes, and three when the bytes'
@@ -2776,3 +2776,24 @@ while it streams, are checks for that deployment (`docs/decisions/TODO.md`).
 **On a development machine.** Nothing to do.
 
 **Rolling back.** To RD-3a's build: safe. Nothing used the adapter.
+
+## RD-3c — the Google Cloud Storage adapter's credential
+
+**No migration** (ADR-0158). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing: no application constructs the adapter,
+and no setting or package is added.
+
+**For the first deployment that uses it** (RD-3d onward): the service account
+the web app runs as is its identity, through the metadata server; no key
+file and no variable names it. Its token's scopes must allow Cloud Storage
+(`devstorage.read_write` or `cloud-platform`). The adapter sends its
+requests through no proxy, whatever the environment names, so the service
+must reach `storage.googleapis.com` and `metadata.google.internal` directly.
+What Google answers a token that has ended, and whether one that ends during
+a long upload or read cuts it, are checks for that deployment
+(`docs/decisions/TODO.md`).
+
+**On a development machine.** Nothing to do.
+
+**Rolling back.** To RD-3b's build: safe. Nothing used the adapter.
