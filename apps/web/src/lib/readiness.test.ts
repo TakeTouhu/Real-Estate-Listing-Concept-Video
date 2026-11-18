@@ -247,7 +247,8 @@ describe("buildReadiness", () => {
       const lines = logged();
       queryRaw.mockResolvedValue([{ "?column?": 1 }]);
       exists.mockResolvedValue(false);
-      // As Prisma words them: the first names the schema's line, the second can repeat a part of the address.
+      // Not Prisma's words, which carry no part of the address: a host, a user and a password are put in, so
+      // that the test shows nothing of a message reaches the log.
       const said =
         "error: Error validating datasource `db`: the URL must start with the protocol `postgresql://`.\n" +
         '  -->  schema.prisma:11\n   |\n11 |   url      = env("DATABASE_URL")\n' +

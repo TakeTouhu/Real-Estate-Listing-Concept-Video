@@ -1743,6 +1743,16 @@ into on 2026-11-17.
       address as Prisma does, which ADR-0155 Decision 4 did not write. It
       belongs with the limits of the deployment's own address, in part 2
       of the production readiness plan.
+- [ ] **Keep a `.env` out of where the database client is generated.**
+      Read in Prisma 5.22.0's source, not measured: if `prisma generate`
+      runs where a `.env` exists (the repository's root,
+      `packages/database` or `packages/database/prisma`), the client
+      records its path and loads it into the environment when the first
+      client is made, after the environment check and the start check
+      have run without it; it sets only names the environment lacks. The
+      repository holds `.env.example` only, and the client generated here
+      records no path. RD-10, which builds the container image, is to
+      build it from a tree with none of those files.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 

@@ -16,7 +16,9 @@ export const READINESS_STORAGE_KEY = "readiness/probe";
  * the deadlines that end the probe when a database says nothing, and none is
  * set here (ADR-0153 Decision 1). The first connection of the web app's own
  * client, which the probe asks for last, is ended by that client's settings
- * and not by these seconds (ADR-0155 Decision 3).
+ * alone and not by these seconds, and those settings set no end when its
+ * address sets both `connect_timeout=0` and `pool_timeout=0` (ADR-0155
+ * Decision 3).
  */
 export const READINESS_DATABASE_LIMIT_SECONDS = 3;
 

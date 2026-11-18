@@ -17,7 +17,11 @@ the web app's own client cannot read now reads `degraded` and `503`, where
 it read `ready` and `200`: one that does not begin with `postgresql://` or
 `postgres://` exactly as written, and one whose own value for
 `connection_limit`, `connect_timeout`, `socket_timeout` or `pool_timeout`
-Prisma cannot read.
+Prisma cannot read. It reads `degraded` too, where it read `ready`, when
+the database answers the probe's client and refuses or does not answer the
+first connection of the web app's own (`P1001`, `P2024`, `P2037`, for
+example), and when that client was built from a damaged copy of the
+environment (`P1012`, ADR-0155 Decision 5).
 
 The answer's shape, the five checks' names and words, and the route's
 status codes are unchanged. `GET /api/health` is unchanged.
@@ -37,7 +41,7 @@ could not connect.
 | `code` | Read as |
 | --- | --- |
 | `P1012`, `P1013` | Prisma cannot read an address: correct `DATABASE_URL` and restart. `P1012` with an address that is right as written: restart the process (ADR-0155 Decision 5) |
-| `P1001`, `P2024`, `P2010` | the database did not answer in time |
+| `P1001`, `P2024`, `P2010` | the database could not be reached, or did not answer in time |
 | `P1000`, `P1003`, `P1010`, `P2037` | the database refused the connection |
 
 ## Internal API

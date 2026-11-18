@@ -2709,7 +2709,11 @@ begin with `postgresql://` or `postgres://` exactly as written, or whose
 own value for `connection_limit`, `connect_timeout`, `socket_timeout` or
 `pool_timeout` Prisma cannot read. RD-2c's note above says readiness reads
 `ready` with such an address; from this build it does not. Correct the
-address and restart: a process keeps the address it first read.
+address and restart: a process keeps the address it first read. `503`
+follows too, where readiness read `ready`, when the database answers the
+probe's client and refuses or does not answer the web app's own first
+connection (`P1001`, `P2024`, `P2037`, `P1000`). `P1012` with an address
+that is right as written: restart the process (ADR-0155 Decision 5).
 
 The web app's own client now opens its first connection when readiness is
 first asked and the database answers, where a request opened it before: a
@@ -2724,7 +2728,8 @@ queries were measured to fail now and then, and readiness does not see
 that (`docs/decisions/TODO.md`).
 
 **On a development machine.** Nothing to do. A `DATABASE_URL` written with
-a space before it now reads `degraded`, where sign-in alone failed.
+a space before it now reads `degraded`, where it read `ready` while every
+request that used the database failed.
 
 **Rolling back.** To RD-2d's build: safe. Readiness again reads `ready`
 with an address the web app's own client cannot read.

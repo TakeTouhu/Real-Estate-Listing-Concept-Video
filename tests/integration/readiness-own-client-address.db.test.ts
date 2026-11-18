@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPrismaClient, limitedDatabaseUrl } from "@app/database";
 import { probeFailureCode } from "@/lib/readiness";
 
-/** The suite's database, read once. No test here prints it: each compares a code, or a row of numbers. */
+/** The suite's database, read once. No test here prints it: each compares codes, or a yes or no. */
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 
 /** The code the readiness probe would log for a question, or nothing when it was answered. */

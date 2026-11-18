@@ -32,12 +32,13 @@ address, 35 were answered through the limited address and not as written.
 | `socket_timeout=0` | 1 | connects; its queries then fail now and then |
 
 The environment check passes each of the 35 (`z.string().url()`). A client
-that reads `DATABASE_URL` and one given the same string answered alike in
-all 223 rows, and no kind was found that is answered as written and not as
-limited. A refusal took 9 to 22 ms the first time and under 3 ms after.
-A query on such a client is refused with no code at all: only being asked
-to connect names `P1012` or `P1013`. Such a client is refused for the life
-of the process, also once the variable has been put right.
+that reads `DATABASE_URL` and one given the same string connected or were
+refused alike, with the same code, in all 223 rows, and no kind was found
+that is answered as written and not as limited. A refusal took 9 to 22 ms
+the first time and under 3 ms after. A query on such a client is refused
+with no code at all: only being asked to connect names `P1012` or `P1013`.
+Such a client is refused for the life of the process, also once the
+variable has been put right.
 
 ## Decision 1 — The database probe asks the web app's own client to connect
 
@@ -58,7 +59,7 @@ and left: for these addresses the code says what to do.
 | Code in the log | Read as |
 | --- | --- |
 | `P1012`, `P1013` | Prisma cannot read an address. The probe's client refuses some too (`mysql://`, `pgbouncer=maybe`). Correct `DATABASE_URL` and restart. `P1012` with an address that is right as written: see Decision 5 |
-| `P1001`, `P2024`, `P2010` | the database did not answer in time, the probe's client or, at its first connection, the web app's own (Decision 3) |
+| `P1001`, `P2024`, `P2010` | the database could not be reached, or did not answer in time: the probe's client or, at its first connection, the web app's own (Decision 3) |
 | `P1000`, `P1003`, `P1010`, `P2037` | the database refused the connection: sign-in, no such database, access, too many connections |
 
 The probe asks to connect and sends no query through the web app's own
@@ -80,9 +81,11 @@ connected and been answered, and not at all when it has not.
   environment, or the process can die (`docs/decisions/TODO.md`, "Found
   after RD-2d"). Both names were there once the probe's client had
   connected, in each of 50,990 rounds that looked. Measured in fresh
-  processes with neither name set at start: this order, 0 faulty in 9,000;
-  both clients made one after the other and the first connected at once,
-  21 in 9,000; the two asked to connect together, 10 in 3,000.
+  processes with neither name set at start: this order, 0 faulty in 6,000
+  rounds that looked for a damaged copy, and no death in 3,000 that did
+  not; both clients made one after the other and the first connected at
+  once, 21 in 9,000 that looked, and 2 deaths in 3,000 that did not; the
+  two asked to connect together, 10 in 3,000 that looked.
 
 The change neither adds to that fault nor cures it. A first request of
 another kind that makes the web app's own client within about 20 ms of the
@@ -95,13 +98,18 @@ own processes stays RD-10's.
 Once the web app's own client has connected, asking it again returns at
 once and asks the database nothing: in 0.1 ms or less, also with every
 connection cut. Until then, each time it is asked it tries to open one
-connection, by its own settings. No deadline is written in the repository's
-code (ADR-0153 Decision 1), and the probe's 3 and 4 seconds do not limit
-this step.
+connection, by its own settings, and those that ask while it tries share
+that one attempt and end with it: five readiness requests at once on the
+development server left one connection for each client, and five asked at
+once of a bare client given no answer all ended with the one attempt's
+`P1001` after 5 s. No deadline is written in the repository's code
+(ADR-0153 Decision 1), and the probe's 3 and 4 seconds do not limit this
+step.
 
 It is reached only when the database has just answered the probe's client.
-Measured against a database that answered the probe's client and accepted a
-new connection without answering it:
+Measured on bare clients, in an imitation of the probe, against a database
+that answered the probe's client and accepted a new connection without
+answering it:
 
 | The address sets | The step ends with | After |
 | --- | --- | --- |
@@ -109,13 +117,15 @@ new connection without answering it:
 | `connect_timeout=0` | `P2024` | 10.0 s |
 | `connect_timeout=0` and `pool_timeout=0` | nothing | not ended at 40 s |
 
-With both set to zero that readiness request did not end, and a later one
-was still waiting 15 s after the database answered new connections again.
-The same process's own first query waited in the same way without this
-change, while readiness read `ready`. ADR-0153's measured cases are
-unchanged: in each the probe's client fails first. Its sentence that a
-probe "could take 10" seconds no longer gives the most: by Prisma's
-defaults it is 15.
+With both set to zero the imitated probe had not ended at 40 s, and a
+later one was still waiting 15 s after the database answered new
+connections again; an imitation of the probe without this change read
+`ready` meanwhile. Without the change the same process's own first query
+waited in the same way, while readiness read `ready`. The development
+server was measured with the first two rows' settings (What was measured).
+ADR-0153's measured cases are unchanged: in each the probe's client fails
+first. Its sentence that a probe "could take 10" seconds no longer gives
+the most: by Prisma's defaults it is 15.
 
 ## Decision 4 — Not at start, and no rule of Prisma's is copied
 
@@ -123,8 +133,9 @@ The start check does not refuse such an address. The start hook loads no
 database code (ADR-0151 Decision 5), `webStartProblems` must not throw, and
 a rule written here would have to copy how Prisma reads an address. For
 the four settings alone that is, as measured: the last of several values
-counts, names are matched by case, a value is decoded as a form's is, and a
-blank, a minus, an empty value and a number past 64 bits are refused.
+counts, names are matched by case, a value is decoded as a form's is, a
+plus before the number is read and a minus is not, and a blank, an empty
+value and a number past 64 bits are refused.
 Samples could hold such a copy to one Prisma, and it would not see an own
 client built from a damaged copy of the environment (Decision 5). Asking
 the client itself sees both, with whatever Prisma is installed.
@@ -148,11 +159,13 @@ and closes the first kind only.
   readiness request until it is restarted with the address corrected.
   Readiness ends no process (ADR-0154 Decision 2).
 - A client of the web app's own kind built from a damaged copy of the
-  environment was seen, in one round of the measurements above, to be
-  refused with `P1012` again and again while the probe's client was
-  answered. Such a server read `ready`. Its own client's refusal now makes
-  it read `503` with `P1012`, though its address is right as written; a
-  restart gives it a new client. No server was seen in that state.
+  environment was seen, in one round of the measurements above (an
+  imitation, not a server), to be refused again and again while the
+  probe's client was answered. Its refusals there were queries, which name
+  no code; asked to connect, a client made without `DATABASE_URL` names
+  `P1012`. Without this change such a server would read `ready`; with it,
+  it reads `503` with `P1012`, though its address is right as written,
+  and a restart gives it a new client. No server was seen in that state.
 
 ## What was measured
 
@@ -170,7 +183,7 @@ also compiles the route, so its time is not compared.
 | the protocol in capitals, a space before it, `pool_timeout=10s`, `connection_limit=abc` | `200`, nothing logged; a sign-in answered `Sign in failed` | `503` at each request, `P1012`, `P1012`, `P1013` and `P1013` logged; the sign-in as on the base |
 | a sign-in first, then readiness | `200` | `200` |
 | five readiness requests at once, first in the process | `200` each | `200` each |
-| the database stopped (`SIGSTOP`) before readiness is first asked, then let go | `503` by `P1001`, the second in 3.0 s; then `200` | the same |
+| the database stopped (`SIGSTOP`) before readiness is first asked, then let go | `503` by `P1001`, the second in 3.0 to 3.1 s; then `200` | the same |
 | the database stopped once ready, then let go | `503` by `P2010` in 3.0 to 3.1 s; then `200` | the same |
 | the database answers the probe's connection and says nothing to a new one, then answers again | `200` | `503` by `P1001`, the second request in 5.0 to 5.1 s; then `200` |
 | the same, with `connect_timeout=0` | `200` | `503` by `P2024`, the second in 10.0 to 10.1 s; then `200` |
@@ -191,9 +204,14 @@ each is answered.
   import), its test, a new test in the database suite, and comments in
   `apps/web/src/lib/health.ts`, `packages/database/src/client.ts` and the
   browser test.
-- `GET /api/health/ready` answers `503` where it answered `200` for an
-  address of the first two kinds, and logs the code. Nothing else of the
-  answer changes. No page, permission, migration or audit action changes.
+- `GET /api/health/ready` answers `503`, and logs the code, where it
+  answered `200`, whenever the web app's own client does not connect in
+  this process: for an address of the first two kinds; for a first
+  connection of that client that the database refuses or does not answer,
+  though it answered the probe's (Decisions 1 and 3); and for a client
+  built from a damaged copy of the environment (Decision 5). The answer's
+  shape is unchanged. No page, permission, migration or audit action
+  changes.
 - The web app's own client is made, and opens its first connection, when
   readiness is first asked and the database answers: a process that has
   only been asked for readiness holds two connections where it held one.
@@ -204,6 +222,13 @@ each is answered.
   client cannot read is closed. Four are amended: whether the web app's own
   client is limited, the readiness limit against what watches it, a
   request that fails for a reason the app does not know, and the two names
-  for the app's own processes. One is opened, on `socket_timeout=0`.
+  for the app's own processes. Two are opened: on `socket_timeout=0`, and
+  on a `.env` present where the client is generated.
+- ADR-0153 is a record and is not rewritten. Two sentences under its
+  Decision 1 ("What the decision costs, and what it does not say") no
+  longer describe the code: that an app whose own client cannot read its
+  address still reads `ready`, and, for that client's first connection,
+  that readiness no longer waits with a request of the app's own. Its
+  "could take 10" is corrected under Decision 3.
 - RD-2 is complete in five parts for the web app. The worker's start is
   checked with its runtime, in part 2 (ADR-0151 Decision 4).
