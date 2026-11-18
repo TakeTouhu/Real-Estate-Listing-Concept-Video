@@ -2797,3 +2797,32 @@ a long upload or read cuts it, are checks for that deployment
 **On a development machine.** Nothing to do.
 
 **Rolling back.** To RD-3b's build: safe. Nothing used the adapter.
+
+## RD-3d — Google Cloud Storage in the web app
+
+**No migration** (ADR-0159). Migration 34 stays the last.
+
+**What changes at deploy.** Two optional settings,
+`GOOGLE_CLOUD_STORAGE_BUCKET` and `GOOGLE_CLOUD_STORAGE_ENDPOINT`, and no
+package. An environment that sets neither builds the same adapters as
+before. A production environment that sets `NODE_DEBUG` is now refused, the
+worker's included.
+
+**For a production web app** (whose start is still refused until RD-5 and
+RD-6): set `GOOGLE_CLOUD_STORAGE_BUCKET` to the bucket, and no endpoint. The
+service account the web app runs as needs the four permissions on that
+bucket listed under RD-3a, and a token whose scopes allow Cloud Storage
+(RD-3c); the service must reach `storage.googleapis.com` and
+`metadata.google.internal` directly. Set neither `SHARED_STORAGE_DIR` nor
+`NODE_DEBUG`. Readiness then asks the bucket on every readiness request:
+one list, which Google charges for, waiting up to about six seconds when a
+token is due. Whatever asks for readiness should allow for both.
+
+**On a development machine.** Nothing to do. To keep the web app's objects
+in the Cloud Storage emulator instead of memory or a folder, see
+`docs/local-setup.md`, section 3b. The development pipeline still needs the
+shared folder, and a bucket cannot be set beside it.
+
+**Rolling back.** To RD-3c's build: safe. That build ignores both settings,
+so a web app given a bucket keeps its objects in memory or the shared folder
+again, and does not see what it stored in the emulator.

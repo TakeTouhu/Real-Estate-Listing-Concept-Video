@@ -36,10 +36,11 @@ reported as skipped. CI runs them in the `media` job on Ubuntu 24.04.
 
 ## `tests/storage/*.gcs.test.ts`
 
-Suites that speak to the Cloud Storage emulator (ADR-0156, ADR-0157,
-ADR-0158): the Google Cloud Storage adapter storing, reading, streaming and
-deleting objects in a bucket of each test's own, with the proxy variables
-naming a proxy that is not there. They are **excluded** from `pnpm test` and
+Suites that speak to the Cloud Storage emulator (ADR-0156 to ADR-0159):
+the Google Cloud Storage adapter storing, reading, streaming and deleting
+objects in a bucket of each test's own, and the web app's own storage as a
+bucket and an endpoint choose it, with the proxy variables naming a proxy
+that is not there. They are **excluded** from `pnpm test` and
 run explicitly, with the emulator running and named:
 
 ```bash

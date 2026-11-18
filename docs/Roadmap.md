@@ -1125,6 +1125,20 @@ sends it elsewhere. A timeout in a production build is read as one. The
 adapter reads nothing from the environment, and nothing constructs it; RD-3d
 wires it into the web app (ADR-0159).
 
+**RD-3d — Google Cloud Storage in the web app** (ADR-0159, no migration): in
+production the web app keeps its objects in Google's own Cloud Storage,
+named by a bucket alone, at an origin no setting names, with the token of
+the service account it runs as; in development and CI it may keep them in
+the Cloud Storage emulator, named by a bucket and an endpoint. Development
+never asks Google: outside production a bucket needs an endpoint and one at
+Google's domain is refused, Google's store is built only where both
+`NODE_ENV` values say production, and the emulator is refused where either
+does. A bucket beside the shared folder is refused. The production start
+check allows Google's store, so a production start is now refused only for
+malware scanning and email, and `NODE_DEBUG`, which would write the token,
+is refused in production. A real production build was measured reading a
+timeout as one. RD-3 is complete; RD-4 gives the worker Cloud Storage.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
