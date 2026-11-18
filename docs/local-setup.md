@@ -284,6 +284,29 @@ run fails: the suites cannot make their inputs, so Vitest marks each file
 failed and reports its tests as skipped. CI runs them in the `media` job on
 Ubuntu 24.04, whose FFmpeg 6.1.1 their tolerances were measured with.
 
+### Cloud Storage emulator tests
+
+The suites for the Google Cloud Storage adapter (ADR-0156) speak to the
+Cloud Storage emulator, never to Google. Start it, with Docker or with Go:
+
+```bash
+docker run --rm -p 4443:4443 -e FAKE_GCS_SCHEME=http -e FAKE_GCS_BACKEND=memory \
+  fsouza/fake-gcs-server:1.56.1
+# or: go install github.com/fsouza/fake-gcs-server@v1.56.1
+#     fake-gcs-server -scheme http -host 127.0.0.1 -port 4443 -backend memory
+```
+
+Then name it and run them:
+
+```bash
+export GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT=http://127.0.0.1:4443
+pnpm test:gcs   # vitest.gcs.config.ts
+```
+
+Without that variable the run fails, and an origin that is not on this
+machine is refused. Each test makes a bucket of its own, held in the
+emulator's memory until it stops. CI runs them in the `storage` job.
+
 ### Browser tests
 
 The browser test (ADR-0121) drives the web app in Playwright's Chromium. It

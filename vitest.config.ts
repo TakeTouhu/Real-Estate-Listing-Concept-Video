@@ -47,6 +47,8 @@ export default defineConfig({
       "tests/integration/**",
       // Real-FFmpeg suites; run via vitest.media.config.ts.
       "tests/media/**",
+      // Cloud Storage emulator suites; run via vitest.gcs.config.ts.
+      "tests/storage/**",
       // Browser tests; run by Playwright (playwright.config.ts).
       "tests/e2e/**/*.spec.ts",
     ],

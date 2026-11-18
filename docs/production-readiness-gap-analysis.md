@@ -30,7 +30,7 @@ production scheduler activation and live Stripe charges stay BLOCKED
 | Piece | State on `148b6f6` | Where |
 | --- | --- | --- |
 | Choosing the web app's adapters | each service picks its own, in four files (*one place since RD-1, ADR-0150*) | `apps/web/src/lib/property.ts`, `mailer.ts`, `storyboard.ts`, `analysis.ts` |
-| Object storage | in-memory (ADR-0008) or the development shared folder (ADR-0085), both refused in production; no Google Cloud Storage adapter | `@app/storage` |
+| Object storage | in-memory (ADR-0008) or the development shared folder (ADR-0085), both refused in production; no Google Cloud Storage adapter (*one is written, not yet used, since RD-3a, ADR-0156*) | `@app/storage` |
 | Malware scanning | `PassthroughMalwareScanner`, which knows only the EICAR test file, refused in production (ADR-0054 Decision 5) | `@app/storage` `scanner.ts` |
 | Email | the development outbox (ADR-0126), refused in production; with none, sign-up cannot send its verification link (ADR-0129) | `apps/web/src/lib/mailer.ts` |
 | Rate limiting | none, beyond locking an MFA sign-in after five wrong codes | |
@@ -51,7 +51,7 @@ changed lines.
 | --- | --- | --- |
 | RD-1 | The web app's adapters chosen in one place (ADR-0150) | none |
 | RD-2 | Boot-time check of adapters and secrets (*RD-2a, ADR-0151*); readiness checks the database and storage (*RD-2b, ADR-0152*); how those checks are limited (*RD-2c, ADR-0153*); a start RD-2a could not check (*RD-2d, ADR-0154*); an address the web app's own database client cannot read (*RD-2e, ADR-0155*) | none |
-| RD-3 | Google Cloud Storage adapter for the web storage port, tested on an emulator | none |
+| RD-3 | Google Cloud Storage adapter for the web storage port, tested on an emulator (*its objects over the JSON API, and the emulator in CI: RD-3a, ADR-0156*) | none |
 | RD-4 | Google Cloud Storage for the worker's copy and deliverable writes | none |
 | RD-5 | ClamAV scanner, with ClamAV in CI | none |
 | RD-6 | SMTP email adapter, tested with a mail catcher | none |

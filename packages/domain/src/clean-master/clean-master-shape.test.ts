@@ -23,6 +23,7 @@ const MIGRATION_DIR = "00000000000030_clean_master_record";
 const SIGNING = "packages/storage/src/signing.ts";
 const LOCAL_STORAGE = "packages/storage/src/local-storage.ts";
 const SHARED_FOLDER = "packages/storage/src/shared-folder-storage.ts";
+const GOOGLE_CLOUD_STORAGE = "packages/storage/src/google-cloud-storage/google-cloud-storage.ts";
 const DOWNLOAD_ROUTE = "apps/web/src/app/api/storage/download/route.ts";
 const UPLOAD_ROUTE = "apps/web/src/app/api/storage/upload/route.ts";
 /** The test provider's photo reader in the development pipeline (ADR-0106). */
@@ -158,6 +159,8 @@ describe("DS-4 shape", () => {
     expect(matching(["packages", "apps"], /\bsignStorageToken\b/)).toEqual([SIGNING]);
     // Each store makes its URLs through the one helper that calls the signer.
     expect(matching(["packages", "apps"], /\bsignedStorageUrl\b/)).toEqual([
+      // Cloud Storage's links are the application's own too (ADR-0156 Decision 6).
+      GOOGLE_CLOUD_STORAGE,
       LOCAL_STORAGE,
       SHARED_FOLDER,
       SIGNING,
@@ -176,6 +179,7 @@ describe("DS-4 shape", () => {
       "packages/domain/src/orchestration/preview.ts",
       "packages/domain/src/property/asset-service.ts",
       "packages/domain/src/property/ports.ts",
+      GOOGLE_CLOUD_STORAGE,
       LOCAL_STORAGE,
       SHARED_FOLDER,
     ]);

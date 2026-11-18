@@ -190,6 +190,13 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       and the `s3:ListBucket` prerequisite); the equivalent must be established
       against GCS's own error model before the composition probe can be trusted
       in production.
+      *RD-3a (ADR-0156 Decision 2), for the web app's port: an object read
+      answers the same `404` for a missing object and a missing bucket, so
+      absence is counted only from a list in the bucket, and
+      `storage.objects.list` on the bucket is the prerequisite, as
+      `s3:ListBucket` is. What Google answers without that permission is
+      not measured: the emulator has no permissions. The worker's seams are
+      RD-4's.*
 - [ ] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
       an approved vendor) behind the `MalwareScanner` port. Still required — the
       guard blocks production use, it does not provide real scanning.
@@ -1528,13 +1535,19 @@ blocks activation. The production email service is tracked below, under
 
 ## Open in RD-2c — what the readiness limit leaves open
 
-- [ ] **Limit the Google Cloud Storage adapter's `exists`.** Readiness asks
+- [x] **Limit the Google Cloud Storage adapter's `exists`.** Readiness asks
       the chosen storage adapter about one key, with that adapter's limits
       alone (ADR-0153 Decision 2), so an `exists` that never ended would
       leave the readiness request without an answer. The two development
       adapters ask over no network. RD-3 adds the first production adapter:
       it is to decide how its `exists` is ended, within the rule on timers,
       and to measure it against a stand-in that says nothing.
+      *Decided in RD-3a (ADR-0156 Decision 3): `exists` is one list in the
+      bucket, given gaxios's own `timeout` of 3 seconds, a setting of the
+      client's, with no deadline in the repository's code. Against a
+      stand-in that says nothing it ends after 3.0 seconds, asked once, as
+      `STORAGE_TIMEOUT`. The limit holds for every caller of `exists`;
+      readiness asks it once RD-3c wires the adapter in.*
 - [ ] **Decide whether the web app's own database client is limited.** It
       keeps Prisma's defaults: 5 seconds to open a connection, 10 to wait
       for one from its pool, and no limit on a query it has sent (ADR-0152
@@ -1753,6 +1766,38 @@ into on 2026-11-17.
       repository holds `.env.example` only, and the client generated here
       records no path. RD-10, which builds the container image, is to
       build it from a tree with none of those files.
+
+## Open in RD-3a — what the Google Cloud Storage adapter leaves open
+
+- [ ] **Check what Cloud Storage answers under least privilege, at the
+      first deployment.** The adapter tells a missing object from a missing
+      bucket by a list (ADR-0156 Decision 2), so its account needs
+      `storage.objects.list` on the bucket, beside `get`, `create` and
+      `delete`. The emulator has no permissions, so these are not measured:
+      what an account without the list permission is answered, whether a
+      `404` for a missing object itself needs it, and how a `403` reads.
+      The bucket is to keep uniform bucket-level access and public access
+      prevention, and the account no `storage.buckets.*`, `setIamPolicy` or
+      `iam.serviceAccounts.signBlob`. To be checked against a real bucket
+      under the product owner's approval of that deployment.
+- [ ] **Decide how long a put, a delete and a whole object's read may
+      take.** The adapter gives them no limit (ADR-0156 Decision 3): a put
+      or a delete given up leaves its caller not knowing whether it
+      happened, and a read is as long as its object. A store that says
+      nothing therefore holds the request that asked. gaxios could end
+      each by a setting of its own; how long each may take belongs with
+      the deployment's measurements, in part 2 of the production readiness
+      plan.
+- [ ] **Prove the production build with gaxios.** gaxios imports
+      `node-fetch` 3 when it first sends a request. Nothing in the web app
+      loads the adapter yet; RD-3c, which wires it in, is to prove that
+      `next build` and a production start send its requests, or to keep
+      gaxios out of the server bundle (`serverExternalPackages`).
+- [ ] **Keep proxy variables out of the web app's environment unless one
+      is meant.** gaxios sends the store's requests through `HTTPS_PROXY` or
+      `HTTP_PROXY` when either is set, unless `NO_PROXY` names the host
+      (ADR-0156 Decision 1). RD-10, which builds the container image, is to
+      set neither.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
@@ -2351,6 +2396,12 @@ them is **built**. Each item below records the settled decision and what remains
       *It must implement the port's `readObject`, a byte range of an object
       as a stream read only as it is sent, that holds nothing open once it is
       read or cancelled (ADR-0115).*
+      *RD-3a (ADR-0156) writes every operation but `readObject`, over the
+      Cloud Storage JSON API through gaxios, with no Google Cloud SDK
+      anywhere. Absence is proved by a list in the bucket, which answers
+      `404` for the bucket alone; permission is left to the first
+      deployment (see* Open in RD-3a*). RD-3b is to add `readObject`, and
+      RD-3c to wire the adapter in.*
 - [x] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`. *Done in Phase 6C
