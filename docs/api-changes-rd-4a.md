@@ -2,8 +2,8 @@
 
 The worker's reads and first-wins writes in Google Cloud Storage
 (ADR-0160). **No migration, no route, no page and no setting.** The Google
-Cloud Storage adapter gains the worker's view of its bucket; nothing
-constructs it yet.
+Cloud Storage adapter gains the worker's view of its bucket; the worker
+is not given it yet.
 
 ## HTTP and environment
 

@@ -5,7 +5,7 @@ milestone of production readiness, part 1, which the product owner approved
 on 2026-11-16 (`/mnt/project-files/cto/production-readiness-proposal.md`).
 It gives the Google Cloud Storage adapter the worker's view of a bucket: the
 reads the worker's managed output makes, and the write that stores a file
-only where nothing is stored yet. Nothing constructs that view yet.
+only where nothing is stored yet. The worker is not given that view yet.
 
 Builds on: ADR-0043 and ADR-0050 (the managed output's seams and their
 first-wins rule), ADR-0076 (the Clean Master store), ADR-0085 (the shared
@@ -119,7 +119,7 @@ themselves, as they do for the folder.
 - **The file is held open only while it is sent.** It is opened to be sent
   only when its first bytes are asked for, and let go however the request
   ends: a put refused before anything is sent, for want of a token, holds
-  nothing open, and one answered partway lets the rest go.
+  nothing open, and one answered or cut partway lets the rest go.
 - **The content type is the caller's,** as the seam gives it.
 - **A file that cannot be read is refused** with its transport code, such
   as `ENOENT`, naming no path, and nothing is sent.
@@ -174,12 +174,13 @@ The worker's production construction is part 2's, with its runtime.
   failing before anything is sent, and one lengthened as it is hashed or
   after, or empty and then written to, sending only as many bytes as were
   hashed; the file opened to send only as it is sent, and closed when a put
-  is refused before sending or answered partway; `412` as `ALREADY_EXISTS`
-  and every other status, `201` and `204` included, as its code; a missing
-  file naming no path; the put with no limit; on Google's origin, one token
-  for both views, sent on the worker's requests. Beside them, each of the
-  two callers is tested with a put that stores nothing and answers
-  `CREATED`, and one that answers `ALREADY_EXISTS`: both retryable.
+  is refused before sending, answered partway or cut partway with no answer;
+  `412` as `ALREADY_EXISTS` and every other status, `201` and `204`
+  included, as its code; a missing file naming no path; the put with no
+  limit; on Google's origin, one token for both views, sent on the worker's
+  requests. Beside them, each of the two callers is tested with a put that
+  stores nothing and answers `CREATED`, and one that answers
+  `ALREADY_EXISTS`: both retryable.
 - **On the emulator** (12 new, beside the web app's): a missing key absent;
   a 3 MiB object streamed in several chunks; an empty object; a read after
   cancel refused; a missing bucket refused for both calls; a file stored
@@ -236,8 +237,8 @@ flowchart LR
 ```
 
 - The worker's composition, media validation and Clean Master store can run
-  on Cloud Storage once something constructs the view: RD-4c in
-  development, part 2 in production.
+  on Cloud Storage once they are given the view: RD-4c in development,
+  part 2 in production.
 - No migration, setting, route, page, package or CI job is added; the
   emulator suite runs in the existing `storage` job.
 - Not applicable: the change log and release notes, which no RD milestone

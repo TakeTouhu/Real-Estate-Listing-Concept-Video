@@ -2832,7 +2832,7 @@ again, and does not see what it stored in the emulator.
 **No migration** (ADR-0160). Migration 34 stays the last.
 
 **What changes at deploy.** Nothing: no setting or package is added, the
-web app's storage is unchanged, and nothing constructs the worker's view.
+web app's storage is unchanged, and the worker is not given its view.
 
 **For the first deployment that uses it** (part 2 onward): the service
 account the worker runs as needs `storage.objects.get`,

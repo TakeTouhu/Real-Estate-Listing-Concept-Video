@@ -1150,8 +1150,8 @@ with `412` when an object is there, streamed with its length and its MD5,
 which Cloud Storage checks by its documents. It refuses another bucket and
 a bucket owner, which Cloud Storage cannot check. Composition, media
 validation and the Clean Master store ran on it against the emulator.
-Nothing constructs it yet: RD-4 is split in three, and RD-4b adds the
-staging sink's upload, RD-4c the development pipeline beside the
+The worker is not given it yet: RD-4 is split in three, and RD-4b adds
+the staging sink's upload, RD-4c the development pipeline beside the
 emulator.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler

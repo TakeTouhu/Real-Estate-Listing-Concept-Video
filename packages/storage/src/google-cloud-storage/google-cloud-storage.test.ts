@@ -1409,8 +1409,10 @@ describe("the worker's view (ADR-0160)", () => {
       handed = options?.data;
       return send.call(this, options);
     });
-    expect(await put(clientAt(store.origin), empty)).toEqual({ kind: "CREATED" });
+    // What the transport was handed is asserted first, so a failure names it.
+    const outcome = await put(clientAt(store.origin), empty).catch((error: unknown) => error);
     expect(handed).toEqual(Buffer.alloc(0));
+    expect(outcome).toEqual({ kind: "CREATED" });
     expect(store.seen[1]!.headers["content-length"]).toBe("0");
     expect(store.seen[1]!.body.byteLength).toBe(0);
   });
@@ -1458,6 +1460,17 @@ describe("the worker's view (ADR-0160)", () => {
     });
     expect(await put(clientAt("http://127.0.0.1:9"), localPath)).toEqual({ kind: "ALREADY_EXISTS" });
     expect(readStreams).toHaveLength(3);
+    // Cut partway with no answer, whatever the transport does with the body.
+    requests.mockImplementation(async (options?: GaxiosOptions) => {
+      const data = options?.data as Readable;
+      await new Promise((resolve) => data.once("readable", resolve));
+      expect(data.read()).not.toBeNull();
+      throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    });
+    expect(await failureOf(() => put(clientAt("http://127.0.0.1:9"), localPath))).toMatchObject({
+      code: "ECONNRESET",
+    });
+    expect(readStreams).toHaveLength(5);
     await vi.waitFor(() => expect(readStreams.every((stream) => stream.closed)).toBe(true));
   });
 
@@ -1511,7 +1524,8 @@ describe("the worker's view (ADR-0160)", () => {
     const store = await standIn(() => ({ status: 200, body: "{}", afterMs }));
     expect(await put(clientAt(store.origin), await file(new Uint8Array([1])))).toEqual({ kind: "CREATED" });
     expect(requests.mock.calls.map(([options]) => options?.timeout)).toEqual([undefined]);
-  });
+    // Waits past the question limit on purpose; the margin is for a loaded runner.
+  }, 10_000);
 
   it("asks Google's metadata server once for both views, and sends the worker's requests its token", async () => {
     const asked = answeringAsGoogle((url) =>
