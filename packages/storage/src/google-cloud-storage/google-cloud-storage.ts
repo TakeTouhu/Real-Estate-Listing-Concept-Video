@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { Gaxios, type GaxiosOptions, type GaxiosResponse } from "gaxios";
 import {
@@ -10,6 +13,8 @@ import {
   type SignedUrl,
 } from "@app/domain";
 import { AppError, GOOGLE_CLOUD_STORAGE_ORIGIN, isCloudStorageBucketName } from "@app/shared";
+import type { DeliverableObjectClient } from "../managed-output/deliverable-composition-io";
+import type { S3GetObjectInput, S3GetObjectResult, S3ObjectBody } from "../managed-output/s3-staging-sink";
 import { signedStorageUrl, type SignedPurpose } from "../signing";
 import { METADATA_SERVER_ORIGIN, metadataAccessToken } from "./access-token";
 import { googleCloudStorageClient } from "./client";
@@ -26,8 +31,9 @@ import { googleCloudStorageClient } from "./client";
  * - **Absence is proved, never assumed.** A missing object and a missing
  *   bucket answer the same `404`, so absence is counted only from a list in
  *   the bucket, which answers `404` for the bucket alone.
- * - **The last write wins.** A put replaces what is stored, as the port's
- *   callers expect.
+ * - **The last write wins for the web app, the first for the worker.** A put
+ *   replaces what is stored, as the port's callers expect; the worker's view
+ *   stores a file only where nothing is stored yet (ADR-0160).
  * - **A refusal names nothing.** Its message is its code alone: no bucket, no
  *   key, no host and nothing the store said.
  * - **Nothing is asked again.** A request that fails is not retried.
@@ -41,6 +47,8 @@ import { googleCloudStorageClient } from "./client";
  *   adapter's own, never through a proxy (ADR-0158).
  *
  * The web app's adapters construct it (`apps/web/src/lib/adapters.ts`, ADR-0159).
+ * `createGoogleCloudStorageViews` also gives the worker's view, on the same
+ * connections and token, for the worker to be given it (ADR-0160).
  */
 
 /**
@@ -92,6 +100,9 @@ export interface GoogleCloudStorageOptions {
  * - `STORAGE_REFUSED`: any other status;
  * - `STORAGE_UNEXPECTED_ANSWER`: an answer that cannot be read, proves nothing,
  *   or is not the bytes asked for;
+ * - `STORAGE_BODY_CANCELLED`: a worker's read of a body it cancelled;
+ * - `STORAGE_FILE_CHANGED`: a worker's file read short of its size as it was
+ *   hashed, or shorter, as it was sent, than when it was hashed;
  * - the transport's own one-word code, such as `ECONNREFUSED`;
  * - `STORAGE_UNREACHABLE`: a failure that names none.
  */
@@ -330,7 +341,97 @@ function answerStream(body: Readable, length: number): ReadableStream<Uint8Array
   );
 }
 
+/**
+ * The worker's view of the bucket: the reads and the first-wins write its
+ * managed output makes, in the shape the shared folder gives it (ADR-0160).
+ */
+export type GoogleCloudStorageObjectClient = DeliverableObjectClient;
+
+/** The two views of one bucket, on one set of connections and one token. */
+export interface GoogleCloudStorageViews {
+  readonly objectStorage: ObjectStorage;
+  readonly objectClient: GoogleCloudStorageObjectClient;
+}
+
+/**
+ * A stream as the worker's body: one chunk for each `read`, `null` at its end.
+ * A read once it is cancelled, or still waiting when it is, is refused, not
+ * answered with an end, which would read as an object shorter than it is.
+ */
+function pulledBody(stream: ReadableStream<Uint8Array>): S3ObjectBody {
+  const reader = stream.getReader();
+  let cancelled = false;
+  return {
+    async read(): Promise<Uint8Array | null> {
+      if (cancelled) throw new GoogleCloudStorageError("STORAGE_BODY_CANCELLED");
+      const next = await reader.read();
+      // A cancel while this read waited ends the stream: that end is not the object's.
+      if (cancelled) throw new GoogleCloudStorageError("STORAGE_BODY_CANCELLED");
+      return next.done ? null : next.value;
+    },
+    async cancel(): Promise<void> {
+      if (cancelled) return;
+      cancelled = true;
+      try {
+        await reader.cancel();
+      } catch {
+        // A stream that already failed has let its answer go.
+      }
+    },
+  };
+}
+
+/**
+ * A local file's size and MD5, read before it is sent: the MD5 travels with
+ * it, so Cloud Storage refuses bytes that are not those read here, by its
+ * documents; the emulator does not check (ADR-0160). A file read short of
+ * its size as it is hashed is refused before anything is sent. A failure
+ * names no path.
+ */
+async function fileToSend(path: string): Promise<{ readonly size: number; readonly md5: string }> {
+  const hash = createHash("md5");
+  let size: number;
+  let hashed = 0;
+  try {
+    ({ size } = await stat(path));
+    if (size > 0) {
+      for await (const chunk of createReadStream(path, { start: 0, end: size - 1 })) {
+        hashed += (chunk as Buffer).byteLength;
+        hash.update(chunk as Buffer);
+      }
+    }
+  } catch (error) {
+    throw new GoogleCloudStorageError(transportCode(error));
+  }
+  if (hashed !== size) throw new GoogleCloudStorageError("STORAGE_FILE_CHANGED");
+  return { size, md5: hash.digest("base64") };
+}
+
+/**
+ * The file's first `size` bytes as they are sent, the file opened only once
+ * the first is asked for, and closed with the stream. A file shorter now than
+ * when it was hashed fails the upload, which would otherwise wait for bytes
+ * that never come; one longer sends only as many bytes as were hashed.
+ */
+function sentFile(path: string, size: number): Readable {
+  return Readable.from(
+    (async function* (): AsyncGenerator<Buffer> {
+      let sent = 0;
+      for await (const chunk of createReadStream(path, { start: 0, end: size - 1 })) {
+        sent += (chunk as Buffer).byteLength;
+        yield chunk as Buffer;
+      }
+      if (sent !== size) throw new GoogleCloudStorageError("STORAGE_FILE_CHANGED");
+    })(),
+    { objectMode: false },
+  );
+}
+
 export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): ObjectStorage {
+  return createGoogleCloudStorageViews(options).objectStorage;
+}
+
+export function createGoogleCloudStorageViews(options: GoogleCloudStorageOptions): GoogleCloudStorageViews {
   // The rule the environment's schema applies too (ADR-0159); the one origin a token is sent to is
   // Google's own store (ADR-0158 Decision 2). Both are `@app/shared`'s.
   if (typeof options.bucket !== "string" || !isCloudStorageBucketName(options.bucket)) {
@@ -410,7 +511,7 @@ export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): Ob
       resolve(signedStorageUrl({ key, purpose, ttlSeconds, secret, basePath, now: now(), attachmentFilename })),
     );
 
-  return {
+  const objectStorage: ObjectStorage = {
     createSignedUploadUrl(key: string, ttlSeconds: number): Promise<SignedUrl> {
       return sign(key, "upload", ttlSeconds);
     },
@@ -508,4 +609,62 @@ export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): Ob
       return new Promise((resolve) => resolve(listed(nameOf(key))));
     },
   };
+
+  /**
+   * The key a worker's request names, once it names this store's bucket and no
+   * owner. Cloud Storage checks no bucket's owner: a caller that asks for one
+   * is refused, not given an object the check would not have covered. Nothing
+   * is sent for either.
+   */
+  const workerKey = (input: {
+    readonly bucket: string;
+    readonly key: string;
+    readonly expectedBucketOwner: string | undefined;
+  }): string => {
+    if (input.bucket !== options.bucket || input.expectedBucketOwner !== undefined) {
+      throw configurationError("A worker's request must name the store's own bucket, and no owner");
+    }
+    return nameOf(input.key);
+  };
+
+  const objectClient: GoogleCloudStorageObjectClient = {
+    async getObject(input: S3GetObjectInput): Promise<S3GetObjectResult> {
+      const read = await objectStorage.readObject(workerKey(input), null);
+      // The seam's one absence: nothing is stored at the key, once the bucket is proved to be there.
+      if (read.kind === "ABSENT") return { contentLength: null, body: null };
+      // A whole object's range is never unsatisfiable.
+      if (read.kind !== "READ") throw new GoogleCloudStorageError("STORAGE_UNEXPECTED_ANSWER");
+      return { contentLength: read.size, body: pulledBody(read.body) };
+    },
+
+    async putObjectIfAbsent(input): Promise<{ readonly kind: "CREATED" | "ALREADY_EXISTS" }> {
+      const name = workerKey(input);
+      const { size, md5 } = await fileToSend(input.localPath);
+      // As many bytes as the MD5 was read from, and no more: bytes changed since are refused by Google's
+      // store, by its documents (the emulator does not check).
+      const data = size === 0 ? Buffer.alloc(0) : sentFile(input.localPath, size);
+      let response: GaxiosResponse<unknown>;
+      try {
+        response = await ask({
+          method: "POST",
+          // Generation 0 is no object: the store writes only where none is stored, and answers 412 otherwise.
+          url: `${uploadUrl}?uploadType=media&name=${escape(name)}&ifGenerationMatch=0`,
+          headers: { "content-type": input.contentType, "content-length": String(size), "x-goog-hash": `md5=${md5}` },
+          data,
+          responseType: "text",
+        });
+      } finally {
+        // The file is let go however the request ended, sent whole, in part or not at all.
+        if (data instanceof Readable) data.destroy();
+      }
+      if (response.status === 200) return { kind: "CREATED" };
+      // Not a failure: what is stored is read back by every caller.
+      if (response.status === 412) return { kind: "ALREADY_EXISTS" };
+      // An upload names no object that could be missing.
+      if (response.status === 404) throw new GoogleCloudStorageError("STORAGE_BUCKET_MISSING");
+      throw statusFailure(response.status);
+    },
+  };
+
+  return { objectStorage, objectClient };
 }

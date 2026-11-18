@@ -201,6 +201,12 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       Storage in production, built only where both `NODE_ENV` values say
       production. The worker's copies and deliverables are RD-4's, and this
       item closes with them.*
+      *Amended in RD-4a (ADR-0160): the adapter gives the worker's reads and
+      first-wins writes, a key called absent only once a list shows its
+      bucket is there, as for the web app; the worker is not given them
+      yet. RD-4b adds the staging sink's upload and RD-4c the development
+      pipeline beside the emulator. The item closes at part 2, when the
+      worker is first given its view in production.*
 - [ ] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
       an approved vendor) behind the `MalwareScanner` port. Still required — the
       guard blocks production use, it does not provide real scanning.
@@ -1811,6 +1817,14 @@ into on 2026-11-17.
       deletion after the recovery window (`docs/SecurityCompliance.md`). To
       be checked against a real bucket under the product owner's approval of
       that deployment.
+      *Amended in RD-4a (ADR-0160): the worker's account needs
+      `storage.objects.get`, `storage.objects.list` and
+      `storage.objects.create`; its write never replaces an object. To be
+      checked too: whether Google ever answers `404` for an object the
+      account may not read, which the adapter calls absent once the list
+      answers, and which for the worker means work done again or
+      `CLEAN_MASTER_MISSING`; and what a write that loses its race is
+      answered from an account without `storage.objects.delete`.*
 - [ ] **Decide how long a put, a delete and a whole object's read may
       take.** The adapter gives them no limit (ADR-0156 Decision 3): a put
       or a delete given up leaves its caller not knowing whether it
@@ -1831,6 +1845,11 @@ into on 2026-11-17.
       *Amended in RD-3c (ADR-0158 Decision 6): every request now goes on HTTP
       agents of the adapter's own, so such a limit would bypass nothing. None
       is set.*
+      *Amended in RD-4a (ADR-0160 Decision 5): the worker's first-wins put
+      and its reads' bytes are given no limit either. Part 2, which owns the
+      worker's leases and concurrency, decides how long its transfers may
+      take; a deadline in the repository's own code goes to the product
+      owner first.*
 - [x] **Prove the production build with gaxios.** gaxios imports
       `node-fetch` 3 when it first sends a request. Nothing in the web app
       loads the adapter yet; RD-3c, which wires it in, is to prove that
@@ -1922,11 +1941,30 @@ into on 2026-11-17.
       worker Cloud Storage. It is to build Google's store only where both
       `NODE_ENV` values say production, and refuse the emulator where
       either does, as the web app's adapters do (ADR-0159 Decision 2).
+      *Amended in RD-4a (ADR-0160 Decision 6): RD-4a constructs nothing for
+      the worker. RD-4c is to build its view in the development pipeline,
+      on the emulator alone, under these rules. Building Google's store for
+      the worker is part 2's, which assembles the worker's production
+      runtime and its adapters (ADR-0150 Decision 3).*
 - [ ] **Let the development pipeline run beside the emulator.** A bucket is
       refused beside `SHARED_STORAGE_DIR` (ADR-0159 Decision 6), and the
       pipeline reads only the folder, so a development machine that keeps
       the web app's objects in the emulator cannot run the pipeline on them.
       RD-4 is to decide.
+      *Decided in RD-4a (ADR-0160 Decision 6): yes, as RD-4c.*
+
+## Open in RD-4a — what the worker's Cloud Storage view leaves open
+
+- [ ] **Check the worker's first-wins write against a real bucket, at the
+      first deployment.** The emulator ignores `X-Goog-Hash`, so that
+      Google refuses an upload whose MD5 does not match, with `400` by its
+      documents, is read and not measured (ADR-0160). Nor is whether Google
+      answers `412` before the whole file is sent: either way nothing is
+      stored, but a writer that loses its race may send a deliverable or a
+      Clean Master first. Nor what Google's `412` names: the adapter reads
+      any `412` as an object already stored, and the caller's read-back
+      fails as retryable where nothing is. To be checked under the product
+      owner's approval of that deployment.
 
 ## Open in RD-3b — what the Google Cloud Storage adapter's streamed read leaves open
 
@@ -2562,6 +2600,9 @@ them is **built**. Each item below records the settled decision and what remains
       (ADR-0159) is to wire the adapter in.*
       *RD-3d (ADR-0159) wires the adapter into the web app. The worker's
       seams are RD-4's.*
+      *RD-4a (ADR-0160) gives it the worker's reader and first-wins write,
+      not yet given to the worker; RD-4b is to add the staging sink's
+      upload.*
 - [x] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`. *Done in Phase 6C

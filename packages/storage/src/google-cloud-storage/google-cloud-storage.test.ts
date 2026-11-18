@@ -1,25 +1,50 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, readFileSync, readdirSync, statSync, truncateSync } from "node:fs";
+import { appendFile, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { createServer, globalAgent, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import { globalAgent as globalTlsAgent } from "node:https";
 import type { AddressInfo, Socket } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { Gaxios, type GaxiosOptions, type GaxiosResponse } from "gaxios";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { ObjectRead, ObjectStorage } from "@app/domain";
+import { managedCleanMasterKey, type ObjectRead, type ObjectStorage } from "@app/domain";
 import { AppError } from "@app/shared";
 import {
   GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES,
   GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS,
   GoogleCloudStorageError,
   createGoogleCloudStorage,
+  createGoogleCloudStorageViews,
+  type GoogleCloudStorageObjectClient,
 } from "./index";
+import type { S3ObjectBody } from "../managed-output/s3-staging-sink";
 import {
   GOOGLE_CLOUD_STORAGE_CREDENTIAL_LIMIT_MS,
   GOOGLE_CLOUD_STORAGE_TOKEN_MARGIN_MS,
   metadataAccessToken,
 } from "./access-token";
 import { googleCloudStorageAgents, googleCloudStorageClient } from "./client";
+
+/** Every file stream the adapter opens, so a test can see that each is closed. */
+const readStreams = vi.hoisted((): Array<{ readonly closed: boolean }> => []);
+/** Run once, on the file, before the next stream the adapter opens reads it. */
+const beforeNextRead = vi.hoisted((): { hook?: (path: string) => void } => ({}));
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...fs,
+    createReadStream: (...args: Parameters<typeof fs.createReadStream>) => {
+      const hook = beforeNextRead.hook;
+      beforeNextRead.hook = undefined;
+      hook?.(String(args[0]));
+      const stream = fs.createReadStream(...args);
+      readStreams.push(stream);
+      return stream;
+    },
+  };
+});
 
 /**
  * The adapter against stand-ins for the store and the metadata server, on this
@@ -1173,6 +1198,356 @@ describe("a production build's transport", () => {
   });
 });
 
+describe("the worker's view (ADR-0160)", () => {
+  const TEN = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const MEBIBYTE = 1024 * 1024;
+  const MASTER = managedCleanMasterKey({ organizationId: "org_1", deliverableVersionId: "gdv_1" });
+  const UPLOAD = `POST /upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${encodeURIComponent(MASTER)}`;
+  const target = (key: string) => ({ bucket: BUCKET, key, expectedBucketOwner: undefined });
+  const clientAt = (origin: string): GoogleCloudStorageObjectClient =>
+    createGoogleCloudStorageViews({ bucket: BUCKET, endpoint: origin, secret: SECRET }).objectClient;
+  let folder: string;
+  let files = 0;
+
+  beforeEach(async () => {
+    folder = await mkdtemp(join(tmpdir(), "vta-gcs-worker-"));
+  });
+
+  afterEach(async () => {
+    beforeNextRead.hook = undefined;
+    await rm(folder, { recursive: true, force: true });
+  });
+
+  /** A local file of `data`, as the worker hands one over. */
+  const file = async (data: Uint8Array): Promise<string> => {
+    files += 1;
+    const path = join(folder, `file-${files}`);
+    await writeFile(path, data);
+    return path;
+  };
+  const put = (client: GoogleCloudStorageObjectClient, localPath: string) =>
+    client.putObjectIfAbsent({ ...target(MASTER), localPath, contentType: "video/mp4" });
+  const sha256Of = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+
+  /** Every byte a body holds, read to its end. */
+  async function drained(body: S3ObjectBody): Promise<Uint8Array> {
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const chunk = await body.read();
+      if (chunk === null) return joined(chunks);
+      chunks.push(chunk);
+    }
+  }
+
+  it("reads a stored object's one generation as the worker pulls it, then ends", async () => {
+    const store = await standIn(holding(TEN));
+    const { contentLength, body } = await clientAt(store.origin).getObject(target(ASSET));
+    expect(contentLength).toBe(10);
+    expect(await drained(body!)).toEqual(new Uint8Array(TEN));
+    expect(await body!.read()).toBeNull();
+    expect(store.seen.map(({ method, url }) => `${method} ${url}`)).toEqual([
+      `GET /storage/v1/b/${BUCKET}/o/${ESCAPED_ASSET}?fields=size,generation,contentEncoding`,
+      `GET /storage/v1/b/${BUCKET}/o/${ESCAPED_ASSET}?alt=media&generation=${GENERATION}`,
+    ]);
+  });
+
+  it("calls an object absent only once the bucket is proved, and a missing bucket never", async () => {
+    const absent = await standIn((request) =>
+      request.url.includes("/o?prefix=") ? { status: 200, body: LISTED_NONE } : { status: 404, body: "{}" },
+    );
+    expect(await clientAt(absent.origin).getObject(target(ASSET))).toEqual({ contentLength: null, body: null });
+    const missing = await standIn(() => ({ status: 404, body: "{}" }));
+    expect(await failureOf(() => clientAt(missing.origin).getObject(target(ASSET)))).toMatchObject({
+      code: "STORAGE_BUCKET_MISSING",
+    });
+  });
+
+  it("fails a read with a code when the answer ends short, never with an end", async () => {
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? { status: 206, headers: { "content-range": "bytes 0-9/10" }, body: TEN.subarray(0, 4) }
+        : { status: 200, body: metadata(10) },
+    );
+    const { body } = await clientAt(store.origin).getObject(target(ASSET));
+    expect(await failureOf(() => drained(body!))).toMatchObject({
+      code: "STORAGE_UNEXPECTED_ANSWER",
+      message: "STORAGE_UNEXPECTED_ANSWER",
+    });
+    // A body that has failed is let go quietly.
+    await expect(body!.cancel()).resolves.toBeUndefined();
+  });
+
+  it("refuses a read once the body is cancelled", async () => {
+    const store = await standIn(holding(TEN));
+    const { body } = await clientAt(store.origin).getObject(target(ASSET));
+    await body!.cancel();
+    await body!.cancel();
+    expect(await failureOf(() => body!.read())).toMatchObject({
+      code: "STORAGE_BODY_CANCELLED",
+      message: "STORAGE_BODY_CANCELLED",
+    });
+  });
+
+  it("refuses a read still waiting when the body is cancelled, and lets the answer go", async () => {
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? { status: 206, headers: { "content-range": "bytes 0-9/10" }, body: TEN.subarray(0, 3), holdOpen: true }
+        : { status: 200, body: metadata(10) },
+    );
+    const { body } = await clientAt(store.origin).getObject(target(ASSET));
+    let read = 0;
+    while (read < 3) read += (await body!.read())!.byteLength;
+    const waiting = failureOf(() => body!.read());
+    await body!.cancel();
+    expect(await waiting).toMatchObject({ code: "STORAGE_BODY_CANCELLED", message: "STORAGE_BODY_CANCELLED" });
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+  });
+
+  it("lets go of the answer when the body is cancelled partway", async () => {
+    const size = 64 * MEBIBYTE;
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? {
+            status: 206,
+            headers: { "content-range": `bytes 0-${size - 1}/${size}`, "content-length": String(size) },
+            repeat: Buffer.alloc(64 * 1024, 1),
+            times: size / (64 * 1024),
+          }
+        : { status: 200, body: metadata(size) },
+    );
+    const { body } = await clientAt(store.origin).getObject(target(ASSET));
+    expect((await body!.read())!.byteLength).toBeGreaterThan(0);
+    await body!.cancel();
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+    expect(store.sent.bytes).toBeLessThan(size / 4);
+  });
+
+  it("sends nothing for another bucket, an owner, or a key that is not canonical, and names none", async () => {
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const client = clientAt(store.origin);
+    // No such file: each refusal comes before the file is read.
+    const localPath = join(folder, "missing.mp4");
+    for (const input of [
+      { ...target(ASSET), bucket: "vtavision-other" },
+      { ...target(ASSET), expectedBucketOwner: "123456789012" },
+      { ...target(ASSET), expectedBucketOwner: "" },
+    ]) {
+      for (const call of [
+        () => client.getObject(input),
+        () => client.putObjectIfAbsent({ ...input, localPath, contentType: "video/mp4" }),
+      ]) {
+        const error = await failureOf(call);
+        expect(error).toBeInstanceOf(AppError);
+        expect(error).toMatchObject({
+          code: "CONFIGURATION_ERROR",
+          message: "A worker's request must name the store's own bucket, and no owner",
+        });
+        expect(JSON.stringify(error)).not.toMatch(/vtavision|123456789012|org/);
+      }
+    }
+    for (const key of ["../x", "org//x", "org/a\nb"]) {
+      for (const call of [
+        () => client.getObject(target(key)),
+        () => client.putObjectIfAbsent({ ...target(key), localPath, contentType: "video/mp4" }),
+      ]) {
+        expect(await failureOf(call)).toMatchObject({ code: "INTERNAL_ERROR" });
+      }
+    }
+    expect(store.seen).toEqual([]);
+  });
+
+  it("stores a local file only where nothing is stored, with its length and MD5", async () => {
+    const data = Buffer.from("a deliverable's bytes");
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    expect(await put(clientAt(store.origin), await file(data))).toEqual({ kind: "CREATED" });
+    expect(store.seen.map(({ method, url }) => `${method} ${url}`)).toEqual([`${UPLOAD}&ifGenerationMatch=0`]);
+    const [sent] = store.seen;
+    expect(sent!.headers["content-type"]).toBe("video/mp4");
+    expect(sent!.headers["content-length"]).toBe(String(data.byteLength));
+    expect(sent!.headers["x-goog-hash"]).toBe(`md5=${createHash("md5").update(data).digest("base64")}`);
+    expect(sent!.body).toEqual(data);
+    expect(sent!.headers.authorization).toBeUndefined();
+  });
+
+  it("sends the MD5 of every byte of a file, however many reads it takes", async () => {
+    for (const data of [Buffer.from([7]), Buffer.from(Array.from({ length: MEBIBYTE + 3 }, (_, i) => i % 251))]) {
+      const store = await standIn(() => ({ status: 200, body: "{}" }));
+      expect(await put(clientAt(store.origin), await file(data))).toEqual({ kind: "CREATED" });
+      expect(store.seen[0]!.headers["x-goog-hash"]).toBe(`md5=${createHash("md5").update(data).digest("base64")}`);
+      // By digest: element-wise equality over a mebibyte takes seconds and says no more.
+      expect(sha256Of(store.seen[0]!.body)).toBe(sha256Of(data));
+    }
+  });
+
+  it("fails a put whose file is shorter as it is sent than when it was hashed, and sends only what was", async () => {
+    const data = Buffer.alloc(200 * 1024, 5);
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const send = requests.getMockImplementation()!;
+    const shorter = await file(data);
+    requests.mockImplementationOnce(async function (this: Gaxios, options) {
+      await truncate(shorter, 100 * 1024);
+      return send.call(this, options);
+    });
+    // Refused, where the store would wait for the bytes its length promised: cut before it is whole.
+    expect(await failureOf(() => put(clientAt(store.origin), shorter))).toMatchObject({
+      code: "STORAGE_FILE_CHANGED",
+      message: "STORAGE_FILE_CHANGED",
+    });
+    expect(store.seen).toEqual([]);
+    const longer = await file(data);
+    requests.mockImplementationOnce(async function (this: Gaxios, options) {
+      await appendFile(longer, Buffer.from([9, 9]));
+      return send.call(this, options);
+    });
+    expect(await put(clientAt(store.origin), longer)).toEqual({ kind: "CREATED" });
+    expect(sha256Of(store.seen[0]!.body)).toBe(sha256Of(data));
+    // An empty file written to before it is sent is still sent as no bytes.
+    const empty = await file(new Uint8Array(0));
+    let handed: unknown;
+    requests.mockImplementationOnce(async function (this: Gaxios, options) {
+      await appendFile(empty, Buffer.from([9, 9]));
+      handed = options?.data;
+      return send.call(this, options);
+    });
+    // What the transport was handed is asserted first, so a failure names it.
+    const outcome = await put(clientAt(store.origin), empty).catch((error: unknown) => error);
+    expect(handed).toEqual(Buffer.alloc(0));
+    expect(outcome).toEqual({ kind: "CREATED" });
+    expect(store.seen[1]!.headers["content-length"]).toBe("0");
+    expect(store.seen[1]!.body.byteLength).toBe(0);
+  });
+
+  it("sends a file grown while it is hashed only as far as its size, with that MD5", async () => {
+    const data = Buffer.alloc(200 * 1024, 6);
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const localPath = await file(data);
+    beforeNextRead.hook = (path) => appendFileSync(path, Buffer.from([9, 9]));
+    expect(await put(clientAt(store.origin), localPath)).toEqual({ kind: "CREATED" });
+    expect(store.seen[0]!.headers["content-length"]).toBe(String(data.byteLength));
+    expect(store.seen[0]!.headers["x-goog-hash"]).toBe(`md5=${createHash("md5").update(data).digest("base64")}`);
+    expect(sha256Of(store.seen[0]!.body)).toBe(sha256Of(data));
+  });
+
+  it("fails a put whose file is read short of its size as it is hashed, before anything is sent", async () => {
+    readStreams.splice(0);
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const localPath = await file(Buffer.alloc(200 * 1024, 4));
+    beforeNextRead.hook = (path) => truncateSync(path, 100 * 1024);
+    expect(await failureOf(() => put(clientAt(store.origin), localPath))).toMatchObject({
+      code: "STORAGE_FILE_CHANGED",
+      message: "STORAGE_FILE_CHANGED",
+    });
+    // Only the MD5's read opened the file: no request was made to send it.
+    expect(readStreams).toHaveLength(1);
+    expect(requests).not.toHaveBeenCalled();
+    expect(store.seen).toEqual([]);
+  });
+
+  it("opens the file to send only as it is sent, and lets it go however the put ends", async () => {
+    readStreams.splice(0);
+    const localPath = await file(Buffer.alloc(256 * 1024, 3));
+    // No token: refused before anything is sent, so only the MD5's read opened the file.
+    answeringAsGoogle((url) => (url.origin === METADATA_SERVER ? { status: 503 } : asGoogleStore(url)));
+    const google = createGoogleCloudStorageViews({ bucket: BUCKET, endpoint: GOOGLE, secret: SECRET }).objectClient;
+    expect(await failureOf(() => put(google, localPath))).toMatchObject({ code: "STORAGE_CREDENTIAL_UNAVAILABLE" });
+    expect(readStreams).toHaveLength(1);
+    // Answered once the first bytes are taken, the rest unsent.
+    requests.mockImplementation(async (options?: GaxiosOptions) => {
+      const data = options?.data as Readable;
+      await new Promise((resolve) => data.once("readable", resolve));
+      expect(data.read()).not.toBeNull();
+      return { status: 412, statusText: "", headers: new Headers(), data: "", config: options } as GaxiosResponse;
+    });
+    expect(await put(clientAt("http://127.0.0.1:9"), localPath)).toEqual({ kind: "ALREADY_EXISTS" });
+    expect(readStreams).toHaveLength(3);
+    // Cut partway with no answer, whatever the transport does with the body.
+    requests.mockImplementation(async (options?: GaxiosOptions) => {
+      const data = options?.data as Readable;
+      await new Promise((resolve) => data.once("readable", resolve));
+      expect(data.read()).not.toBeNull();
+      throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+    });
+    expect(await failureOf(() => put(clientAt("http://127.0.0.1:9"), localPath))).toMatchObject({
+      code: "ECONNRESET",
+    });
+    expect(readStreams).toHaveLength(5);
+    await vi.waitFor(() => expect(readStreams.every((stream) => stream.closed)).toBe(true));
+  });
+
+  it("sends an empty file as no bytes, with the MD5 of none", async () => {
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    expect(await put(clientAt(store.origin), await file(new Uint8Array(0)))).toEqual({ kind: "CREATED" });
+    expect(store.seen[0]!.headers["content-length"]).toBe("0");
+    expect(store.seen[0]!.headers["x-goog-hash"]).toBe("md5=1B2M2Y8AsgTpgAmY7PhCfg==");
+    expect(store.seen[0]!.body.byteLength).toBe(0);
+  });
+
+  it("reads a 412 as an object already stored, and any other refusal as its code alone", async () => {
+    const localPath = await file(new Uint8Array([1, 2]));
+    const answers: Array<[number, unknown]> = [
+      [412, { kind: "ALREADY_EXISTS" }],
+      [404, "STORAGE_BUCKET_MISSING"],
+      // As Google, by its documents, refuses bytes whose MD5 is not the one sent.
+      [400, "STORAGE_REFUSED"],
+      [403, "STORAGE_FORBIDDEN"],
+      [429, "STORAGE_RATE_LIMITED"],
+      [503, "STORAGE_UNAVAILABLE"],
+      [307, "STORAGE_REFUSED"],
+      // Only 200 is a stored object.
+      [201, "STORAGE_REFUSED"],
+      [204, "STORAGE_REFUSED"],
+    ];
+    for (const [status, outcome] of answers) {
+      const store = await standIn(() => ({ status, body: "{\"error\":\"org/org_1\"}" }));
+      if (typeof outcome === "string") {
+        expect(await failureOf(() => put(clientAt(store.origin), localPath))).toMatchObject({
+          code: outcome,
+          message: outcome,
+        });
+      } else {
+        expect(await put(clientAt(store.origin), localPath)).toEqual(outcome);
+      }
+      expect(store.seen).toHaveLength(1);
+    }
+  });
+
+  it("names no path when the file cannot be read, and sends nothing", async () => {
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const error = await failureOf(() => put(clientAt(store.origin), join(folder, "missing")));
+    expect(error).toMatchObject({ code: "ENOENT", message: "ENOENT" });
+    expect(JSON.stringify(error)).not.toContain(folder);
+    expect(store.seen).toEqual([]);
+  });
+
+  it("gives the put no limit, as every request that carries bytes", async () => {
+    const afterMs = GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 500;
+    const store = await standIn(() => ({ status: 200, body: "{}", afterMs }));
+    expect(await put(clientAt(store.origin), await file(new Uint8Array([1])))).toEqual({ kind: "CREATED" });
+    expect(requests.mock.calls.map(([options]) => options?.timeout)).toEqual([undefined]);
+    // Waits past the question limit on purpose; the margin is for a loaded runner.
+  }, 10_000);
+
+  it("asks Google's metadata server once for both views, and sends the worker's requests its token", async () => {
+    const asked = answeringAsGoogle((url) =>
+      url.origin === METADATA_SERVER ? TOKEN_ANSWER(MARKER) : asGoogleStore(url),
+    );
+    const { objectStorage, objectClient } = createGoogleCloudStorageViews({
+      bucket: BUCKET,
+      endpoint: GOOGLE,
+      secret: SECRET,
+    });
+    expect(await objectStorage.exists(ASSET)).toBe(true);
+    expect(await put(objectClient, await file(new Uint8Array(0)))).toEqual({ kind: "CREATED" });
+    const { body } = await objectClient.getObject(target(ASSET));
+    expect(await drained(body!)).toEqual(new Uint8Array([1, 2, 3]));
+    const [first, ...rest] = asked;
+    expect(first?.url.origin).toBe(METADATA_SERVER);
+    expect(rest.map(({ url, authorization }) => [url.origin, authorization])).toEqual(
+      Array.from({ length: 4 }, () => [GOOGLE, `Bearer ${MARKER}`]),
+    );
+  });
+});
+
 describe("where it is constructed", () => {
   it("is constructed only by the web app's adapters, and loaded by none through `@app/storage`", () => {
     // It reaches Google's store with the process's own identity (ADR-0158): anything else that
@@ -1188,7 +1563,7 @@ describe("where it is constructed", () => {
     const production = ["packages", "apps"].flatMap((root) => sources(join(repo, root)));
     const naming = (pattern: RegExp): string[] =>
       production.filter((file) => pattern.test(readFileSync(file, "utf8"))).map((file) => file.slice(repo.length + 1));
-    expect(naming(/createGoogleCloudStorage\(/).sort()).toEqual([
+    expect(naming(/createGoogleCloudStorage\w*\(/).sort()).toEqual([
       "apps/web/src/lib/adapters.ts",
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
     ]);

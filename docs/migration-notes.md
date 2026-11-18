@@ -2826,3 +2826,25 @@ shared folder, and a bucket cannot be set beside it.
 **Rolling back.** To RD-3c's build: safe. That build ignores both settings,
 so a web app given a bucket keeps its objects in memory or the shared folder
 again, and does not see what it stored in the emulator.
+
+## RD-4a — the worker's reads and first-wins writes in Google Cloud Storage
+
+**No migration** (ADR-0160). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing: no setting or package is added, the
+web app's storage is unchanged, and the worker is not given its view.
+
+**For the first deployment that uses it** (part 2 onward): the service
+account the worker runs as needs `storage.objects.get`,
+`storage.objects.list` and `storage.objects.create` on the bucket the web
+app uses, and a token whose scopes allow Cloud Storage (RD-3c). Its write
+never replaces an object, so it should need no `storage.objects.delete`.
+Not measured, and checks for that deployment (`docs/decisions/TODO.md`):
+what Google answers a write that loses its race from an account without
+the delete permission, what it answers a read the account may not make,
+that it refuses an upload whose MD5 does not match, whether it answers
+`412` before the whole file is sent, and what its `412` names.
+
+**On a development machine.** Nothing to do.
+
+**Rolling back.** To RD-3d's build: safe. Nothing used the worker's view.

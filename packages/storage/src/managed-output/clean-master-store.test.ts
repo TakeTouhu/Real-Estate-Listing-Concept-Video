@@ -83,8 +83,8 @@ interface StoreOptions {
   readonly getThrows?: boolean;
   readonly readThrowsAt?: number;
   readonly putThrows?: boolean;
-  /** The put reports success and stores nothing. */
-  readonly putDrops?: boolean;
+  /** The put stores nothing, reporting success, or ALREADY_EXISTS as a Cloud Storage 412 may (ADR-0160). */
+  readonly putDrops?: true | "ALREADY_EXISTS";
 }
 
 class FakeStore implements DeliverableObjectClient {
@@ -135,6 +135,7 @@ class FakeStore implements DeliverableObjectClient {
     });
     if (this.options.putThrows === true) throw new Error("put failed");
     if (this.stored.has(input.key)) return { kind: "ALREADY_EXISTS" };
+    if (this.options.putDrops === "ALREADY_EXISTS") return { kind: "ALREADY_EXISTS" };
     if (this.options.putDrops !== true) {
       this.stored.set(input.key, [new Uint8Array(await readFile(input.localPath))]);
     }
@@ -403,8 +404,12 @@ describe("publish stores first-wins under the internal namespace and copies back
     expect(client.puts).toHaveLength(0);
   });
 
-  it("is retryable when the write fails, or when nothing is at the key after it", async () => {
-    for (const client of [new FakeStore({ putThrows: true }), new FakeStore({ putDrops: true })]) {
+  it("is retryable when the write fails, or when nothing is at the key after it, whatever it answered", async () => {
+    for (const client of [
+      new FakeStore({ putThrows: true }),
+      new FakeStore({ putDrops: true }),
+      new FakeStore({ putDrops: "ALREADY_EXISTS" }),
+    ]) {
       expect(await storeFor(client).publish({ key: KEY, localPath: await localFile(MASTER) })).toEqual({
         kind: "RETRYABLE_FAILURE",
       });
