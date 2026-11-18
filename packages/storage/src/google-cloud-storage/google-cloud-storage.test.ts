@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, statSync, truncateSync } from "node:fs";
+import { appendFileSync, readFileSync, readdirSync, statSync, truncateSync } from "node:fs";
 import { appendFile, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { createServer, globalAgent, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import { globalAgent as globalTlsAgent } from "node:https";
@@ -1403,17 +1403,30 @@ describe("the worker's view (ADR-0160)", () => {
     expect(sha256Of(store.seen[0]!.body)).toBe(sha256Of(data));
     // An empty file written to before it is sent is still sent as no bytes.
     const empty = await file(new Uint8Array(0));
+    let handed: unknown;
     requests.mockImplementationOnce(async function (this: Gaxios, options) {
       await appendFile(empty, Buffer.from([9, 9]));
-      expect(options?.data).toEqual(Buffer.alloc(0));
+      handed = options?.data;
       return send.call(this, options);
     });
     expect(await put(clientAt(store.origin), empty)).toEqual({ kind: "CREATED" });
+    expect(handed).toEqual(Buffer.alloc(0));
     expect(store.seen[1]!.headers["content-length"]).toBe("0");
     expect(store.seen[1]!.body.byteLength).toBe(0);
   });
 
-  it("fails a put whose file shrinks while it is hashed, before anything is sent", async () => {
+  it("sends a file grown while it is hashed only as far as its size, with that MD5", async () => {
+    const data = Buffer.alloc(200 * 1024, 6);
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const localPath = await file(data);
+    beforeNextRead.hook = (path) => appendFileSync(path, Buffer.from([9, 9]));
+    expect(await put(clientAt(store.origin), localPath)).toEqual({ kind: "CREATED" });
+    expect(store.seen[0]!.headers["content-length"]).toBe(String(data.byteLength));
+    expect(store.seen[0]!.headers["x-goog-hash"]).toBe(`md5=${createHash("md5").update(data).digest("base64")}`);
+    expect(sha256Of(store.seen[0]!.body)).toBe(sha256Of(data));
+  });
+
+  it("fails a put whose file is read short of its size as it is hashed, before anything is sent", async () => {
     readStreams.splice(0);
     const store = await standIn(() => ({ status: 200, body: "{}" }));
     const localPath = await file(Buffer.alloc(200 * 1024, 4));

@@ -32,9 +32,10 @@ name is `INTERNAL_ERROR`, as for the web app's port.
 
 Two new codes: `STORAGE_BODY_CANCELLED` refuses a body's `read` after its
 `cancel`, or still waiting when it came; `STORAGE_FILE_CHANGED` fails a put
-whose file shrinks while its MD5 is read, before anything is sent, or is
-shorter, as it is sent, than when its MD5 was read. A file that cannot be
-read is refused with its transport code, such as `ENOENT`, naming no path.
+whose file is read short of its size as its MD5 is read, before anything is
+sent, or is shorter, as it is sent, than when its MD5 was read. A file that
+cannot be read is refused with its transport code, such as `ENOENT`, naming
+no path.
 
 ### Changed
 

@@ -101,8 +101,8 @@ export interface GoogleCloudStorageOptions {
  * - `STORAGE_UNEXPECTED_ANSWER`: an answer that cannot be read, proves nothing,
  *   or is not the bytes asked for;
  * - `STORAGE_BODY_CANCELLED`: a worker's read of a body it cancelled;
- * - `STORAGE_FILE_CHANGED`: a worker's file that was shorter, as it was sent,
- *   than when it was hashed;
+ * - `STORAGE_FILE_CHANGED`: a worker's file read short of its size as it was
+ *   hashed, or shorter, as it was sent, than when it was hashed;
  * - the transport's own one-word code, such as `ECONNREFUSED`;
  * - `STORAGE_UNREACHABLE`: a failure that names none.
  */
@@ -384,9 +384,9 @@ function pulledBody(stream: ReadableStream<Uint8Array>): S3ObjectBody {
 /**
  * A local file's size and MD5, read before it is sent: the MD5 travels with
  * it, so Cloud Storage refuses bytes that are not those read here, by its
- * documents; the emulator does not check (ADR-0160). A file that shrinks
- * while it is hashed is refused before anything is sent. A failure names no
- * path.
+ * documents; the emulator does not check (ADR-0160). A file read short of
+ * its size as it is hashed is refused before anything is sent. A failure
+ * names no path.
  */
 async function fileToSend(path: string): Promise<{ readonly size: number; readonly md5: string }> {
   const hash = createHash("md5");
