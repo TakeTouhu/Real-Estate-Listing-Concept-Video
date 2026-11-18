@@ -111,9 +111,11 @@ themselves, as they do for the folder.
   sent, than when it was hashed fails the upload with a new code,
   `STORAGE_FILE_CHANGED`, where the store would wait for the bytes its
   length promised: the request is cut before it is whole. A file longer
-  sends only as many bytes as were hashed. A file rewritten in place, its
-  length kept, is sent with an MD5 that no longer matches, which Google
-  refuses by its documents and the emulator does not check.
+  sends only as many bytes as were hashed, and one that shrinks while it is
+  hashed fails with the same code before anything is sent. A file
+  rewritten in place, its length kept, is sent with an MD5 that no longer
+  matches, which Google refuses by its documents and the emulator does not
+  check.
 - **The file is held open only while it is sent.** It is opened to be sent
   only when its first bytes are asked for, and let go however the request
   ends: a put refused before anything is sent, for want of a token, holds
@@ -159,21 +161,23 @@ The worker's production construction is part 2's, with its runtime.
 
 ## What was measured
 
-- **Unit tests, on a stand-in for the store** (16 new): a generation read as
+- **Unit tests, on a stand-in for the store** (17 new): a generation read as
   the worker pulls it; absence only once the bucket is proved, and a missing
   bucket never; a short answer failing with a code, and its body let go
   quietly; a read after cancel, and one waiting when it came, refused; the
   answer let go on a cancel partway through 64 MiB; another bucket, an
-  owner, an empty owner and a non-canonical key sending nothing; the put's
-  precondition, length, content type and MD5; the MD5 of every byte of an
-  empty file, a one-byte file and one of 1 MiB and 3 bytes; a file shortened
-  after its MD5 failing with a code, its upload cut before it is whole, and
-  one lengthened, or empty and then written to, sending only as many bytes
-  as were hashed; the file opened to send only as it is sent, and closed
-  when a put is refused before sending or answered partway; `412` as
-  `ALREADY_EXISTS` and every other status, `201` and `204` included, as its
-  code; a missing file naming no path; the put with no limit; on Google's
-  origin, one token for both views, sent on the worker's requests.
+  owner, an empty owner and a non-canonical key refused before the file is
+  read, sending nothing; the put's precondition, length, content type and
+  MD5; the MD5 of every byte of an empty file, a one-byte file and one of 1
+  MiB and 3 bytes; a file shortened after its MD5 failing with a code, its
+  upload cut before it is whole, one shrinking while it is hashed failing
+  before anything is sent, and one lengthened, or empty and then written to,
+  sending only as many bytes as were hashed; the file opened to send only as
+  it is sent, and closed when a put is refused before sending or answered
+  partway; `412` as `ALREADY_EXISTS` and every other status, `201` and `204`
+  included, as its code; a missing file naming no path; the put with no
+  limit; on Google's origin, one token for both views, sent on the worker's
+  requests.
 - **On the emulator** (12 new, beside the web app's): a missing key absent;
   a 3 MiB object streamed in several chunks; an empty object; a read after
   cancel refused; a missing bucket refused for both calls; a file stored
@@ -192,9 +196,7 @@ The worker's production construction is part 2's, with its runtime.
   bytes sent bounded by those hashed, an empty file's included. The fixes
   the review asked for, the file held open only while it is sent, the
   shortened file and the waiting read, each have a test that fails without
-  them. Run again on the fixes, every mutant that survives is equivalent,
-  or harmless: a file read before its bucket is refused still sends
-  nothing.
+  them. Run again on the fixes, every mutant that survives is equivalent.
 
 ## What cannot be shown here
 
@@ -206,8 +208,9 @@ The worker's production construction is part 2's, with its runtime.
 - What Google's `412` names is not measured. The emulator's names the
   condition not met; Google's documents list another, an organization's
   policy. The adapter reads any `412` as an object already stored, so every
-  caller reads the key back, and one that finds nothing fails as retryable:
-  a refused write is never taken for a stored file.
+  caller reads the key back, and one that finds nothing fails as retryable,
+  as both callers' tests show: a refused write is never taken for a stored
+  file.
 - The emulator has no permissions. The worker's account needs
   `storage.objects.get` and `storage.objects.list` to read and
   `storage.objects.create` to write; a write that never replaces an object

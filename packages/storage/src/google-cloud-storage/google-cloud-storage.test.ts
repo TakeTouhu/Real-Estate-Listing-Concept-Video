@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, truncateSync } from "node:fs";
 import { appendFile, mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
 import { createServer, globalAgent, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import { globalAgent as globalTlsAgent } from "node:https";
@@ -29,11 +29,16 @@ import { googleCloudStorageAgents, googleCloudStorageClient } from "./client";
 
 /** Every file stream the adapter opens, so a test can see that each is closed. */
 const readStreams = vi.hoisted((): Array<{ readonly closed: boolean }> => []);
+/** Run once, on the file, before the next stream the adapter opens reads it. */
+const beforeNextRead = vi.hoisted((): { hook?: (path: string) => void } => ({}));
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
   return {
     ...fs,
     createReadStream: (...args: Parameters<typeof fs.createReadStream>) => {
+      const hook = beforeNextRead.hook;
+      beforeNextRead.hook = undefined;
+      hook?.(String(args[0]));
       const stream = fs.createReadStream(...args);
       readStreams.push(stream);
       return stream;
@@ -1209,6 +1214,7 @@ describe("the worker's view (ADR-0160)", () => {
   });
 
   afterEach(async () => {
+    beforeNextRead.hook = undefined;
     await rm(folder, { recursive: true, force: true });
   });
 
@@ -1318,7 +1324,8 @@ describe("the worker's view (ADR-0160)", () => {
   it("sends nothing for another bucket, an owner, or a key that is not canonical, and names none", async () => {
     const store = await standIn(() => ({ status: 200, body: "{}" }));
     const client = clientAt(store.origin);
-    const localPath = await file(new Uint8Array([1]));
+    // No such file: each refusal comes before the file is read.
+    const localPath = join(folder, "missing.mp4");
     for (const input of [
       { ...target(ASSET), bucket: "vtavision-other" },
       { ...target(ASSET), expectedBucketOwner: "123456789012" },
@@ -1396,11 +1403,27 @@ describe("the worker's view (ADR-0160)", () => {
     const empty = await file(new Uint8Array(0));
     requests.mockImplementationOnce(async function (this: Gaxios, options) {
       await appendFile(empty, Buffer.from([9, 9]));
+      expect(options?.data).toEqual(Buffer.alloc(0));
       return send.call(this, options);
     });
     expect(await put(clientAt(store.origin), empty)).toEqual({ kind: "CREATED" });
     expect(store.seen[1]!.headers["content-length"]).toBe("0");
     expect(store.seen[1]!.body.byteLength).toBe(0);
+  });
+
+  it("fails a put whose file shrinks while it is hashed, before anything is sent", async () => {
+    readStreams.splice(0);
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const localPath = await file(Buffer.alloc(200 * 1024, 4));
+    beforeNextRead.hook = (path) => truncateSync(path, 100 * 1024);
+    expect(await failureOf(() => put(clientAt(store.origin), localPath))).toMatchObject({
+      code: "STORAGE_FILE_CHANGED",
+      message: "STORAGE_FILE_CHANGED",
+    });
+    // Only the MD5's read opened the file: no request was made to send it.
+    expect(readStreams).toHaveLength(1);
+    expect(requests).not.toHaveBeenCalled();
+    expect(store.seen).toEqual([]);
   });
 
   it("opens the file to send only as it is sent, and lets it go however the put ends", async () => {
@@ -1436,7 +1459,7 @@ describe("the worker's view (ADR-0160)", () => {
     const answers: Array<[number, unknown]> = [
       [412, { kind: "ALREADY_EXISTS" }],
       [404, "STORAGE_BUCKET_MISSING"],
-      // As Google refuses bytes whose MD5 is not the one sent.
+      // As Google, by its documents, refuses bytes whose MD5 is not the one sent.
       [400, "STORAGE_REFUSED"],
       [403, "STORAGE_FORBIDDEN"],
       [429, "STORAGE_RATE_LIMITED"],

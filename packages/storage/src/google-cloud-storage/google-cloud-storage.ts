@@ -384,20 +384,27 @@ function pulledBody(stream: ReadableStream<Uint8Array>): S3ObjectBody {
 /**
  * A local file's size and MD5, read before it is sent: the MD5 travels with
  * it, so Cloud Storage refuses bytes that are not those read here, by its
- * documents; the emulator does not check (ADR-0160).
- * A failure names no path.
+ * documents; the emulator does not check (ADR-0160). A file that shrinks
+ * while it is hashed is refused before anything is sent. A failure names no
+ * path.
  */
 async function fileToSend(path: string): Promise<{ readonly size: number; readonly md5: string }> {
+  const hash = createHash("md5");
+  let size: number;
+  let hashed = 0;
   try {
-    const { size } = await stat(path);
-    const hash = createHash("md5");
+    ({ size } = await stat(path));
     if (size > 0) {
-      for await (const chunk of createReadStream(path, { start: 0, end: size - 1 })) hash.update(chunk as Buffer);
+      for await (const chunk of createReadStream(path, { start: 0, end: size - 1 })) {
+        hashed += (chunk as Buffer).byteLength;
+        hash.update(chunk as Buffer);
+      }
     }
-    return { size, md5: hash.digest("base64") };
   } catch (error) {
     throw new GoogleCloudStorageError(transportCode(error));
   }
+  if (hashed !== size) throw new GoogleCloudStorageError("STORAGE_FILE_CHANGED");
+  return { size, md5: hash.digest("base64") };
 }
 
 /**

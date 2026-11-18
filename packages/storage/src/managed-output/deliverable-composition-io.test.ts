@@ -66,6 +66,8 @@ interface StoreOptions {
   readonly getThrows?: boolean;
   readonly nullBody?: boolean;
   readonly putThrows?: boolean;
+  /** The put answers this and stores nothing. */
+  readonly putStoresNothing?: "CREATED" | "ALREADY_EXISTS";
   readonly occupiedWith?: Uint8Array;
 }
 
@@ -102,6 +104,7 @@ class FakeStore implements DeliverableObjectClient {
   }): Promise<{ readonly kind: "CREATED" | "ALREADY_EXISTS" }> {
     this.puts.push({ key: input.key, localPath: input.localPath, contentType: input.contentType });
     if (this.options.putThrows === true) throw new Error("put failed");
+    if (this.options.putStoresNothing !== undefined) return { kind: this.options.putStoresNothing };
     if (this.stored.has(input.key)) return { kind: "ALREADY_EXISTS" };
     this.stored.set(input.key, new Uint8Array(await readFile(input.localPath)));
     return { kind: "CREATED" };
@@ -546,6 +549,20 @@ describe("publication is first-wins and the receipt is read back from the object
     );
     expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
     expect(JSON.stringify(outcome).includes("put failed")).toBe(false);
+  });
+
+  it("is retryable when nothing is at the key after the put, whatever the put answered", async () => {
+    // A write refused for another reason and answered as already stored (a
+    // Cloud Storage 412, ADR-0160) is never taken for a published deliverable.
+    for (const answer of ["CREATED", "ALREADY_EXISTS"] as const) {
+      const store = new FakeStore({ putStoresNothing: answer });
+      const outcome = await withComposedFile(new Uint8Array([8, 8]), (localPath) =>
+        publisherFor(store).publish({ key: KEY, localPath }),
+      );
+      expect(outcome).toEqual({ kind: "RETRYABLE_FAILURE" });
+      expect(store.puts).toHaveLength(1);
+      expect(store.gets.map((one) => one.key)).toEqual([KEY]);
+    }
   });
 
   it("re-reads the canonical object even when this call created it", async () => {

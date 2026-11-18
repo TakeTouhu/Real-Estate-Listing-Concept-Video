@@ -2842,7 +2842,8 @@ never replaces an object, so it should need no `storage.objects.delete`.
 Not measured, and checks for that deployment (`docs/decisions/TODO.md`):
 what Google answers a write that loses its race from an account without
 the delete permission, what it answers a read the account may not make,
-and that it refuses an upload whose MD5 does not match.
+that it refuses an upload whose MD5 does not match, whether it answers
+`412` before the whole file is sent, and what its `412` names.
 
 **On a development machine.** Nothing to do.
 
