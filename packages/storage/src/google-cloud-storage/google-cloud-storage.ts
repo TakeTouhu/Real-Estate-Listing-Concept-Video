@@ -383,7 +383,8 @@ function pulledBody(stream: ReadableStream<Uint8Array>): S3ObjectBody {
 
 /**
  * A local file's size and MD5, read before it is sent: the MD5 travels with
- * it, so Cloud Storage refuses bytes that are not those read here (ADR-0160).
+ * it, so Cloud Storage refuses bytes that are not those read here, by its
+ * documents; the emulator does not check (ADR-0160).
  * A failure names no path.
  */
 async function fileToSend(path: string): Promise<{ readonly size: number; readonly md5: string }> {
@@ -403,7 +404,7 @@ async function fileToSend(path: string): Promise<{ readonly size: number; readon
  * The file's first `size` bytes as they are sent, the file opened only once
  * the first is asked for, and closed with the stream. A file shorter now than
  * when it was hashed fails the upload, which would otherwise wait for bytes
- * that never come; one longer sends only the bytes its MD5 is of.
+ * that never come; one longer sends only as many bytes as were hashed.
  */
 function sentFile(path: string, size: number): Readable {
   return Readable.from(
@@ -632,7 +633,8 @@ export function createGoogleCloudStorageViews(options: GoogleCloudStorageOptions
     async putObjectIfAbsent(input): Promise<{ readonly kind: "CREATED" | "ALREADY_EXISTS" }> {
       const name = workerKey(input);
       const { size, md5 } = await fileToSend(input.localPath);
-      // As many bytes as the MD5 was read from, and no more: bytes changed since are refused by the store.
+      // As many bytes as the MD5 was read from, and no more: bytes changed since are refused by Google's
+      // store, by its documents (the emulator does not check).
       const data = size === 0 ? Buffer.alloc(0) : sentFile(input.localPath, size);
       let response: GaxiosResponse<unknown>;
       try {

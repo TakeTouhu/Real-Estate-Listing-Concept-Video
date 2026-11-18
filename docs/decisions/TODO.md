@@ -1961,8 +1961,10 @@ into on 2026-11-17.
       documents, is read and not measured (ADR-0160). Nor is whether Google
       answers `412` before the whole file is sent: either way nothing is
       stored, but a writer that loses its race may send a deliverable or a
-      Clean Master first. To be checked under the product owner's approval
-      of that deployment.
+      Clean Master first. Nor what Google's `412` names: the adapter reads
+      any `412` as an object already stored, and the caller's read-back
+      fails as retryable where nothing is. To be checked under the product
+      owner's approval of that deployment.
 
 ## Open in RD-3b — what the Google Cloud Storage adapter's streamed read leaves open
 

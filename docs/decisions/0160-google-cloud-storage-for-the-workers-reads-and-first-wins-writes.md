@@ -71,9 +71,9 @@ its size and generation first, within gaxios's own 3-second limit, then that
 generation's bytes as a stream, taken one chunk for each `read` the worker
 makes. So:
 
-- **Absence is proved.** A key is absent, the seam's `null` body, only once
-  a list in the bucket answers (ADR-0156 Decision 2). A missing bucket is
-  `STORAGE_BUCKET_MISSING`, never an absent object.
+- **Absence needs its bucket proved.** A key is absent, the seam's `null`
+  body, only once a list in the bucket answers (ADR-0156 Decision 2). A
+  missing bucket is `STORAGE_BUCKET_MISSING`, never an absent object.
 - **A short answer fails.** A stream that ends short of the size fails with
   a code (ADR-0157), so the worker's count never meets an end it could take
   for the object's.
@@ -107,11 +107,13 @@ themselves, as they do for the folder.
   two reads, or on the way, are refused before first-wins makes them
   permanent. MD5 rather than CRC-32C, which Google prefers: the hash is
   `node:crypto`'s, and CRC-32C would need a table written here.
-- **Exactly the bytes hashed are sent.** A file shorter, as it is sent,
-  than when it was hashed fails the upload with a new code,
+- **No more bytes are sent than were hashed.** A file shorter, as it is
+  sent, than when it was hashed fails the upload with a new code,
   `STORAGE_FILE_CHANGED`, where the store would wait for the bytes its
-  length promised; a file longer sends only its first bytes, which the MD5
-  is of.
+  length promised: the request is cut before it is whole. A file longer
+  sends only as many bytes as were hashed. A file rewritten in place, its
+  length kept, is sent with an MD5 that no longer matches, which Google
+  refuses by its documents and the emulator does not check.
 - **The file is held open only while it is sent.** It is opened to be sent
   only when its first bytes are asked for, and let go however the request
   ends: a put refused before anything is sent, for want of a token, holds
@@ -158,21 +160,20 @@ The worker's production construction is part 2's, with its runtime.
 ## What was measured
 
 - **Unit tests, on a stand-in for the store** (16 new): a generation read as
-  the worker pulls it; absence only once the bucket is proved, and a
-  missing bucket never; a short answer failing with a code, and its body
-  let go quietly; a read after cancel, and one waiting when it came,
-  refused; the answer let go on a cancel partway through 64 MiB; another
-  bucket, an owner, an empty owner and a non-canonical key sending
-  nothing; the put's precondition, length, content type and MD5; the MD5
-  of every byte of an empty file, a one-byte file and one of 1 MiB and 3
-  bytes; a file shortened
-  after its MD5 failing with a code and sending nothing, and one lengthened
-  sending only what was hashed; the file opened to send only as it is sent,
-  and closed when a put is refused before sending or answered partway;
-  `412` as `ALREADY_EXISTS` and every other status, `201` and `204`
-  included, as its code; a missing file naming no path; the put with no
-  limit; on Google's origin, one token for both views, sent on the worker's
-  requests.
+  the worker pulls it; absence only once the bucket is proved, and a missing
+  bucket never; a short answer failing with a code, and its body let go
+  quietly; a read after cancel, and one waiting when it came, refused; the
+  answer let go on a cancel partway through 64 MiB; another bucket, an
+  owner, an empty owner and a non-canonical key sending nothing; the put's
+  precondition, length, content type and MD5; the MD5 of every byte of an
+  empty file, a one-byte file and one of 1 MiB and 3 bytes; a file shortened
+  after its MD5 failing with a code, its upload cut before it is whole, and
+  one lengthened, or empty and then written to, sending only as many bytes
+  as were hashed; the file opened to send only as it is sent, and closed
+  when a put is refused before sending or answered partway; `412` as
+  `ALREADY_EXISTS` and every other status, `201` and `204` included, as its
+  code; a missing file naming no path; the put with no limit; on Google's
+  origin, one token for both views, sent on the worker's requests.
 - **On the emulator** (12 new, beside the web app's): a missing key absent;
   a 3 MiB object streamed in several chunks; an empty object; a read after
   cancel refused; a missing bucket refused for both calls; a file stored
@@ -184,13 +185,16 @@ The worker's production construction is part 2's, with its runtime.
   as it is sent and twice after: `CREATED` in 1.4 to 2.7 seconds, the
   process's memory rising by 36 MiB at most and its buffers by 64 MiB; the
   same key again answered `ALREADY_EXISTS`. The file is streamed, not held.
-- **Mutation.** 56 mutants of the new code were run against these tests;
-  41 failed them at first. Tests were added for the gaps the survivors
-  showed: the MD5 of a file longer than one read, the answer let go on a
-  cancel, a failed body's cancel, an empty owner, a `2xx` other than `200`,
-  and the bytes sent bounded by those hashed. The fixes the review asked
-  for, the file held open only while it is sent, the shortened file and the
-  waiting read, each have a test that fails without them.
+- **Mutation.** 56 mutants of the new code were run against these tests; 41
+  failed them at first. Tests were added for the gaps the survivors showed:
+  the MD5 of a file longer than one read, the answer let go on a cancel, a
+  failed body's cancel, an empty owner, a `2xx` other than `200`, and the
+  bytes sent bounded by those hashed, an empty file's included. The fixes
+  the review asked for, the file held open only while it is sent, the
+  shortened file and the waiting read, each have a test that fails without
+  them. Run again on the fixes, every mutant that survives is equivalent,
+  or harmless: a file read before its bucket is refused still sends
+  nothing.
 
 ## What cannot be shown here
 
@@ -199,6 +203,11 @@ The worker's production construction is part 2's, with its runtime.
 - Whether Google answers `412` before the whole file is sent is not
   measured: either way nothing is stored, but a writer that loses its race
   may send its file first.
+- What Google's `412` names is not measured. The emulator's names the
+  condition not met; Google's documents list another, an organization's
+  policy. The adapter reads any `412` as an object already stored, so every
+  caller reads the key back, and one that finds nothing fails as retryable:
+  a refused write is never taken for a stored file.
 - The emulator has no permissions. The worker's account needs
   `storage.objects.get` and `storage.objects.list` to read and
   `storage.objects.create` to write; a write that never replaces an object

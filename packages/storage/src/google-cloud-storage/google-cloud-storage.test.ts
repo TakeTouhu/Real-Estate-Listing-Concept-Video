@@ -1379,7 +1379,7 @@ describe("the worker's view (ADR-0160)", () => {
       await truncate(shorter, 100 * 1024);
       return send.call(this, options);
     });
-    // Refused, where the store would wait for the bytes its length promised.
+    // Refused, where the store would wait for the bytes its length promised: cut before it is whole.
     expect(await failureOf(() => put(clientAt(store.origin), shorter))).toMatchObject({
       code: "STORAGE_FILE_CHANGED",
       message: "STORAGE_FILE_CHANGED",
@@ -1392,6 +1392,15 @@ describe("the worker's view (ADR-0160)", () => {
     });
     expect(await put(clientAt(store.origin), longer)).toEqual({ kind: "CREATED" });
     expect(store.seen[0]!.body).toEqual(data);
+    // An empty file written to before it is sent is still sent as no bytes.
+    const empty = await file(new Uint8Array(0));
+    requests.mockImplementationOnce(async function (this: Gaxios, options) {
+      await appendFile(empty, Buffer.from([9, 9]));
+      return send.call(this, options);
+    });
+    expect(await put(clientAt(store.origin), empty)).toEqual({ kind: "CREATED" });
+    expect(store.seen[1]!.headers["content-length"]).toBe("0");
+    expect(store.seen[1]!.body.byteLength).toBe(0);
   });
 
   it("opens the file to send only as it is sent, and lets it go however the put ends", async () => {
