@@ -36,9 +36,10 @@ reported as skipped. CI runs them in the `media` job on Ubuntu 24.04.
 
 ## `tests/storage/*.gcs.test.ts`
 
-Suites that speak to the Cloud Storage emulator (ADR-0156, ADR-0157): the
-Google Cloud Storage adapter storing, reading, streaming and deleting objects
-in a bucket of each test's own. They are **excluded** from `pnpm test` and
+Suites that speak to the Cloud Storage emulator (ADR-0156, ADR-0157,
+ADR-0158): the Google Cloud Storage adapter storing, reading, streaming and
+deleting objects in a bucket of each test's own, with the proxy variables
+naming a proxy that is not there. They are **excluded** from `pnpm test` and
 run explicitly, with the emulator running and named:
 
 ```bash
@@ -48,7 +49,8 @@ pnpm test:gcs
 
 Without the variable the run fails: Vitest marks the file failed and its
 tests skipped. An origin that is not on this machine is refused, and the
-suite clears the proxy variables, so no suite reaches a real store. The
+adapter sends no request through a proxy and no token to any store but
+Google's, so no suite reaches a real store. The
 emulator has no permissions, so what Google answers a caller that may not
 read or list is not seen here. CI runs them in the `storage` job beside the
 emulator's service container.

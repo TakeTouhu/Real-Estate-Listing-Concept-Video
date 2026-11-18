@@ -1555,6 +1555,10 @@ blocks activation. The production email service is tracked below, under
       of `exists`; readiness asks it once RD-3c wires the adapter in. The
       credential RD-3c adds is fetched by a request of its own, whose limit
       is open below (Open in RD-3a).*
+      *Amended in RD-3c (ADR-0158 Decisions 4 and 8): the token's request is
+      limited by gaxios's own 3 seconds too, so `exists` waits at most the
+      two limits, about six seconds, when a token must be asked for. RD-3d,
+      not RD-3c, wires the adapter in.*
 - [ ] **Decide whether the web app's own database client is limited.** It
       keeps Prisma's defaults: 5 seconds to open a connection, 10 to wait
       for one from its pool, and no limit on a query it has sent (ADR-0152
@@ -1810,17 +1814,26 @@ into on 2026-11-17.
       to the product owner first; one an HTTP agent of the adapter's own keeps
       on an idle connection was measured to work, but bypasses gaxios's choice
       of proxy, which RD-3c decides.*
+      *Amended in RD-3c (ADR-0158 Decision 6): every request now goes on HTTP
+      agents of the adapter's own, so such a limit would bypass nothing. None
+      is set.*
 - [ ] **Prove the production build with gaxios.** gaxios imports
       `node-fetch` 3 when it first sends a request. Nothing in the web app
       loads the adapter yet; RD-3c, which wires it in, is to prove that
       `next build` and a production start send its requests, or to keep
       gaxios out of the server bundle (`serverExternalPackages`).
-- [ ] **Limit the request that fetches the store's credential.** The
+      *Amended in RD-3c (ADR-0158 Decision 8): RD-3d wires the adapter in,
+      and proves this.*
+- [x] **Limit the request that fetches the store's credential.** The
       3-second limit is the list's (ADR-0156 Decision 3). RD-3c fetches a
       credential from the metadata server before the store is asked: that
       request is to carry a limit of gaxios's own too, or a credential that
       never comes holds `exists`, and readiness, unended. With both
       limited, `exists` waits at most the two together.
+      *Done in RD-3c (ADR-0158 Decision 4): the token's request is given
+      gaxios's own `timeout` of 3 seconds, a constant of its own. Twenty
+      requests waiting on a metadata server that said nothing ended together
+      at 3.0 seconds, having asked once, as `STORAGE_CREDENTIAL_UNAVAILABLE`.*
 - [ ] **Keep proxy variables out of the web app's environment unless one
       is meant.** gaxios sends the store's requests through `HTTPS_PROXY`,
       `HTTP_PROXY` or their lowercase spellings when one is set,
@@ -1834,6 +1847,42 @@ into on 2026-11-17.
       is to keep its requests from an ambient proxy or refuse one at start;
       RD-10's image is to set none of them, and the deployment (part 2)
       none unless a proxy is meant.
+      *Narrowed in RD-3c (ADR-0158 Decision 6): the adapter sends every
+      request, to the store and for its token, on HTTP agents of its own, so
+      no proxy variable, and not Node.js's own `NODE_USE_ENV_PROXY`, sends
+      them through a proxy; measured with both. So a deployment that means a
+      proxy cannot send storage through it. The image's part and the
+      deployment's stay open for the process's other clients.*
+
+## Open in RD-3c — what the Google Cloud Storage adapter's credential leaves open
+
+- [ ] **Check the token at the first deployment.** Nothing here asks Google:
+      not measured are the token's real lifetime and scopes on Cloud Run
+      (`devstorage.read_write` or `cloud-platform`); a `401` once a token has
+      ended, which the adapter answers by letting it go (ADR-0158 Decision
+      5); whether a token that ends during a long upload or streamed read
+      cuts it; and whether Cloud Run's resolver looks
+      `metadata.google.internal` up through search domains first. Google
+      advises a user-managed service account over the default one. To be
+      checked under the product owner's approval of that deployment.
+- [ ] **Decide whether Google's regional or Private Service Connect endpoints
+      may be sent a token.** Only `https://storage.googleapis.com` is
+      (ADR-0158 Decision 2): another of Google's endpoints is sent none, and
+      would answer `401`. It bears on the choice of region, the product
+      owner's, and on whether data must stay in one place, which no document
+      states.
+- [ ] **Decide whether the metadata server's `429` and `503` are asked
+      again.** Google says the server routinely answers them, and advises
+      asking again after a wait. A wait is a deadline in the repository's
+      code, which goes to the product owner first, and nothing is asked
+      again (ADR-0156). Until then a request that needs a first token during
+      such an answer fails with `STORAGE_CREDENTIAL_UNAVAILABLE`; at a
+      renewal, the held token is sent while it lasts (ADR-0158 Decision 3).
+- [ ] **Keep `NODE_DEBUG` off in production.** Naming `https`, it makes
+      Node.js write each new connection's request to Google's store, the
+      token's `Authorization` header and the object's path included, to the
+      process's error output (ADR-0158 Decision 6). RD-3d's start check
+      decides whether to refuse it.
 
 ## Open in RD-3b — what the Google Cloud Storage adapter's streamed read leaves open
 
@@ -2464,6 +2513,9 @@ them is **built**. Each item below records the settled decision and what remains
       first, then that generation's bytes as a stream taken only as it is
       sent, let go at its end, on cancel and on failure. RD-3c is to wire the
       adapter in.*
+      *RD-3c (ADR-0158) adds the token Google's store asks for, from the
+      metadata server, and keeps every request from a proxy. RD-3d
+      (ADR-0159) is to wire the adapter in.*
 - [x] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`. *Done in Phase 6C

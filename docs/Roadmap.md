@@ -1099,8 +1099,8 @@ empty one. A list is ended by gaxios's own 3-second setting, which decides
 how the adapter's `exists` is limited; no deadline is written in the
 repository's code. A new CI job runs it against the Cloud Storage emulator.
 It has no streamed read and sends no credential, and nothing constructs it.
-RD-3 is split for size: RD-3b adds the streamed read, and RD-3c wires the
-adapter into the web app.
+RD-3 is split for size: RD-3b adds the streamed read, RD-3c the credential,
+and RD-3d wires the adapter into the web app.
 
 **RD-3b — the Google Cloud Storage adapter's streamed read** (ADR-0157, no
 migration): the adapter reads an object, or one range of it, as a stream
@@ -1112,6 +1112,18 @@ by a code; a stream that ends short of its range, or brings a chunk past it,
 ends with one. The stream ends at the range's last byte, and the answer is
 let go then, on cancel and on failure. The bytes are given no limit. The
 adapter is now the whole port, still constructed by nothing.
+
+**RD-3c — the Google Cloud Storage adapter's credential** (ADR-0158, no
+migration): for Google's own store alone, the adapter sends every request
+the token of the service account the process runs as, asked for from the
+metadata server when a request first needs it, within gaxios's own 3-second
+setting, and again 240 seconds before its end. The answer is checked, a
+token Google answers `401` is let go, and no request is sent without one.
+Every request, to the store and for the token, goes on HTTP agents of the
+adapter's own, so no proxy variable, and not Node.js's own proxy switch,
+sends it elsewhere. A timeout in a production build is read as one. The
+adapter reads nothing from the environment, and nothing constructs it; RD-3d
+wires it into the web app (ADR-0159).
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —

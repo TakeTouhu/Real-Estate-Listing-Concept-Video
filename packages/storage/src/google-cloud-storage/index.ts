@@ -1,7 +1,7 @@
 /**
- * Object storage in a Google Cloud Storage bucket (ADR-0156, ADR-0157). A
- * subpath of its own, so nothing that loads `@app/storage` loads its client;
- * nothing in either application constructs it yet.
+ * Object storage in a Google Cloud Storage bucket (ADR-0156, ADR-0157,
+ * ADR-0158). A subpath of its own, so nothing that loads `@app/storage` loads
+ * its client; nothing in either application constructs it yet.
  */
 export {
   GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES,
