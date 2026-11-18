@@ -1943,6 +1943,23 @@ describe("the staging sink's upload (ADR-0161)", () => {
     expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-262143/*`, `${CHUNK} bytes 262144-262148/262149`]);
   });
 
+  it("takes a cancel while a chunk is unanswered, and lets the upload go at once", async () => {
+    const store = await resumableStore((_request, index) =>
+      index === 1 ? { status: 308, headers: { range: "bytes=0-262143" }, afterMs: 200 } : undefined,
+    );
+    const client = clientAt(store.origin);
+    const { uploadId } = await client.createMultipartUpload(target);
+    await client.uploadPart(part(uploadId, 1, filled(QUANTUM, 1)));
+    const sending = client.uploadPart(part(uploadId, 2, filled(5, 2)));
+    await client.abortMultipartUpload({ ...target, uploadId });
+    await sending;
+    expect(await failureOf(() => client.uploadPart(part(uploadId, 3, filled(1, 3))))).toMatchObject({
+      code: "STORAGE_UNKNOWN_UPLOAD",
+    });
+    // The chunk already sent is not stopped; the cancel goes beside it.
+    expect(described(store).sort()).toEqual([OPENED, `${CHUNK} bytes 0-262143/*`, CANCEL].sort());
+  });
+
   it("takes a session only at the store's own origin and upload path, naming nothing of one it refuses", async () => {
     for (const location of [
       (origin: string) => `${origin.replace(/:\d+$/, ":9")}${SESSION}`,

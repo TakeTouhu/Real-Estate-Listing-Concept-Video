@@ -1981,7 +1981,9 @@ into on 2026-11-17.
 - [ ] **Check the rest of the upload at the first deployment** (ADR-0161):
       that Google refuses a last chunk whose MD5 does not match; what it
       answers a chunk that breaks the 256 KiB rule; the form of its `308`
-      answers and of the session's `Location`; that a `DELETE` cancels a
+      answers and of the session's `Location`, and whether it ever keeps
+      fewer bytes of a chunk than it was sent, which the adapter fails as
+      retryable rather than send the rest; that a `DELETE` cancels a
       session, and what it is answered after a last chunk refused with
       `412`; and whether an abandoned session's bytes are billed for the
       week before Google ends it, which under Cloud Storage takes the place

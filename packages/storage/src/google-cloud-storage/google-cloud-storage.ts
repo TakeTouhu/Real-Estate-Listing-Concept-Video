@@ -67,11 +67,12 @@ import { googleCloudStorageClient } from "./client";
 
 /**
  * The milliseconds a question that moves no object's bytes is given to be
- * answered in full: `exists`, the list that proves a bucket after a `404`, and
- * the size and generation a streamed read asks first. A setting of gaxios's
- * own, which keeps the deadline; none is written here (ADR-0156 Decision 3,
- * ADR-0157). A put, a delete, a whole object's read and a streamed read's bytes
- * are given none.
+ * answered in full: `exists`, the list that proves a bucket after a `404`, the
+ * size and generation a streamed read asks first, and a resumable upload's
+ * start and cancel (ADR-0161). A setting of gaxios's own, which keeps the
+ * deadline; none is written here (ADR-0156 Decision 3, ADR-0157). A put, an
+ * object's delete, a whole object's read, a streamed read's bytes and an
+ * upload's chunks are given none.
  */
 export const GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS = 3_000;
 
@@ -125,8 +126,8 @@ export interface GoogleCloudStorageOptions {
  *   the staging sink reads one (ADR-0161);
  * - `STORAGE_UNKNOWN_UPLOAD`: an upload this store did not start, or not for
  *   that key;
- * - `STORAGE_UPLOAD_BUSY`: a call on an upload while another on it is
- *   unanswered;
+ * - `STORAGE_UPLOAD_BUSY`: a part or a completion of an upload while another
+ *   call on it is unanswered (a cancel is always taken);
  * - `STORAGE_UPLOAD_FAILED`: a call on an upload once a request on it failed;
  * - `STORAGE_PART_REFUSED`: a part out of order, empty, or whose checksum is
  *   not its bytes'; one followed by another that is not a whole number of
@@ -869,7 +870,7 @@ export function createGoogleCloudStorageViews(options: GoogleCloudStorageOptions
         } else if (response.status === 412) {
           upload.state = "LOST";
         } else {
-          // Bytes the store did not keep are no longer here to send again.
+          // No chunk is sent twice: bytes the store did not keep fail the upload, and the sink starts again.
           throw failedUpload(upload, response.status);
         }
       }

@@ -36,9 +36,9 @@ stored and return that object's receipt; any other failure is retryable.
 It knows which part is the last only at its commit.
 
 Cloud Storage has no multipart upload that takes a precondition: its XML
-API's refuses one, and its completion replaces what is stored. Composing
-temporary objects is limited to 32 of them and leaves billed objects
-behind a crash. A resumable upload, in the JSON API, is one session:
+API's refuses one, and its completion replaces what is stored. A compose
+takes at most 32 temporary objects, and leaves billed objects behind a
+crash. A resumable upload, in the JSON API, is one session:
 
 - started with a `POST`, which may name `ifGenerationMatch=0`, and
   answered with the session's URI in `Location`;
@@ -63,8 +63,8 @@ this record:
   the key while a session is open makes its last chunk `412`. **Google's
   documents do not say when the precondition is checked.** Its own Node.js
   client names it on the start alone.
-- Google checks an MD5 sent with the last chunk against the whole object.
-  No chunk can be checked alone.
+- By Google's documents, an MD5 sent with the last chunk is checked
+  against the whole object, and no chunk can be checked alone.
 - The emulator does not refuse a chunk that is not a whole number of 256
   KiB. It finishes an object when asked for an upload's status, stores a
   chunk sent twice twice, and stores chunks sent out of order or at once
@@ -80,16 +80,24 @@ Then:
   its part. When the next part comes, the one held is sent as a chunk with
   no total, from where the store's bytes end, and the new one is held. The
   last part is sent by `completeMultipartUpload` with the object's size,
-  since the sink names its last part only there. The copy is one part more
-  per upload, 8 MiB at the default size, beside the sink's own array.
+  since the sink names its last part only there. Beside the sink's own
+  array, an upload holds one part between calls and two while a chunk is
+  sent, since a part is copied before the one held is sent: 8 MiB and 16
+  MiB at the default size.
 - **One request at a time, in order, each sent once.** A part must be the
-  next by number. A call on an upload while another on it is unanswered is
-  refused (new code `STORAGE_UPLOAD_BUSY`). No chunk is sent again and no
-  status is asked for.
+  next by number. A part or a completion while another call on the upload
+  is unanswered is refused (new code `STORAGE_UPLOAD_BUSY`). No chunk is
+  sent again and no status is asked for. A cancel is taken at any time: it
+  lets the upload go at once, and does not stop a chunk already sent, which
+  may still finish the object. The sink cancels only once its calls are
+  answered.
 - **A chunk must be kept whole.** It must be answered `308` with the range
   of every byte sent so far; anything else fails the upload, with
   `STORAGE_UNEXPECTED_ANSWER` or the status's code. A store that kept fewer
-  bytes cannot be sent the rest: the sink no longer holds them. Once a
+  bytes could be sent the rest from the part still held, but no chunk is
+  sent twice: the upload fails as retryable, and the sink starts again.
+  Whether Google ever keeps fewer bytes of a chunk than it was sent is a
+  check for the first deployment. Once a
   request on an upload fails, every later call on it but a cancel is
   refused (new code `STORAGE_UPLOAD_FAILED`), and the sink starts again.
 - **The last chunk finishes it.** `200` or `201` is a publish, and the
@@ -97,8 +105,8 @@ Then:
 - **The 256 KiB rule is the adapter's.** A part that is not a whole number
   of 256 KiB is refused when another follows it (new code
   `STORAGE_PART_REFUSED`), before anything is sent. The sink's 8 MiB
-  default and 5 MiB floor are whole numbers of 256 KiB; another configured
-  size fails every transfer of more than one part as retryable.
+  default and 5 MiB floor are whole numbers of 256 KiB; a configured size
+  that is not fails every transfer of more than one part as retryable.
 - **What is completed is what was taken.** A completion that names other
   parts than those taken, in another order or none, is refused with
   `STORAGE_PART_REFUSED`, and one without `ifNoneMatch: "*"` with
@@ -199,7 +207,7 @@ ignores that precondition too.
 
 ## What was measured
 
-- **Unit tests, on a stand-in for the store** (22 new):
+- **Unit tests, on a stand-in for the store** (23 new):
   - the start, with its precondition, content type and limit;
   - each part sent when the next comes, from where the store's bytes end,
     and the last with the size and the whole object's MD5;
@@ -217,7 +225,8 @@ ignores that precondition too.
     completion as the sink's lost race, with the parts after it dropped;
   - a short range, none, an early finish and refusals each failing the
     upload, with nothing sent on it after but the cancel;
-  - a call while another is unanswered refused;
+  - a part or a completion while another call is unanswered refused, and
+    a cancel taken, letting the upload go at once;
   - a session at another origin or path, with credentials, with a
     fragment, or with no `upload_id` refused, and no failure naming the
     session;
@@ -247,8 +256,9 @@ ignores that precondition too.
 
 - When Google checks a resumable upload's precondition (above).
 - That Google refuses a last chunk whose MD5 does not match.
-- What Google answers a chunk that breaks the 256 KiB rule, and the form
-  of its `308` answers and of its `Location`.
+- What Google answers a chunk that breaks the 256 KiB rule, the form of
+  its `308` answers and of its `Location`, and whether it ever keeps fewer
+  bytes of a chunk than it was sent.
 - That a `DELETE` cancels a session. The emulator's cancels nothing, so CI
   shows only that the sink did not finish the upload. What a `DELETE` is
   answered after a last chunk refused with `412` is not known either.
@@ -287,9 +297,11 @@ sequenceDiagram
 - The staging sink can store a provider's scene video in Cloud Storage
   once the worker is given the view: RD-4c in development, part 2 in
   production, after the precondition check above.
-- An upload holds one part more than under S3, beside the sink's own
-  array: about 16 MiB per transfer at the default part size. How many
-  transfers a worker runs at once is part 2's.
+- An upload holds more than under S3, beside the sink's own array: one
+  part between calls and two while a chunk is sent. At the default part
+  size a transfer holds about 16 MiB between calls and 24 MiB while a
+  chunk is sent, which is most of its time. How many transfers a worker
+  runs at once is part 2's.
 - No migration, setting, route, page, package or CI job is added; the
   emulator suite runs in the existing `storage` job.
 - Not applicable: the change log and release notes, which no RD milestone
