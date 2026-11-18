@@ -393,7 +393,7 @@ describe("where it is constructed", () => {
     expect(naming(/createGoogleCloudStorage\(/)).toEqual([
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
     ]);
-    // Any quoted path naming gaxios or the folder, or anything below either, so an alias is caught too.
+    // Any quoted path beginning with gaxios, or naming the folder or anything below it, so an alias is caught too.
     const loading = /["'`]gaxios(?:\/[^"'`]*)?["'`]|google-cloud-storage(?:\/[\w.-]*)*["'`]/;
     expect(naming(loading).sort()).toEqual([
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",

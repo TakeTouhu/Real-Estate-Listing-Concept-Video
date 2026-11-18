@@ -75,17 +75,18 @@ record; the oldest dates from 2018. One, `node-domexception`, is marked
 deprecated by its author; `fetch-blob`, under `node-fetch` 3, uses it.
 gaxios reads the proxy variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`,
 and their lowercase spellings) and no other; the `debug` package under its
-proxy agent, loaded only when a proxy is used, reads `DEBUG`, every
-`DEBUG_*` variable and, where `supports-color` resolves, the colour
-variables that reads. A process that sets a proxy variable sends the
-store's requests through it, `HTTPS_PROXY` even to an `http` origin, unless
-`NO_PROXY` names the host or its origin exactly, or a domain it ends in
-written with a leading `.` or `*.`: gaxios ignores a bare parent domain, a
-range, `*` and a host with its port there. A proxy's refusal then reads as
-the store's own status, and a `DEBUG` that names the proxy agent writes the
-proxy's address, password and all, to the log. Measured against a stand-in
-proxy. The suites clear the proxy variables; keeping them from production
-is open (`docs/decisions/TODO.md`).
+proxy agent, loaded only when a proxy is used, reads `DEBUG` and every
+`DEBUG_*` variable, and, where `supports-color` resolves, the variables it
+reads to choose colours (`FORCE_COLOR`, `TERM`, `CI` and others). A process
+that sets a proxy variable sends the store's requests through it,
+`HTTPS_PROXY` even to an `http` origin, unless `NO_PROXY` names the host or
+its origin exactly, or a domain it ends in written with a leading `.` or
+`*.`: gaxios ignores a bare parent domain, a range, `*` and a host with its
+port there. A proxy's refusal then reads as the store's own status, and a
+`DEBUG` that names the proxy agent writes the proxy's address, password and
+all, to the log. Measured against a stand-in proxy. The suites clear the
+proxy variables; keeping them from production is open
+(`docs/decisions/TODO.md`).
 
 Every request is sent once (`retry: false`), every status is read by the
 adapter (`validateStatus` accepts all), and a redirect is a refusal, never

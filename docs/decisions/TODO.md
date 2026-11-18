@@ -1776,22 +1776,23 @@ into on 2026-11-17.
 
 ## Open in RD-3a — what the Google Cloud Storage adapter leaves open
 
-- [ ] **Check what Cloud Storage answers under least privilege, at the
-      first deployment.** The adapter tells a missing object from a missing
-      bucket by a list (ADR-0156 Decision 2), so its account needs
+- [ ] **Check what Cloud Storage answers under least privilege, at the first
+      deployment.** The adapter tells a missing object from a missing bucket
+      by a list (ADR-0156 Decision 2), so its account needs
       `storage.objects.list` on the bucket, beside `get`, `create` and
       `delete`. The emulator has no permissions, so these are not measured:
       what an account without the list permission is answered, whether a
-      `404` for a missing object itself needs it, and how a `403` reads.
-      The bucket is to keep uniform bucket-level access and public access
+      `404` for a missing object itself needs it, and how a `403` reads. The
+      bucket is to keep uniform bucket-level access and public access
       prevention, and the account no `storage.buckets.*`, `setIamPolicy` or
       `iam.serviceAccounts.signBlob`. The bucket's soft-delete retention and
       object versioning are to be decided too: with either on, an object
       `deleteObject` removed is still kept, and billed, under soft delete
-      until its retention lapses, under versioning until it or a lifecycle
-      rule removes it. That bears on physical deletion after the recovery
-      window (`docs/SecurityCompliance.md`). To be checked against a real
-      bucket under the product owner's approval of that deployment.
+      until its retention lapses, under versioning until a delete naming
+      that version, or a lifecycle rule, removes it. That bears on physical
+      deletion after the recovery window (`docs/SecurityCompliance.md`). To
+      be checked against a real bucket under the product owner's approval of
+      that deployment.
 - [ ] **Decide how long a put, a delete and a whole object's read may
       take.** The adapter gives them no limit (ADR-0156 Decision 3): a put
       or a delete given up leaves its caller not knowing whether it
