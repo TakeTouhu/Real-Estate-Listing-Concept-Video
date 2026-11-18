@@ -155,7 +155,7 @@ describe("serverEnvSchema", () => {
       }
     });
 
-    it("names a bucket only by Cloud Storage's rules, the adapter's own", () => {
+    it("names a bucket by the shared rule, the adapter's own", () => {
       for (const good of ["abc", "a-b_c.d", "0bucket9", "a".repeat(63), "goog-is-refused-by-google-not-here"]) {
         expect(isCloudStorageBucketName(good)).toBe(true);
         expect(issuesOf({ NODE_ENV: "production", GOOGLE_CLOUD_STORAGE_BUCKET: good })).toEqual([]);

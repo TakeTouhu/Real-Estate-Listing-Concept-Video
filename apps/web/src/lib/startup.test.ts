@@ -210,7 +210,8 @@ describe("NODE_DEBUG (ADR-0158 Decision 6, ADR-0159)", () => {
         "  - NODE_DEBUG: NODE_DEBUG must not be set in production: " +
         "Node.js would write requests, their tokens included, to the error output",
     ]);
-    // A production build given another NODE_ENV is refused for that, before NODE_DEBUG is read.
+    // A production build given another NODE_ENV is refused for the mismatch; the schema refuses NODE_DEBUG only
+    // where the configured value is production.
     const { start: other, reports: otherReports } = recorded(() => serverEnvSchema.parse({ ...raw, NODE_ENV: "test" }));
     checkWebStart(other, allowingTodays);
     expect(otherReports.join("\n")).toContain('NODE_ENV is not "production", but this is a production build');

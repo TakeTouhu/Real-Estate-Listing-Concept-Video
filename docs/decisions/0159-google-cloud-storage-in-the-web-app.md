@@ -41,8 +41,9 @@ against each other and the sources. What decides this record:
 - Node.js reads `NODE_DEBUG` once, as the process starts: removed or set
   later, it changes nothing (measured). Naming `https`, it writes the
   token's `Authorization` header (ADR-0158 Decision 6).
-- The production start check reads no setting but `NODE_ENV` itself: a test
-  of the MFA key's boundary holds it to that (ADR-0151).
+- The production start check reads no setting's value but `NODE_ENV`'s,
+  and asks the others only whether they are set: `mfa-shape.test.ts` holds
+  `startup.ts` to that (ADR-0151).
 
 ## Decision 1 — Two settings, and no address in production
 
@@ -124,8 +125,10 @@ only as the process starts, so nothing can turn it off later, and the start
 is refused instead, before any request.
 
 It is the schema's rule, not the start check's, so that the start check
-still reads no setting but `NODE_ENV`, and so that the worker, which parses
-the same schema and holds a token from RD-4, is covered too. The web app
+still reads no setting's value but `NODE_ENV`'s, and asks the others only
+whether they are set (`mfa-shape.test.ts`, ADR-0151), and so that the
+worker, which parses the same schema and holds a token from RD-4, is
+covered too. The web app
 builds Google's store from the environment the schema parsed, and only
 where the configured value says production (Decision 2), so no web process
 that holds a token runs with it set.
@@ -209,8 +212,8 @@ open.
   for the endpoint; configured for development, for the mismatch and the
   emulator; with `NODE_DEBUG` naming `https` or `*`, for `NODE_DEBUG`, with
   no `HTTPS` debug line and no `Bearer` written (with `*`, Node.js's own
-  module-loading debug lines came before the refusal); beside the folder,
-  for both.
+  debug lines, nearly all of module loading, came before the refusal);
+  beside the folder, for both.
 - **Rounds in the namespace**, the start hook skipped by
   `NEXT_PHASE=phase-production-build` and no code changed. Everything
   answering: readiness read `adapter=gcs, answers`, and the metadata server

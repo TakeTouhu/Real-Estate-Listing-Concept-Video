@@ -108,12 +108,13 @@ export const serverEnvSchema = z
     // keeps objects in its own memory. Refused in production.
     SHARED_STORAGE_DIR: z.string().min(1).optional(),
 
-    // The Cloud Storage bucket the web app keeps objects in (ADR-0159), named
-    // by Cloud Storage's rules. Set, it is used instead of the shared folder or
-    // memory: in production, Google's own store, at an origin no setting
-    // names, with the token of the account the process runs as (ADR-0158);
-    // elsewhere, the emulator the endpoint names. Never beside the shared
-    // folder, which the worker reads.
+    // The Cloud Storage bucket the web app keeps objects in (ADR-0159): 3 to
+    // 63 lowercase letters, digits, '.', '-' or '_', beginning and ending with
+    // a letter or a digit (`isCloudStorageBucketName`, the adapter's rule too).
+    // Set, it is used instead of the shared folder or memory: in production,
+    // Google's own store, at an origin no setting names, with the token of the
+    // account the process runs as (ADR-0158); elsewhere, the emulator the
+    // endpoint names. Never beside the shared folder, which the worker reads.
     GOOGLE_CLOUD_STORAGE_BUCKET: z.string().optional(),
 
     // A Cloud Storage emulator's origin, in development and CI only
