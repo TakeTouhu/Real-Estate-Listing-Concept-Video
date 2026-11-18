@@ -7,11 +7,20 @@ import type { AddressInfo, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { inspect } from "node:util";
 import { Gaxios, type GaxiosOptions, type GaxiosResponse } from "gaxios";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { managedCleanMasterKey, type ObjectRead, type ObjectStorage } from "@app/domain";
+import {
+  managedCleanMasterKey,
+  managedGenerationOutputKey,
+  safePositiveByteCount,
+  sha256Digest,
+  type ObjectRead,
+  type ObjectStorage,
+} from "@app/domain";
 import { AppError } from "@app/shared";
 import {
+  GOOGLE_CLOUD_STORAGE_CHUNK_QUANTUM_BYTES,
   GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES,
   GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS,
   GoogleCloudStorageError,
@@ -19,7 +28,7 @@ import {
   createGoogleCloudStorageViews,
   type GoogleCloudStorageObjectClient,
 } from "./index";
-import type { S3ObjectBody } from "../managed-output/s3-staging-sink";
+import { S3ManagedOutputStagingSink, type S3ObjectBody } from "../managed-output/s3-staging-sink";
 import {
   GOOGLE_CLOUD_STORAGE_CREDENTIAL_LIMIT_MS,
   GOOGLE_CLOUD_STORAGE_TOKEN_MARGIN_MS,
@@ -1545,6 +1554,528 @@ describe("the worker's view (ADR-0160)", () => {
     expect(rest.map(({ url, authorization }) => [url.origin, authorization])).toEqual(
       Array.from({ length: 4 }, () => [GOOGLE, `Bearer ${MARKER}`]),
     );
+  });
+});
+
+describe("the staging sink's upload (ADR-0161)", () => {
+  const QUANTUM = GOOGLE_CLOUD_STORAGE_CHUNK_QUANTUM_BYTES;
+  const MEBIBYTE = 1024 * 1024;
+  const OUTPUT = managedGenerationOutputKey({ organizationId: "org_1", attemptId: "att_1" });
+  const OTHER = managedGenerationOutputKey({ organizationId: "org_1", attemptId: "att_2" });
+  /** What a session's URI holds: nothing the adapter says may carry it. */
+  const SESSION_ID = "SESSION-MARKER-4f1c9e";
+  const SESSION_PATH = `/upload/storage/v1/b/${BUCKET}/o?uploadType=resumable&name=${encodeURIComponent(OUTPUT)}`;
+  const OPENED = `POST ${SESSION_PATH}&ifGenerationMatch=0`;
+  const SESSION = `${SESSION_PATH}&upload_id=${SESSION_ID}`;
+  const CHUNK = `PUT ${SESSION}`;
+  const CANCEL = `DELETE ${SESSION}`;
+  const target = { bucket: BUCKET, key: OUTPUT, expectedBucketOwner: undefined };
+  const clientAt = (origin: string): GoogleCloudStorageObjectClient =>
+    createGoogleCloudStorageViews({ bucket: BUCKET, endpoint: origin, secret: SECRET }).objectClient;
+  const sum = (bytes: Uint8Array, encoding: "base64" | "hex"): string =>
+    createHash("sha256").update(bytes).digest(encoding);
+  const filled = (length: number, value: number): Uint8Array => new Uint8Array(length).fill(value);
+  const part = (uploadId: string, partNumber: number, body: Uint8Array) => ({
+    ...target,
+    uploadId,
+    partNumber,
+    body,
+    checksumSha256Base64: sum(body, "base64"),
+  });
+  const ref = (partNumber: number, body: Uint8Array) => ({
+    partNumber,
+    etag: `"${sum(body, "hex")}"`,
+    checksumSha256Base64: sum(body, "base64"),
+  });
+  const complete = (uploadId: string, parts: ReturnType<typeof ref>[]) => ({
+    ...target,
+    uploadId,
+    parts,
+    ifNoneMatch: "*",
+  });
+  const refs = (parts: Uint8Array[]) => parts.map((body, index) => ref(index + 1, body));
+  /** Each request a store was sent, with the range of the bytes it carried. */
+  const described = (store: StandIn): string[] =>
+    store.seen.map(({ method, url, headers }) => `${method} ${url} ${headers["content-range"] ?? ""}`.trim());
+
+  /**
+   * A store taking resumable uploads as Google documents them: a start answers
+   * with a session at the store's own origin, a chunk with the range of the
+   * bytes kept, the last chunk with the object, and a cancel with `499`.
+   * `instead` may answer any request, the `index`th, in its place.
+   */
+  async function resumableStore(
+    instead: (request: Seen, index: number) => Answer | undefined = () => undefined,
+  ): Promise<StandIn> {
+    let origin = "";
+    let kept = 0;
+    let index = 0;
+    const store = await standIn((request) => {
+      const answered = instead(request, index++);
+      if (answered !== undefined) return answered;
+      if (request.method === "POST") return { status: 200, headers: { location: `${origin}${SESSION}` } };
+      if (request.method === "DELETE") return { status: 499, body: "{}" };
+      kept += request.body.byteLength;
+      if (String(request.headers["content-range"]).endsWith("/*")) {
+        return { status: 308, headers: { range: `bytes=0-${kept - 1}` } };
+      }
+      return { status: 200, body: "{}" };
+    });
+    origin = store.origin;
+    return store;
+  }
+
+  it("sends the parts as one upload: each when the next comes, the last with the size and MD5", async () => {
+    const store = await resumableStore();
+    const client = clientAt(store.origin);
+    const parts = [filled(QUANTUM, 1), filled(2 * QUANTUM, 2), filled(3, 3)];
+    const { uploadId } = await client.createMultipartUpload(target);
+    expect(uploadId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const etags: string[] = [];
+    for (const [index, body] of parts.entries()) {
+      etags.push((await client.uploadPart(part(uploadId, index + 1, body))).etag);
+      // A part is held until the next comes, or the upload's completion.
+      expect(store.seen).toHaveLength(index + 1);
+    }
+    expect(etags).toEqual(refs(parts).map(({ etag }) => etag));
+    await client.completeMultipartUpload(complete(uploadId, refs(parts)));
+    const whole = Buffer.concat(parts);
+    expect(described(store)).toEqual([
+      OPENED,
+      `${CHUNK} bytes 0-262143/*`,
+      `${CHUNK} bytes 262144-786431/*`,
+      `${CHUNK} bytes 786432-786434/786435`,
+    ]);
+    expect(sum(Buffer.concat(store.seen.slice(1).map(({ body }) => body)), "hex")).toBe(sum(whole, "hex"));
+    expect(store.seen[0]!.headers["x-upload-content-type"]).toBe("application/octet-stream");
+    expect(store.seen.map(({ headers }) => headers["x-goog-hash"])).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      `md5=${createHash("md5").update(whole).digest("base64")}`,
+    ]);
+    // Finished, the upload is let go: there is nothing left to cancel.
+    await client.abortMultipartUpload({ ...target, uploadId });
+    expect(store.seen).toHaveLength(4);
+  });
+
+  it("sends a single part whole when the upload is completed", async () => {
+    const store = await resumableStore();
+    const client = clientAt(store.origin);
+    const { uploadId } = await client.createMultipartUpload(target);
+    await client.uploadPart(part(uploadId, 1, filled(3, 7)));
+    await client.completeMultipartUpload(complete(uploadId, refs([filled(3, 7)])));
+    expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-2/3`]);
+    expect(store.seen[1]!.body).toEqual(Buffer.from([7, 7, 7]));
+  });
+
+  it("keeps a copy of each part, so the sink may fill its array again", async () => {
+    const store = await resumableStore();
+    const client = clientAt(store.origin);
+    const { uploadId } = await client.createMultipartUpload(target);
+    const array = filled(QUANTUM, 7);
+    await client.uploadPart(part(uploadId, 1, array));
+    array.fill(8);
+    await client.uploadPart(part(uploadId, 2, array.subarray(0, 5)));
+    expect(sum(store.seen[1]!.body, "hex")).toBe(sum(filled(QUANTUM, 7), "hex"));
+  });
+
+  it("gives the start and the cancel the question limit, and the bytes none", async () => {
+    const store = await resumableStore();
+    const client = clientAt(store.origin);
+    const parts = [filled(QUANTUM, 1), filled(1, 2)];
+    const sent = await client.createMultipartUpload(target);
+    for (const [index, body] of parts.entries()) await client.uploadPart(part(sent.uploadId, index + 1, body));
+    await client.completeMultipartUpload(complete(sent.uploadId, refs(parts)));
+    const cancelled = await client.createMultipartUpload(target);
+    await client.abortMultipartUpload({ ...target, uploadId: cancelled.uploadId });
+    expect(requests.mock.calls.map(([options]) => `${options?.method} ${options?.timeout}`)).toEqual([
+      `POST ${GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS}`,
+      "PUT undefined",
+      "PUT undefined",
+      `POST ${GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS}`,
+      `DELETE ${GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS}`,
+    ]);
+  });
+
+  it("gives up a start not answered within the question limit, and asks it once", async () => {
+    const store = await standIn(() => "SILENT");
+    const started = performance.now();
+    const error = await failureOf(() => clientAt(store.origin).createMultipartUpload(target));
+    const elapsed = performance.now() - started;
+    expect(error).toMatchObject({ code: "STORAGE_TIMEOUT" });
+    expect(elapsed).toBeGreaterThanOrEqual(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS - 50);
+    expect(elapsed).toBeLessThan(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 1_000);
+    expect(store.seen).toHaveLength(1);
+  });
+
+  it("refuses a part out of order, sent again, empty or not its checksum's, sending nothing", async () => {
+    const store = await resumableStore();
+    const client = clientAt(store.origin);
+    const { uploadId } = await client.createMultipartUpload(target);
+    const body = filled(QUANTUM, 1);
+    for (const refused of [
+      part(uploadId, 2, body),
+      part(uploadId, 0, body),
+      part(uploadId, 1, new Uint8Array(0)),
+      { ...part(uploadId, 1, body), checksumSha256Base64: sum(filled(QUANTUM, 2), "base64") },
+    ]) {
+      expect(await failureOf(() => client.uploadPart(refused))).toMatchObject({ code: "STORAGE_PART_REFUSED" });
+    }
+    await client.uploadPart(part(uploadId, 1, body));
+    expect(await failureOf(() => client.uploadPart(part(uploadId, 1, body)))).toMatchObject({
+      code: "STORAGE_PART_REFUSED",
+    });
+    expect(store.seen).toHaveLength(1);
+    // A refused part fails nothing: the upload goes on.
+    await client.uploadPart(part(uploadId, 2, filled(3, 2)));
+    await client.completeMultipartUpload(complete(uploadId, refs([body, filled(3, 2)])));
+    expect(store.seen).toHaveLength(3);
+  });
+
+  it("refuses a part after one that is not a whole number of 256 KiB, which may only be the last", async () => {
+    const store = await resumableStore();
+    const client = clientAt(store.origin);
+    const odd = filled(QUANTUM + 1, 1);
+    const { uploadId } = await client.createMultipartUpload(target);
+    await client.uploadPart(part(uploadId, 1, odd));
+    expect(await failureOf(() => client.uploadPart(part(uploadId, 2, filled(1, 2))))).toMatchObject({
+      code: "STORAGE_PART_REFUSED",
+    });
+    expect(store.seen).toHaveLength(1);
+    await client.completeMultipartUpload(complete(uploadId, refs([odd])));
+    expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-262144/262145`]);
+  });
+
+  it("refuses a completion naming other parts than were taken, or none, or unconditional; sends nothing", async () => {
+    const store = await resumableStore();
+    const client = clientAt(store.origin);
+    const [body, last] = [filled(QUANTUM, 1), filled(2, 2)];
+    const { uploadId } = await client.createMultipartUpload(target);
+    await client.uploadPart(part(uploadId, 1, body));
+    await client.uploadPart(part(uploadId, 2, last));
+    for (const parts of [
+      [],
+      [ref(1, body)],
+      [ref(1, body), ref(2, last), ref(3, last)],
+      [ref(2, last), ref(1, body)],
+      [ref(1, body), { ...ref(2, last), etag: '"other"' }],
+      [ref(1, body), { ...ref(2, last), checksumSha256Base64: sum(body, "base64") }],
+    ]) {
+      expect(await failureOf(() => client.completeMultipartUpload(complete(uploadId, parts)))).toMatchObject({
+        code: "STORAGE_PART_REFUSED",
+      });
+    }
+    const unconditional = await failureOf(() =>
+      client.completeMultipartUpload({ ...complete(uploadId, refs([body, last])), ifNoneMatch: "" }),
+    );
+    expect(unconditional).toBeInstanceOf(AppError);
+    expect(unconditional).toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(store.seen).toHaveLength(2);
+    await client.completeMultipartUpload(complete(uploadId, refs([body, last])));
+    expect(store.seen).toHaveLength(3);
+  });
+
+  it("knows only the uploads it started, for the key it started them for", async () => {
+    const store = await resumableStore();
+    const client = clientAt(store.origin);
+    const { uploadId } = await client.createMultipartUpload(target);
+    const unknown = "00000000-0000-4000-8000-000000000000";
+    const UNKNOWN = { code: "STORAGE_UNKNOWN_UPLOAD" };
+    expect(await failureOf(() => client.uploadPart(part(unknown, 1, filled(1, 1))))).toMatchObject(UNKNOWN);
+    expect(await failureOf(() => client.uploadPart({ ...part(uploadId, 1, filled(1, 1)), key: OTHER }))).toMatchObject(
+      UNKNOWN,
+    );
+    expect(
+      await failureOf(() => client.completeMultipartUpload({ ...complete(uploadId, []), key: OTHER })),
+    ).toMatchObject(UNKNOWN);
+    expect(await failureOf(() => client.abortMultipartUpload({ ...target, key: OTHER, uploadId }))).toMatchObject(
+      UNKNOWN,
+    );
+    // Another store of the same bucket holds none of this one's uploads.
+    expect(await failureOf(() => clientAt(store.origin).uploadPart(part(uploadId, 1, filled(1, 1))))).toMatchObject(
+      UNKNOWN,
+    );
+    // Cancelling an upload it does not hold changes nothing.
+    await client.abortMultipartUpload({ ...target, uploadId: unknown });
+    expect(store.seen).toHaveLength(1);
+  });
+
+  it("refuses another bucket and any owner on every call, sending nothing", async () => {
+    const store = await resumableStore();
+    const client = clientAt(store.origin);
+    const { uploadId } = await client.createMultipartUpload(target);
+    const wrongs = [{ bucket: "another-bucket" }, { expectedBucketOwner: "123456789012" }, { expectedBucketOwner: "" }];
+    for (const wrong of wrongs) {
+      for (const call of [
+        () => client.createMultipartUpload({ ...target, ...wrong }),
+        () => client.uploadPart({ ...part(uploadId, 1, filled(1, 1)), ...wrong }),
+        () => client.completeMultipartUpload({ ...complete(uploadId, []), ...wrong }),
+        () => client.abortMultipartUpload({ ...target, uploadId, ...wrong }),
+      ]) {
+        const error = await failureOf(call);
+        expect(error).toBeInstanceOf(AppError);
+        expect(error).toMatchObject({ code: "CONFIGURATION_ERROR" });
+      }
+    }
+    expect(store.seen).toHaveLength(1);
+  });
+
+  it("takes and drops the parts of an upload refused at its start, and refuses its completion as lost", async () => {
+    const store = await resumableStore((request) =>
+      request.method === "POST" ? { status: 412, body: "{}" } : undefined,
+    );
+    const client = clientAt(store.origin);
+    const { uploadId } = await client.createMultipartUpload(target);
+    const parts = [filled(QUANTUM, 1), filled(QUANTUM, 2), filled(1, 3)];
+    for (const [index, body] of parts.entries()) await client.uploadPart(part(uploadId, index + 1, body));
+    const lost = await failureOf(() => client.completeMultipartUpload(complete(uploadId, refs(parts))));
+    expect(lost).toBeInstanceOf(GoogleCloudStorageError);
+    expect(lost).toMatchObject({ code: "STORAGE_PRECONDITION_FAILED", $metadata: { httpStatusCode: 412 } });
+    // The store opened no session: nothing was sent on one, and there is none to cancel.
+    await client.abortMultipartUpload({ ...target, uploadId });
+    expect(described(store)).toEqual([OPENED]);
+  });
+
+  it("drops the parts after bytes refused for their precondition, and refuses the completion as lost", async () => {
+    const store = await resumableStore((request) =>
+      request.method === "PUT" ? { status: 412, body: "{}" } : undefined,
+    );
+    const client = clientAt(store.origin);
+    const { uploadId } = await client.createMultipartUpload(target);
+    const parts = [filled(QUANTUM, 1), filled(QUANTUM, 2), filled(QUANTUM, 3), filled(1, 4)];
+    for (const [index, body] of parts.entries()) await client.uploadPart(part(uploadId, index + 1, body));
+    expect(await failureOf(() => client.completeMultipartUpload(complete(uploadId, refs(parts))))).toMatchObject({
+      code: "STORAGE_PRECONDITION_FAILED",
+      $metadata: { httpStatusCode: 412 },
+    });
+    await client.abortMultipartUpload({ ...target, uploadId });
+    expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-262143/*`, CANCEL]);
+  });
+
+  it("refuses the completion as a lost race when its last bytes are refused for their precondition", async () => {
+    const store = await resumableStore((request) =>
+      String(request.headers["content-range"]).endsWith("/3") ? { status: 412, body: "{}" } : undefined,
+    );
+    const client = clientAt(store.origin);
+    const { uploadId } = await client.createMultipartUpload(target);
+    await client.uploadPart(part(uploadId, 1, filled(3, 1)));
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const completion = complete(uploadId, refs([filled(3, 1)]));
+      expect(await failureOf(() => client.completeMultipartUpload(completion))).toMatchObject({
+        code: "STORAGE_PRECONDITION_FAILED",
+        $metadata: { httpStatusCode: 412 },
+      });
+    }
+    await client.abortMultipartUpload({ ...target, uploadId });
+    expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-2/3`, CANCEL]);
+  });
+
+  it("fails an upload whose store keeps fewer bytes than were sent, or answers otherwise; sends no more", async () => {
+    for (const [answer, code] of [
+      [{ status: 308, headers: { range: "bytes=0-262142" } }, "STORAGE_UNEXPECTED_ANSWER"],
+      [{ status: 308 }, "STORAGE_UNEXPECTED_ANSWER"],
+      [{ status: 200, body: "{}" }, "STORAGE_UNEXPECTED_ANSWER"],
+      [{ status: 404, body: "{}" }, "STORAGE_REFUSED"],
+      [{ status: 503, body: "{}" }, "STORAGE_UNAVAILABLE"],
+    ] as const) {
+      const store = await resumableStore((request) => (request.method === "PUT" ? answer : undefined));
+      const client = clientAt(store.origin);
+      const { uploadId } = await client.createMultipartUpload(target);
+      const parts = [filled(QUANTUM, 1), filled(QUANTUM, 2), filled(1, 3)];
+      await client.uploadPart(part(uploadId, 1, parts[0]!));
+      expect(await failureOf(() => client.uploadPart(part(uploadId, 2, parts[1]!)))).toMatchObject({ code });
+      const FAILED = { code: "STORAGE_UPLOAD_FAILED" };
+      expect(await failureOf(() => client.uploadPart(part(uploadId, 2, parts[1]!)))).toMatchObject(FAILED);
+      const completion = complete(uploadId, refs(parts));
+      expect(await failureOf(() => client.completeMultipartUpload(completion))).toMatchObject(FAILED);
+      await client.abortMultipartUpload({ ...target, uploadId });
+      expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-262143/*`, CANCEL]);
+    }
+  });
+
+  it("fails an upload whose last bytes are not taken as the object, and sends no more", async () => {
+    for (const [answer, code] of [
+      [{ status: 308, headers: { range: "bytes=0-2" } }, "STORAGE_UNEXPECTED_ANSWER"],
+      [{ status: 204 }, "STORAGE_UNEXPECTED_ANSWER"],
+      [{ status: 503, body: "{}" }, "STORAGE_UNAVAILABLE"],
+    ] as const) {
+      const store = await resumableStore((request) => (request.method === "PUT" ? answer : undefined));
+      const client = clientAt(store.origin);
+      const { uploadId } = await client.createMultipartUpload(target);
+      await client.uploadPart(part(uploadId, 1, filled(3, 1)));
+      const completion = complete(uploadId, refs([filled(3, 1)]));
+      expect(await failureOf(() => client.completeMultipartUpload(completion))).toMatchObject({ code });
+      expect(await failureOf(() => client.completeMultipartUpload(completion))).toMatchObject({
+        code: "STORAGE_UPLOAD_FAILED",
+      });
+      await client.abortMultipartUpload({ ...target, uploadId });
+      expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-2/3`, CANCEL]);
+    }
+  });
+
+  it("refuses a call on an upload while another on it is unanswered", async () => {
+    const store = await resumableStore((_request, index) =>
+      index === 1 ? { status: 308, headers: { range: "bytes=0-262143" }, afterMs: 200 } : undefined,
+    );
+    const client = clientAt(store.origin);
+    const [first, second] = [filled(QUANTUM, 1), filled(5, 2)];
+    const { uploadId } = await client.createMultipartUpload(target);
+    await client.uploadPart(part(uploadId, 1, first));
+    const sending = client.uploadPart(part(uploadId, 2, second));
+    const BUSY = { code: "STORAGE_UPLOAD_BUSY" };
+    expect(await failureOf(() => client.uploadPart(part(uploadId, 3, filled(1, 3))))).toMatchObject(BUSY);
+    const early = complete(uploadId, refs([first]));
+    expect(await failureOf(() => client.completeMultipartUpload(early))).toMatchObject(BUSY);
+    await sending;
+    await client.completeMultipartUpload(complete(uploadId, refs([first, second])));
+    expect(described(store)).toEqual([OPENED, `${CHUNK} bytes 0-262143/*`, `${CHUNK} bytes 262144-262148/262149`]);
+  });
+
+  it("takes a session only at the store's own origin and upload path, naming nothing of one it refuses", async () => {
+    for (const location of [
+      (origin: string) => `${origin.replace(/:\d+$/, ":9")}${SESSION}`,
+      (origin: string) => `${origin}${SESSION}`.replace(`/b/${BUCKET}/o`, `/b/${BUCKET}-other/o`),
+      (origin: string) => `${origin}${SESSION}`.replace(`upload_id=${SESSION_ID}`, "upload_id="),
+      (origin: string) => `${origin}${SESSION}`.replace(`upload_id=${SESSION_ID}`, `id=${SESSION_ID}`),
+      (origin: string) => `${origin}${SESSION}`.replace("http://", `http://${SESSION_ID}@`),
+      (origin: string) => `${origin}${SESSION}#${SESSION_ID}`,
+      () => SESSION,
+      () => `http://[${SESSION_ID}`,
+      () => null,
+    ]) {
+      const store = await standIn((): Answer => {
+        const at = location(origin);
+        const headers: Record<string, string> = at === null ? {} : { location: at };
+        return { status: 200, headers };
+      });
+      const origin = store.origin;
+      const error = await failureOf(() => clientAt(store.origin).createMultipartUpload(target));
+      expect(error).toMatchObject({ code: "STORAGE_UNEXPECTED_ANSWER" });
+      for (const text of [inspect(error, { depth: 10 }), JSON.stringify(error), String(error)]) {
+        expect(text).not.toContain(SESSION_ID);
+      }
+      expect(store.seen).toHaveLength(1);
+    }
+  });
+
+  it("names nothing of a session when a request on it fails", async () => {
+    for (const answer of ["HANG_UP", { status: 503, body: SESSION_ID }, { status: 308 }] as const) {
+      const store = await resumableStore((request) => (request.method === "PUT" ? answer : undefined));
+      const client = clientAt(store.origin);
+      const { uploadId } = await client.createMultipartUpload(target);
+      expect(uploadId).not.toContain(SESSION_ID);
+      await client.uploadPart(part(uploadId, 1, filled(QUANTUM, 1)));
+      const error = await failureOf(() => client.uploadPart(part(uploadId, 2, filled(1, 2))));
+      expect(error).toBeInstanceOf(GoogleCloudStorageError);
+      for (const text of [inspect(error, { depth: 10 }), JSON.stringify(error), String(error)]) {
+        expect(text).not.toContain(SESSION_ID);
+      }
+    }
+  });
+
+  it("calls a start's 404 a missing bucket, and any other refusal by its code", async () => {
+    for (const [status, code] of [
+      [404, "STORAGE_BUCKET_MISSING"],
+      [403, "STORAGE_FORBIDDEN"],
+      [503, "STORAGE_UNAVAILABLE"],
+      [201, "STORAGE_REFUSED"],
+    ] as const) {
+      const store = await standIn(() => ({ status, body: "{}" }));
+      expect(await failureOf(() => clientAt(store.origin).createMultipartUpload(target))).toMatchObject({ code });
+    }
+  });
+
+  it("cancels an upload when it is aborted, once, and lets it go whatever the store answers", async () => {
+    for (const [answer, code] of [
+      [{ status: 499, body: "{}" }, null],
+      [{ status: 404, body: "{}" }, null],
+      [{ status: 410, body: "{}" }, null],
+      [{ status: 503, body: "{}" }, "STORAGE_UNAVAILABLE"],
+      [{ status: 204 }, "STORAGE_REFUSED"],
+    ] as const) {
+      const store = await resumableStore((request) => (request.method === "DELETE" ? answer : undefined));
+      const client = clientAt(store.origin);
+      const { uploadId } = await client.createMultipartUpload(target);
+      const error = await failureOf(() => client.abortMultipartUpload({ ...target, uploadId }));
+      if (code === null) expect(error).toBeNull();
+      else expect(error).toMatchObject({ code });
+      await client.abortMultipartUpload({ ...target, uploadId });
+      expect(await failureOf(() => client.uploadPart(part(uploadId, 1, filled(1, 1))))).toMatchObject({
+        code: "STORAGE_UNKNOWN_UPLOAD",
+      });
+      expect(described(store)).toEqual([OPENED, CANCEL]);
+    }
+  });
+
+  it("on Google's origin, sends a session's requests the token, and refuses a session anywhere else", async () => {
+    const google = `${GOOGLE}${SESSION}`;
+    let location = google;
+    const asked: string[] = [];
+    requests.mockImplementation(async (options?: GaxiosOptions) => {
+      const url = new URL(String(options?.url));
+      const sent = new Headers(options?.headers);
+      asked.push(`${options?.method ?? "GET"} ${url.origin} ${sent.get("authorization")}`);
+      const answer: GoogleAnswer =
+        url.origin === METADATA_SERVER
+          ? TOKEN_ANSWER(MARKER)
+          : options?.method === "POST"
+            ? { status: 200, headers: { location } }
+            : options?.method === "DELETE"
+              ? { status: 499 }
+              : sent.get("content-range")?.endsWith("/*")
+                ? { status: 308, headers: { range: `bytes=0-${QUANTUM - 1}` } }
+                : { status: 200, data: "{}" };
+      const { status, headers = {}, data = "" } = answer;
+      return { status, statusText: "", headers: new Headers(headers), data, config: options } as GaxiosResponse;
+    });
+    const client = clientAt(GOOGLE);
+    const parts = [filled(QUANTUM, 1), filled(1, 2)];
+    const sent = await client.createMultipartUpload(target);
+    for (const [index, body] of parts.entries()) await client.uploadPart(part(sent.uploadId, index + 1, body));
+    await client.completeMultipartUpload(complete(sent.uploadId, refs(parts)));
+    const cancelled = await client.createMultipartUpload(target);
+    await client.abortMultipartUpload({ ...target, uploadId: cancelled.uploadId });
+    const bearer = `Bearer ${MARKER}`;
+    expect(asked).toEqual([
+      `GET ${METADATA_SERVER} null`,
+      `POST ${GOOGLE} ${bearer}`,
+      `PUT ${GOOGLE} ${bearer}`,
+      `PUT ${GOOGLE} ${bearer}`,
+      `POST ${GOOGLE} ${bearer}`,
+      `DELETE ${GOOGLE} ${bearer}`,
+    ]);
+    // A session at another origin is refused, so neither bytes nor the token go there.
+    location = google.replace(GOOGLE, "https://storage.example.com");
+    expect(await failureOf(() => client.createMultipartUpload(target))).toMatchObject({
+      code: "STORAGE_UNEXPECTED_ANSWER",
+    });
+    expect(asked.slice(6)).toEqual([`POST ${GOOGLE} ${bearer}`]);
+  });
+
+  it("lets the unchanged sink read the winner back when the store refuses the upload at its start", async () => {
+    const winner = Buffer.from([3, 1, 4, 1, 5]);
+    const held = holding(winner);
+    const store = await standIn((request) => (request.method === "POST" ? { status: 412, body: "{}" } : held(request)));
+    const partSizeBytes = 5 * MEBIBYTE;
+    const sink = new S3ManagedOutputStagingSink({ bucket: BUCKET, partSizeBytes }, { client: clientAt(store.origin) });
+    const session = await sink.begin({ destinationKey: OUTPUT });
+    const data = filled(partSizeBytes + 3, 9);
+    // The first part is sent as it is written, the second at the commit: both are taken and dropped.
+    await session.write(data);
+    const receiptOf = (bytes: Uint8Array) => ({
+      sha256: sha256Digest(sum(bytes, "hex")),
+      sizeBytes: safePositiveByteCount(bytes.byteLength),
+    });
+    expect(await session.commit({ receipt: receiptOf(data) })).toEqual({
+      kind: "EXISTING",
+      receipt: receiptOf(winner),
+    });
+    expect(store.seen.map(({ method, url }) => `${method} ${url.split("?")[0]}`)).toEqual([
+      `POST /upload/storage/v1/b/${BUCKET}/o`,
+      `GET /storage/v1/b/${BUCKET}/o/${encodeURIComponent(OUTPUT)}`,
+      `GET /storage/v1/b/${BUCKET}/o/${encodeURIComponent(OUTPUT)}`,
+    ]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID, type Hash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
@@ -14,7 +14,19 @@ import {
 } from "@app/domain";
 import { AppError, GOOGLE_CLOUD_STORAGE_ORIGIN, isCloudStorageBucketName } from "@app/shared";
 import type { DeliverableObjectClient } from "../managed-output/deliverable-composition-io";
-import type { S3GetObjectInput, S3GetObjectResult, S3ObjectBody } from "../managed-output/s3-staging-sink";
+import type {
+  S3AbortMultipartUploadInput,
+  S3CompleteMultipartUploadInput,
+  S3CompletedPartRef,
+  S3CreateMultipartUploadInput,
+  S3CreateMultipartUploadResult,
+  S3GetObjectInput,
+  S3GetObjectResult,
+  S3MultipartClient,
+  S3ObjectBody,
+  S3UploadPartInput,
+  S3UploadPartResult,
+} from "../managed-output/s3-staging-sink";
 import { signedStorageUrl, type SignedPurpose } from "../signing";
 import { METADATA_SERVER_ORIGIN, metadataAccessToken } from "./access-token";
 import { googleCloudStorageClient } from "./client";
@@ -48,7 +60,9 @@ import { googleCloudStorageClient } from "./client";
  *
  * The web app's adapters construct it (`apps/web/src/lib/adapters.ts`, ADR-0159).
  * `createGoogleCloudStorageViews` also gives the worker's view, on the same
- * connections and token, for the worker to be given it (ADR-0160).
+ * connections and token, for the worker to be given it (ADR-0160): its reads,
+ * its first-wins write, and the staging sink's multipart upload as one
+ * resumable upload (ADR-0161).
  */
 
 /**
@@ -63,6 +77,9 @@ export const GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS = 3_000;
 
 /** The most bytes Cloud Storage takes in an object's name. */
 export const GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES = 1024;
+
+/** Every chunk of a resumable upload but its last is a whole number of these, by Google's rule: 256 KiB. */
+export const GOOGLE_CLOUD_STORAGE_CHUNK_QUANTUM_BYTES = 256 * 1024;
 
 /** A code named by the transport: one plain word, as Node.js's are. */
 const TRANSPORT_CODE = /^[A-Z0-9][A-Z0-9_]{0,39}$/;
@@ -103,6 +120,17 @@ export interface GoogleCloudStorageOptions {
  * - `STORAGE_BODY_CANCELLED`: a worker's read of a body it cancelled;
  * - `STORAGE_FILE_CHANGED`: a worker's file read short of its size as it was
  *   hashed, or shorter, as it was sent, than when it was hashed;
+ * - `STORAGE_PRECONDITION_FAILED`: a worker's upload the store refused, `412`,
+ *   because an object was stored at its key first; it carries that status as
+ *   the staging sink reads one (ADR-0161);
+ * - `STORAGE_UNKNOWN_UPLOAD`: an upload this store did not start, or not for
+ *   that key;
+ * - `STORAGE_UPLOAD_BUSY`: a call on an upload while another on it is
+ *   unanswered;
+ * - `STORAGE_UPLOAD_FAILED`: a call on an upload once a request on it failed;
+ * - `STORAGE_PART_REFUSED`: a part out of order, empty, or whose checksum is
+ *   not its bytes'; one followed by another that is not a whole number of
+ *   256 KiB; or a completion naming other parts than those taken;
  * - the transport's own one-word code, such as `ECONNREFUSED`;
  * - `STORAGE_UNREACHABLE`: a failure that names none.
  */
@@ -113,6 +141,19 @@ export class GoogleCloudStorageError extends Error {
     super(code);
     this.name = "GoogleCloudStorageError";
     this.code = code;
+  }
+}
+
+/**
+ * A worker's upload the store refused for its precondition: an object was
+ * stored at its key first. Shaped as the staging sink reads a lost race, by the
+ * status in `$metadata` (ADR-0161).
+ */
+class GoogleCloudStoragePreconditionFailed extends GoogleCloudStorageError {
+  readonly $metadata: { readonly httpStatusCode: 412 } = { httpStatusCode: 412 };
+
+  constructor() {
+    super("STORAGE_PRECONDITION_FAILED");
   }
 }
 
@@ -343,9 +384,32 @@ function answerStream(body: Readable, length: number): ReadableStream<Uint8Array
 
 /**
  * The worker's view of the bucket: the reads and the first-wins write its
- * managed output makes, in the shape the shared folder gives it (ADR-0160).
+ * managed output makes (ADR-0160), and the staging sink's multipart upload
+ * (ADR-0161), in the shape the shared folder gives it.
  */
-export type GoogleCloudStorageObjectClient = DeliverableObjectClient;
+export type GoogleCloudStorageObjectClient = DeliverableObjectClient & S3MultipartClient;
+
+/**
+ * One multipart upload, as the adapter keeps it: one resumable upload session
+ * (ADR-0161). Its URI lets anyone who holds it write to the bucket, so it never
+ * leaves the adapter: the sink is given a random id in its place.
+ */
+interface ResumableUpload {
+  readonly name: string;
+  /** The session's URI; `null` when the store refused to start it for its precondition. */
+  readonly uri: string | null;
+  /** `LOST` once the store refused it for its precondition; `FAILED` once a request on it failed. */
+  state: "OPEN" | "LOST" | "FAILED";
+  /** A request on it is unanswered. */
+  busy: boolean;
+  /** The bytes the store has taken: they run from the first to this one. */
+  offset: number;
+  /** The last part taken, a copy, sent when the next comes or at completion; `null` before the first. */
+  held: Buffer | null;
+  /** The MD5 of every part taken, in order: the object's, sent with its last bytes. */
+  readonly md5: Hash;
+  readonly parts: S3CompletedPartRef[];
+}
 
 /** The two views of one bucket, on one set of connections and one token. */
 export interface GoogleCloudStorageViews {
@@ -627,6 +691,86 @@ export function createGoogleCloudStorageViews(options: GoogleCloudStorageOptions
     return nameOf(input.key);
   };
 
+  /** The worker's uploads under way, by the id the sink is given for each. */
+  const uploads = new Map<string, ResumableUpload>();
+  const uploadPath = new URL(uploadUrl).pathname;
+
+  /**
+   * The session a start answered with, once it is at the store's own origin
+   * and upload path: it is sent the store's token too. A refusal names nothing
+   * of it.
+   */
+  const sessionUri = (location: string | null): string => {
+    let url: URL | null = null;
+    try {
+      if (location !== null) url = new URL(location);
+    } catch {
+      // Node's error carries the address it was given.
+    }
+    if (
+      url === null ||
+      url.origin !== origin ||
+      url.pathname !== uploadPath ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.hash !== "" ||
+      !url.searchParams.get("upload_id")
+    ) {
+      throw new GoogleCloudStorageError("STORAGE_UNEXPECTED_ANSWER");
+    }
+    return url.href;
+  };
+
+  /** The upload a worker's call names, once it names this store's bucket, no owner and the key it was started for. */
+  const uploadOf = (input: {
+    readonly bucket: string;
+    readonly key: string;
+    readonly uploadId: string;
+    readonly expectedBucketOwner: string | undefined;
+  }): ResumableUpload => {
+    const name = workerKey(input);
+    const upload = uploads.get(input.uploadId);
+    if (upload === undefined || upload.name !== name) throw new GoogleCloudStorageError("STORAGE_UNKNOWN_UPLOAD");
+    // One request at a time: bytes sent out of order, or twice, would be stored so.
+    if (upload.busy) throw new GoogleCloudStorageError("STORAGE_UPLOAD_BUSY");
+    if (upload.state === "FAILED") throw new GoogleCloudStorageError("STORAGE_UPLOAD_FAILED");
+    return upload;
+  };
+
+  /**
+   * Sends the held part from where the store's bytes end: the last part with
+   * the object's size and MD5, any other with neither. It carries bytes, so it
+   * is given no limit. A request that fails leaves the upload failed.
+   */
+  const sendHeld = async (
+    upload: ResumableUpload,
+    uri: string,
+    held: Buffer,
+    last: { readonly size: number; readonly md5: string } | null,
+  ): Promise<GaxiosResponse<unknown>> => {
+    const end = upload.offset + held.byteLength - 1;
+    const headers: Record<string, string> = {
+      "content-length": String(held.byteLength),
+      "content-range": `bytes ${upload.offset}-${end}/${last === null ? "*" : last.size}`,
+    };
+    if (last !== null) headers["x-goog-hash"] = `md5=${last.md5}`;
+    upload.busy = true;
+    try {
+      return await ask({ method: "PUT", url: uri, headers, data: held, responseType: "text" });
+    } catch (error) {
+      upload.state = "FAILED";
+      throw error;
+    } finally {
+      upload.busy = false;
+    }
+  };
+
+  /** What an answer the upload cannot go on from is: one that is no refusal is unexpected. */
+  const failedUpload = (upload: ResumableUpload, status: number): GoogleCloudStorageError => {
+    upload.state = "FAILED";
+    return status < 400 ? new GoogleCloudStorageError("STORAGE_UNEXPECTED_ANSWER") : statusFailure(status);
+  };
+
   const objectClient: GoogleCloudStorageObjectClient = {
     async getObject(input: S3GetObjectInput): Promise<S3GetObjectResult> {
       const read = await objectStorage.readObject(workerKey(input), null);
@@ -662,6 +806,138 @@ export function createGoogleCloudStorageViews(options: GoogleCloudStorageOptions
       if (response.status === 412) return { kind: "ALREADY_EXISTS" };
       // An upload names no object that could be missing.
       if (response.status === 404) throw new GoogleCloudStorageError("STORAGE_BUCKET_MISSING");
+      throw statusFailure(response.status);
+    },
+
+    async createMultipartUpload(input: S3CreateMultipartUploadInput): Promise<S3CreateMultipartUploadResult> {
+      const name = workerKey(input);
+      const response = await ask({
+        method: "POST",
+        // Generation 0 is no object: the upload is finished only where none is stored, and answers 412 otherwise.
+        url: `${uploadUrl}?uploadType=resumable&name=${escape(name)}&ifGenerationMatch=0`,
+        // The seam names no content type: a scene's video is stored as bytes.
+        headers: { "content-length": "0", "x-upload-content-type": "application/octet-stream" },
+        responseType: "text",
+        timeout: GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS,
+      });
+      let uri: string | null = null;
+      if (response.status === 200) {
+        uri = sessionUri(response.headers.get("location"));
+      } else if (response.status !== 412) {
+        // An upload names no object that could be missing.
+        if (response.status === 404) throw new GoogleCloudStorageError("STORAGE_BUCKET_MISSING");
+        throw statusFailure(response.status);
+      }
+      // Refused at the start, the upload takes its parts and drops them, and its completion is refused as a
+      // lost race: the sink then reads what is stored, as for a race lost at the end.
+      const uploadId = randomUUID();
+      uploads.set(uploadId, {
+        name,
+        uri,
+        state: uri === null ? "LOST" : "OPEN",
+        busy: false,
+        offset: 0,
+        held: null,
+        md5: createHash("md5"),
+        parts: [],
+      });
+      return { uploadId };
+    },
+
+    async uploadPart(input: S3UploadPartInput): Promise<S3UploadPartResult> {
+      const upload = uploadOf(input);
+      // A copy, whose sum is checked: the sink fills its array again once this returns.
+      const part = Buffer.from(input.body);
+      const sum = createHash("sha256").update(part).digest();
+      if (
+        input.partNumber !== upload.parts.length + 1 ||
+        part.byteLength === 0 ||
+        sum.toString("base64") !== input.checksumSha256Base64
+      ) {
+        throw new GoogleCloudStorageError("STORAGE_PART_REFUSED");
+      }
+      const { uri, held } = upload;
+      if (upload.state === "OPEN" && uri !== null && held !== null) {
+        // The part before this one is not the last, so it goes now, a whole number of 256 KiB by Google's rule.
+        if (held.byteLength % GOOGLE_CLOUD_STORAGE_CHUNK_QUANTUM_BYTES !== 0) {
+          throw new GoogleCloudStorageError("STORAGE_PART_REFUSED");
+        }
+        const response = await sendHeld(upload, uri, held, null);
+        const end = upload.offset + held.byteLength - 1;
+        if (response.status === 308 && response.headers.get("range") === `bytes=0-${end}`) {
+          upload.offset = end + 1;
+        } else if (response.status === 412) {
+          upload.state = "LOST";
+        } else {
+          // Bytes the store did not keep are no longer here to send again.
+          throw failedUpload(upload, response.status);
+        }
+      }
+      // Once the race is lost, parts are taken and dropped.
+      upload.held = upload.state === "OPEN" ? part : null;
+      if (upload.state === "OPEN") upload.md5.update(part);
+      const etag = `"${sum.toString("hex")}"`;
+      upload.parts.push({ partNumber: input.partNumber, etag, checksumSha256Base64: input.checksumSha256Base64 });
+      return { etag };
+    },
+
+    async completeMultipartUpload(input: S3CompleteMultipartUploadInput): Promise<void> {
+      const upload = uploadOf(input);
+      // Only the conditional completion exists: any other could replace a stored object.
+      if (input.ifNoneMatch !== "*") {
+        throw new AppError("INTERNAL_ERROR", "A worker's upload is finished only where nothing is stored");
+      }
+      const taken = upload.parts;
+      const named = input.parts;
+      if (
+        named.length === 0 ||
+        named.length !== taken.length ||
+        named.some((part, index) => {
+          const own = taken[index];
+          return (
+            own === undefined ||
+            part.partNumber !== own.partNumber ||
+            part.etag !== own.etag ||
+            part.checksumSha256Base64 !== own.checksumSha256Base64
+          );
+        })
+      ) {
+        throw new GoogleCloudStorageError("STORAGE_PART_REFUSED");
+      }
+      const { uri, held } = upload;
+      if (upload.state === "LOST" || uri === null || held === null) throw new GoogleCloudStoragePreconditionFailed();
+      const size = upload.offset + held.byteLength;
+      const response = await sendHeld(upload, uri, held, { size, md5: upload.md5.digest("base64") });
+      if (response.status === 200 || response.status === 201) {
+        // Finished: its URI and its last part are let go.
+        uploads.delete(input.uploadId);
+        return;
+      }
+      if (response.status === 412) {
+        upload.state = "LOST";
+        throw new GoogleCloudStoragePreconditionFailed();
+      }
+      throw failedUpload(upload, response.status);
+    },
+
+    async abortMultipartUpload(input: S3AbortMultipartUploadInput): Promise<void> {
+      const name = workerKey(input);
+      const upload = uploads.get(input.uploadId);
+      // An upload finished, let go, or never started here changes nothing.
+      if (upload === undefined) return;
+      if (upload.name !== name) throw new GoogleCloudStorageError("STORAGE_UNKNOWN_UPLOAD");
+      // Let go first: whatever the store answers, its URI is no longer held.
+      uploads.delete(input.uploadId);
+      if (upload.uri === null) return;
+      const response = await ask({
+        method: "DELETE",
+        url: upload.uri,
+        headers: { "content-length": "0" },
+        responseType: "text",
+        timeout: GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS,
+      });
+      // Google answers a cancel with 499; a session already ended answers 404 or 410.
+      if (response.status === 499 || response.status === 404 || response.status === 410) return;
       throw statusFailure(response.status);
     },
   };
