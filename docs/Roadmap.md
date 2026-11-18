@@ -1102,6 +1102,17 @@ It has no streamed read and sends no credential, and nothing constructs it.
 RD-3 is split for size: RD-3b adds the streamed read, and RD-3c wires the
 adapter into the web app.
 
+**RD-3b — the Google Cloud Storage adapter's streamed read** (ADR-0157, no
+migration): the adapter reads an object, or one range of it, as a stream
+taken only as it is sent. It asks the object's size and generation first,
+within gaxios's own 3-second setting, then that generation's bytes alone, so
+a key written again before they are read changes nothing read. An object
+stored encoded, and an answer that is not the bytes asked for, are refused
+by a code; a stream that ends short of its range, or brings a chunk past it,
+ends with one. The stream ends at the range's last byte, and the answer is
+let go then, on cancel and on failure. The bytes are given no limit. The
+adapter is now the whole port, still constructed by nothing.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

@@ -1801,6 +1801,15 @@ into on 2026-11-17.
       each by a setting of its own; how long each may take belongs with
       the deployment's measurements, in part 2 of the production readiness
       plan.
+      *Amended in RD-3b (ADR-0157 Decision 4): a streamed read's bytes are
+      given no limit either. gaxios's own setting runs on after the headers
+      and would end a long video partway, so a store that answers the size but
+      never the headers of the bytes holds the download's request, and one
+      that stalls after them holds the stream until the client leaves. A limit
+      on the headers alone would be a deadline in the repository's code, put
+      to the product owner first; one an HTTP agent of the adapter's own keeps
+      on an idle connection was measured to work, but bypasses gaxios's choice
+      of proxy, which RD-3c decides.*
 - [ ] **Prove the production build with gaxios.** gaxios imports
       `node-fetch` 3 when it first sends a request. Nothing in the web app
       loads the adapter yet; RD-3c, which wires it in, is to prove that
@@ -1825,6 +1834,27 @@ into on 2026-11-17.
       is to keep its requests from an ambient proxy or refuse one at start;
       RD-10's image is to set none of them, and the deployment (part 2)
       none unless a proxy is meant.
+
+## Open in RD-3b — what the Google Cloud Storage adapter's streamed read leaves open
+
+- [ ] **Check what Cloud Storage answers a streamed read, at the first
+      deployment.** The emulator does not show: whether a generation
+      overwritten between a read's two requests answers `404` in a bucket
+      without versioning (with versioning, the old generation is read);
+      whether an answer already streaming is cut when its object is
+      overwritten or deleted, which the emulator streams to its end; whether
+      `fields` trims the size's answer; whether a range's answer says its
+      length; and any of it over TLS (ADR-0157). The adapter relies on none of
+      them: a cut or short answer ends the stream with a code. To be checked
+      against a real bucket under the product owner's approval of that
+      deployment.
+- [ ] **Decide whether a `HEAD` should ask for an object's bytes.** The
+      download route answers `HEAD` by reading and cancelling at once. On
+      Cloud Storage that is the size's request and a request for the bytes,
+      let go at once: of a 64 MiB object, between 1,946 and 66,481 bytes had
+      reached the process on the emulator over sixteen runs, the size's answer
+      among them (ADR-0157 Decision 1). Reading the size alone would change
+      the port; how much Google bills for such a request is not measured.
 
 ## Initial-release contract — implementation and evidence gates (ADR-0052/0053/0054)
 
@@ -2293,6 +2323,7 @@ them is **built**. Each item below records the settled decision and what remains
       opened, and the route serves one range and a customer's video as
       `video/mp4`. The production adapter, when built, must implement the
       port's `readObject` (see *Build the Google Cloud Storage adapter*).*
+      *RD-3b (ADR-0157) implements it in the Google Cloud Storage adapter.*
 - [ ] **Remove what a killed process leaves in the shared folder.** An upload
       a crashed worker never completed or aborted, a staged file a killed
       process never moved, and the empty folders a deleted key leaves stay in
@@ -2429,6 +2460,10 @@ them is **built**. Each item below records the settled decision and what remains
       `404` for the bucket alone; permission is left to the first
       deployment (see* Open in RD-3a*). RD-3b is to add `readObject`, and
       RD-3c to wire the adapter in.*
+      *RD-3b (ADR-0157) adds `readObject`: the object's size and generation
+      first, then that generation's bytes as a stream taken only as it is
+      sent, let go at its end, on cancel and on failure. RD-3c is to wire the
+      adapter in.*
 - [x] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`. *Done in Phase 6C

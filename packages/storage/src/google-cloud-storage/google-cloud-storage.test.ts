@@ -1,21 +1,23 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { join } from "node:path";
+import { Readable } from "node:stream";
+import { Gaxios } from "gaxios";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ObjectRead, ObjectStorage } from "@app/domain";
 import { AppError } from "@app/shared";
 import {
   GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES,
   GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS,
   GoogleCloudStorageError,
   createGoogleCloudStorage,
-  type GoogleCloudStorageObjects,
 } from "./index";
 
 /**
  * The adapter against stand-ins for the store, on this machine: what it asks,
- * and what it makes of every answer the emulator cannot give (ADR-0156). The
- * emulator suite (`pnpm test:gcs`) holds what it stores.
+ * and what it makes of every answer the emulator cannot give (ADR-0156,
+ * ADR-0157). The emulator suite (`pnpm test:gcs`) holds what it stores.
  */
 
 const SECRET = "google-cloud-storage-signing-secret";
@@ -30,18 +32,45 @@ interface Seen {
   readonly body: Buffer;
 }
 
-/** What a stand-in does with a request: answer it, after a wait or at once, say nothing, or hang up. */
-type Answer = { readonly status: number; readonly body?: string; readonly afterMs?: number } | "SILENT" | "HANG_UP";
+/**
+ * What a stand-in does with a request: answer it, after a wait or at once,
+ * hanging up once `cutAfter` bytes of the body are sent, or never ending the
+ * answer once the body is sent when `holdOpen` is set; send `times` copies of
+ * `repeat`, as fast as they are taken; say nothing; or hang up.
+ */
+type Answer =
+  | {
+      readonly status: number;
+      readonly headers?: Readonly<Record<string, string>>;
+      readonly body?: string | Buffer;
+      readonly afterMs?: number;
+      readonly cutAfter?: number;
+      readonly holdOpen?: boolean;
+    }
+  | {
+      readonly status: number;
+      readonly headers: Readonly<Record<string, string>>;
+      readonly repeat: Buffer;
+      readonly times: number;
+    }
+  | "SILENT"
+  | "HANG_UP";
 
 interface StandIn {
   readonly origin: string;
   readonly seen: Seen[];
+  /** Bytes of `repeat` answers taken by the transport so far. */
+  readonly sent: { bytes: number };
+  /** Connections not yet closed. */
+  open(): number;
 }
 
 const servers: Array<{ close(): void; closeAllConnections(): void }> = [];
 
 async function standIn(answer: (request: Seen) => Answer): Promise<StandIn> {
   const seen: Seen[] = [];
+  const sent = { bytes: 0 };
+  const sockets = new Set<Socket>();
   const server = createServer((request, response: ServerResponse) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -59,18 +88,40 @@ async function standIn(answer: (request: Seen) => Answer): Promise<StandIn> {
         request.socket.destroy();
         return;
       }
+      const headers: Record<string, string> = { "content-type": "application/json", ...answered.headers };
+      if (answered.status >= 300 && answered.status < 400) headers.location = "http://127.0.0.1:9/elsewhere";
+      response.writeHead(answered.status, headers);
+      if ("repeat" in answered) {
+        let left = answered.times;
+        const more = (): void => {
+          while (left > 0 && !response.destroyed) {
+            left -= 1;
+            const taken = response.write(answered.repeat);
+            sent.bytes += answered.repeat.byteLength;
+            if (!taken) return void response.once("drain", more);
+          }
+          response.end();
+        };
+        more();
+        return;
+      }
       const send = () => {
-        const headers: Record<string, string> = { "content-type": "application/json" };
-        if (answered.status >= 300 && answered.status < 400) headers.location = "http://127.0.0.1:9/elsewhere";
-        response.writeHead(answered.status, headers).end(answered.body ?? "");
+        const { body = "", cutAfter, holdOpen = false } = answered;
+        if (holdOpen) response.write(body);
+        else if (cutAfter === undefined) response.end(body);
+        else response.write(Buffer.from(body).subarray(0, cutAfter), () => request.socket.destroy());
       };
       if (answered.afterMs === undefined) send();
       else setTimeout(send, answered.afterMs);
     });
   });
+  server.on("connection", (socket: Socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen };
+  return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen, sent, open: () => sockets.size };
 }
 
 // The adapter's client honours the proxy variables (ADR-0156 Decision 1); the
@@ -81,13 +132,14 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const server of servers.splice(0)) {
     server.closeAllConnections();
     server.close();
   }
 });
 
-const storeAt = (origin: string): GoogleCloudStorageObjects =>
+const storeAt = (origin: string): ObjectStorage =>
   createGoogleCloudStorage({ bucket: BUCKET, endpoint: origin, secret: SECRET });
 
 /** The rejection a call ends in, or `null` when it resolves. */
@@ -226,6 +278,7 @@ describe("what it asks", () => {
         () => storage.getObject(key),
         () => storage.deleteObject(key),
         () => storage.exists(key),
+        () => storage.readObject(key, null),
       ]) {
         const error = await failureOf(call);
         expect(error).toBeInstanceOf(AppError);
@@ -274,6 +327,7 @@ describe("what it makes of a refusal", () => {
       () => storage.getObject(ASSET),
       () => storage.deleteObject(ASSET),
       () => storage.exists(ASSET),
+      () => storage.readObject(ASSET, null),
     ];
     for (const call of calls) {
       const error = await failureOf(call);
@@ -293,6 +347,7 @@ describe("what it makes of a refusal", () => {
       () => storage.getObject(ASSET),
       () => storage.deleteObject(ASSET),
       () => storage.putObject(ASSET, new Uint8Array([1])),
+      () => storage.readObject(ASSET, null),
     ]) {
       expect(await failureOf(call)).toMatchObject({ code: "STORAGE_BUCKET_MISSING" });
     }
@@ -338,6 +393,7 @@ describe("what it makes of a refusal", () => {
       () => storage.getObject(ASSET),
       () => storage.deleteObject(ASSET),
       () => storage.exists(ASSET),
+      () => storage.readObject(ASSET, null),
     ];
     for (const call of calls) {
       expect(await failureOf(call)).toMatchObject({ code: "ECONNRESET", message: "ECONNRESET" });
@@ -373,12 +429,354 @@ describe("how long it waits", () => {
     const store = await standIn(() => ({ status: 200, body: "\u0007", afterMs }));
     expect(await storeAt(store.origin).getObject(ASSET)).toEqual(new Uint8Array([7]));
   });
+
+  it("gives the size a streamed read asks first the same limit, and asks no bytes", async () => {
+    const store = await standIn(() => "SILENT");
+    const started = performance.now();
+    const error = await failureOf(() => storeAt(store.origin).readObject(ASSET, null));
+    const elapsed = performance.now() - started;
+    expect(error).toMatchObject({ code: "STORAGE_TIMEOUT", message: "STORAGE_TIMEOUT" });
+    expect(elapsed).toBeGreaterThanOrEqual(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS - 50);
+    expect(elapsed).toBeLessThan(GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 1_000);
+    expect(store.seen).toHaveLength(1);
+  });
+
+  it("gives a streamed read's bytes no limit", async () => {
+    const afterMs = GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 500;
+    const held = holding(Buffer.from([1, 2, 3]));
+    const store = await standIn((request) => {
+      const answer = held(request);
+      return isMedia(request) && typeof answer === "object" ? { ...answer, afterMs } : answer;
+    });
+    expect(joined(await chunksOf(await storeAt(store.origin).readObject(ASSET, null)))).toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
+  });
+});
+
+const GENERATION = "1794979978444859123";
+const isMedia = (request: Seen): boolean => request.url.includes("alt=media");
+const metadata = (size: number, fields: Record<string, unknown> = {}): string =>
+  JSON.stringify({ name: ASSET, bucket: BUCKET, size: String(size), generation: GENERATION, ...fields });
+
+/** A stand-in holding one object of `data`'s bytes: its size, its ranges and its name, as Cloud Storage says them. */
+function holding(data: Buffer): (request: Seen) => Answer {
+  return (request) => {
+    if (request.url.includes("/o?prefix=")) return { status: 200, body: LISTED(ASSET) };
+    if (!isMedia(request)) return { status: 200, body: metadata(data.byteLength) };
+    const [first = "", last = ""] = String(request.headers.range).replace("bytes=", "").split("-");
+    const [start, end] = [Number(first), Number(last)];
+    const headers = {
+      "content-range": `bytes ${start}-${end}/${data.byteLength}`,
+      "content-length": String(end - start + 1),
+      "x-goog-generation": GENERATION,
+    };
+    return { status: 206, headers, body: data.subarray(start, end + 1) };
+  };
+}
+
+/** Every chunk a read's stream holds, read to its end. */
+async function chunksOf(read: ObjectRead): Promise<Uint8Array[]> {
+  if (read.kind !== "READ") throw new Error(`expected a read, not ${read.kind}`);
+  const reader = read.body.getReader();
+  const chunks: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return chunks;
+    chunks.push(value);
+  }
+}
+
+const joined = (chunks: Uint8Array[]): Uint8Array => new Uint8Array(Buffer.concat(chunks));
+
+describe("the streamed read (ADR-0157)", () => {
+  const TEN = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const MEBIBYTE = 1024 * 1024;
+
+  it("asks the size and generation, then that generation's bytes in the range asked, once each", async () => {
+    const store = await standIn(holding(TEN));
+    const storage = storeAt(store.origin);
+    const whole = await storage.readObject(ASSET, null);
+    expect(whole).toMatchObject({ kind: "READ", size: 10, start: 0, length: 10 });
+    expect(joined(await chunksOf(whole))).toEqual(new Uint8Array(TEN));
+    const middle = await storage.readObject(ASSET, { kind: "FROM", start: 3, end: 5 });
+    expect(middle).toMatchObject({ kind: "READ", size: 10, start: 3, length: 3 });
+    expect([...joined(await chunksOf(middle))]).toEqual([3, 4, 5]);
+    const last = await storage.readObject(ASSET, { kind: "LAST", length: 2 });
+    expect(last).toMatchObject({ kind: "READ", size: 10, start: 8, length: 2 });
+    expect([...joined(await chunksOf(last))]).toEqual([8, 9]);
+    const rest = await storage.readObject(ASSET, { kind: "FROM", start: 7, end: 99 });
+    expect([...joined(await chunksOf(rest))]).toEqual([7, 8, 9]);
+    const object = `/storage/v1/b/${BUCKET}/o/${ESCAPED_ASSET}`;
+    expect(store.seen.map(({ method, url }) => `${method} ${url}`)).toEqual(
+      Array.from({ length: 4 }, () => [
+        `GET ${object}?fields=size,generation,contentEncoding`,
+        `GET ${object}?alt=media&generation=${GENERATION}`,
+      ]).flat(),
+    );
+    // A last range is sent as the bytes it names, never as a suffix.
+    expect(store.seen.filter(isMedia).map(({ headers }) => headers.range)).toEqual([
+      "bytes=0-9",
+      "bytes=3-5",
+      "bytes=8-9",
+      "bytes=7-9",
+    ]);
+    for (const { headers } of store.seen.filter(isMedia)) {
+      expect(headers["accept-encoding"]).toBe("identity");
+      expect(headers.authorization).toBeUndefined();
+    }
+  });
+
+  it("takes a whole object answered whole, but never a range answered whole", async () => {
+    const store = await standIn((request) =>
+      isMedia(request) ? { status: 200, body: TEN } : { status: 200, body: metadata(10) },
+    );
+    const storage = storeAt(store.origin);
+    expect(joined(await chunksOf(await storage.readObject(ASSET, null)))).toEqual(new Uint8Array(TEN));
+    for (const [start, end] of [
+      [3, 5],
+      [0, 5],
+    ] as const) {
+      expect(await failureOf(() => storage.readObject(ASSET, { kind: "FROM", start, end }))).toMatchObject({
+        code: "STORAGE_UNEXPECTED_ANSWER",
+      });
+    }
+  });
+
+  it("asks for no bytes when the range holds none of them, or the object holds none", async () => {
+    const three = await standIn(holding(Buffer.from([1, 2, 3])));
+    expect(await storeAt(three.origin).readObject(ASSET, { kind: "FROM", start: 3, end: null })).toEqual({
+      kind: "UNSATISFIABLE",
+      size: 3,
+    });
+    const empty = await standIn(holding(Buffer.alloc(0)));
+    const storage = storeAt(empty.origin);
+    const whole = await storage.readObject(ASSET, null);
+    expect(whole).toMatchObject({ kind: "READ", size: 0, start: 0, length: 0 });
+    expect(await chunksOf(whole)).toEqual([]);
+    expect(await storage.readObject(ASSET, { kind: "LAST", length: 10 })).toMatchObject({ kind: "READ", length: 0 });
+    expect(await storage.readObject(ASSET, { kind: "FROM", start: 0, end: null })).toEqual({
+      kind: "UNSATISFIABLE",
+      size: 0,
+    });
+    expect([...three.seen, ...empty.seen].filter(isMedia)).toEqual([]);
+  });
+
+  it("calls the object absent once the bucket is proved, whether gone before its size or its bytes", async () => {
+    const before = await standIn((request) =>
+      request.url.includes("/o?prefix=") ? { status: 200, body: LISTED_NONE } : { status: 404, body: "{}" },
+    );
+    expect(await storeAt(before.origin).readObject(ASSET, null)).toEqual({ kind: "ABSENT" });
+    expect(before.seen.map(({ url }) => url.split("?")[0])).toEqual([
+      `/storage/v1/b/${BUCKET}/o/${ESCAPED_ASSET}`,
+      `/storage/v1/b/${BUCKET}/o`,
+    ]);
+    for (const [listed, outcome] of [
+      [LISTED_NONE, { kind: "ABSENT" }],
+      // Written again between the two: its size is another object's.
+      [LISTED(ASSET), { code: "STORAGE_OBJECT_CHANGED", message: "STORAGE_OBJECT_CHANGED" }],
+    ] as const) {
+      const between = await standIn((request) => {
+        if (request.url.includes("/o?prefix=")) return { status: 200, body: listed };
+        return isMedia(request) ? { status: 404, body: "Not Found" } : { status: 200, body: metadata(10) };
+      });
+      const read = await storeAt(between.origin)
+        .readObject(ASSET, null)
+        .catch((error: unknown) => error);
+      expect(read).toMatchObject(outcome);
+      expect(between.seen).toHaveLength(3);
+    }
+  });
+
+  it("asks no bytes for a size or generation it cannot read, or an object stored encoded", async () => {
+    const valid = { size: "10", generation: GENERATION };
+    for (const body of [
+      "not json",
+      "null",
+      "[]",
+      "{}",
+      JSON.stringify({ ...valid, size: 10 }),
+      ...["", "-1", "01", "1e3", "1.5", " 10", "9007199254740993"].map((size) => JSON.stringify({ ...valid, size })),
+      JSON.stringify({ size: "10" }),
+      JSON.stringify({ ...valid, generation: 7 }),
+      ...["", "0", "007", "1.5", "-7"].map((generation) => JSON.stringify({ ...valid, generation })),
+      ...["gzip", "br", ""].map((contentEncoding) => JSON.stringify({ ...valid, contentEncoding })),
+    ]) {
+      const store = await standIn(() => ({ status: 200, body }));
+      expect(await failureOf(() => storeAt(store.origin).readObject(ASSET, null))).toMatchObject({
+        code: "STORAGE_UNEXPECTED_ANSWER",
+      });
+      expect(store.seen).toHaveLength(1);
+    }
+    const identity = await standIn((request) =>
+      isMedia(request) ? holding(TEN)(request) : { status: 200, body: metadata(10, { contentEncoding: "identity" }) },
+    );
+    expect(await storeAt(identity.origin).readObject(ASSET, null)).toMatchObject({ kind: "READ", size: 10 });
+  });
+
+  it("refuses an answer that is not the bytes asked for, by its code alone", async () => {
+    const asked = { "content-range": "bytes 3-5/10", "content-length": "3" };
+    const unexpected = "STORAGE_UNEXPECTED_ANSWER";
+    const cases: ReadonlyArray<readonly [Answer, string]> = [
+      [{ status: 206, headers: { ...asked, "content-range": "bytes 3-5/11" }, body: "abc" }, unexpected],
+      [{ status: 206, headers: { ...asked, "content-range": "bytes 3-6/10" }, body: "abc" }, unexpected],
+      [{ status: 206, headers: { "content-length": "3" }, body: "abc" }, unexpected],
+      [{ status: 206, headers: { ...asked, "content-length": "4" }, body: "abcd" }, unexpected],
+      [{ status: 206, headers: { ...asked, "content-encoding": "gzip" }, body: "abc" }, unexpected],
+      [{ status: 206, headers: { ...asked, "x-goog-generation": "8" }, body: "abc" }, unexpected],
+      [{ status: 204 }, unexpected],
+      [{ status: 416, body: `<Error>bytes=3-5 ${ASSET}</Error>` }, unexpected],
+      [{ status: 403, body: ASSET }, "STORAGE_FORBIDDEN"],
+      [{ status: 429 }, "STORAGE_RATE_LIMITED"],
+      [{ status: 503 }, "STORAGE_UNAVAILABLE"],
+      [{ status: 302 }, "STORAGE_REFUSED"],
+    ];
+    for (const [media, code] of cases) {
+      const store = await standIn((request) => (isMedia(request) ? media : { status: 200, body: metadata(10) }));
+      const error = await failureOf(() => storeAt(store.origin).readObject(ASSET, { kind: "FROM", start: 3, end: 5 }));
+      expect(error).toBeInstanceOf(GoogleCloudStorageError);
+      expect(error).toMatchObject({ code, message: code });
+      expect(JSON.stringify(error)).not.toMatch(/vtavision|org_1|127\.0\.0\.1/);
+      expect(store.seen).toHaveLength(2);
+    }
+  });
+
+  it("ends the stream with a code when the answer ends short of its range, or runs past it", async () => {
+    for (const body of ["ab", "abcd"]) {
+      // No length is said, so only the bytes counted can show the answer is wrong.
+      const store = await standIn((request) =>
+        isMedia(request)
+          ? { status: 206, headers: { "content-range": "bytes 3-5/10" }, body }
+          : { status: 200, body: metadata(10) },
+      );
+      const read = await storeAt(store.origin).readObject(ASSET, { kind: "FROM", start: 3, end: 5 });
+      const error = await failureOf(() => chunksOf(read));
+      expect(error).toBeInstanceOf(GoogleCloudStorageError);
+      expect(error).toMatchObject({ code: "STORAGE_UNEXPECTED_ANSWER", message: "STORAGE_UNEXPECTED_ANSWER" });
+    }
+  });
+
+  it("ends the stream with the transport's code alone when the store hangs up partway, and holds nothing", async () => {
+    const size = 4 * MEBIBYTE;
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? {
+            status: 206,
+            headers: { "content-range": `bytes 0-${size - 1}/${size}`, "content-length": String(size) },
+            body: Buffer.alloc(size),
+            cutAfter: 1_000,
+          }
+        : { status: 200, body: metadata(size) },
+    );
+    const read = await storeAt(store.origin).readObject(ASSET, null);
+    const error = await failureOf(() => chunksOf(read));
+    expect(error).toBeInstanceOf(GoogleCloudStorageError);
+    expect(error).toMatchObject({ code: "ECONNRESET", message: "ECONNRESET" });
+    expect((error as Error).cause).toBeUndefined();
+    expect(JSON.stringify(error)).not.toMatch(/vtavision|org_1|127\.0\.0\.1/);
+    expect(String((error as Error).stack)).not.toMatch(/vtavision|org_1|127\.0\.0\.1/);
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+  });
+
+  it("takes nothing from the answer before the reader asks, then one read of it for each, and lets it go", async () => {
+    // The answer the adapter is handed, so what is taken from it can be counted.
+    const answers: Readable[] = [];
+    const request = Gaxios.prototype.request;
+    vi.spyOn(Gaxios.prototype, "request").mockImplementation(async function (this: Gaxios, options) {
+      const response = await request.call(this, options);
+      if (response.data instanceof Readable) answers.push(response.data);
+      return response;
+    });
+    const size = 64 * MEBIBYTE;
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? {
+            status: 206,
+            headers: { "content-range": `bytes 0-${size - 1}/${size}`, "content-length": String(size) },
+            repeat: Buffer.alloc(64 * 1024, 1),
+            times: size / (64 * 1024),
+          }
+        : { status: 200, body: metadata(size) },
+    );
+    const read = await storeAt(store.origin).readObject(ASSET, null);
+    if (read.kind !== "READ") throw new Error("expected a read");
+    const [answer] = answers;
+    if (answer === undefined) throw new Error("expected the answer");
+    const taken: number[] = [];
+    const readAnswer = answer.read.bind(answer);
+    answer.read = (bytes?: number): unknown => {
+      const chunk: unknown = readAnswer(bytes);
+      if (chunk instanceof Uint8Array) taken.push(chunk.byteLength);
+      return chunk;
+    };
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(answer.readableDidRead).toBe(false);
+    expect(taken).toEqual([]);
+    const reader = read.body.getReader();
+    const first = await reader.read();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(taken).toEqual([first.value?.byteLength]);
+    const second = await reader.read();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(taken).toEqual([first.value?.byteLength, second.value?.byteLength]);
+    // What the transport buffers is sent; the rest waits for the reader.
+    expect(store.sent.bytes).toBeLessThan(size / 4);
+    await reader.cancel();
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+    expect(store.sent.bytes).toBeLessThan(size / 4);
+  });
+
+  it("ends the stream at its range's last byte, and lets the answer go, though the answer goes on", async () => {
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? { status: 206, headers: { "content-range": "bytes 3-5/10" }, body: "abc", holdOpen: true }
+        : { status: 200, body: metadata(10) },
+    );
+    const read = await storeAt(store.origin).readObject(ASSET, { kind: "FROM", start: 3, end: 5 });
+    expect(Buffer.from(joined(await chunksOf(read))).toString()).toBe("abc");
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+  });
+
+  it("ends the stream with a code at the first chunk past its range, and lets the rest go", async () => {
+    const size = 64 * MEBIBYTE;
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? {
+            status: 206,
+            headers: { "content-range": "bytes 3-5/10" },
+            repeat: Buffer.alloc(64 * 1024, 1),
+            times: size / (64 * 1024),
+          }
+        : { status: 200, body: metadata(10) },
+    );
+    const read = await storeAt(store.origin).readObject(ASSET, { kind: "FROM", start: 3, end: 5 });
+    if (read.kind !== "READ") throw new Error("expected a read");
+    const error = await failureOf(() => read.body.getReader().read());
+    expect(error).toBeInstanceOf(GoogleCloudStorageError);
+    expect(error).toMatchObject({ code: "STORAGE_UNEXPECTED_ANSWER", message: "STORAGE_UNEXPECTED_ANSWER" });
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+    expect(store.sent.bytes).toBeLessThan(size / 4);
+  });
+
+  it("lets go of a long answer it does not pass on", async () => {
+    const size = 64 * MEBIBYTE;
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? { status: 500, headers: {}, repeat: Buffer.alloc(64 * 1024, 1), times: size / (64 * 1024) }
+        : { status: 200, body: metadata(size) },
+    );
+    expect(await failureOf(() => storeAt(store.origin).readObject(ASSET, null))).toMatchObject({
+      code: "STORAGE_UNAVAILABLE",
+    });
+    await vi.waitFor(() => expect(store.open()).toBe(0));
+    expect(store.sent.bytes).toBeLessThan(size / 4);
+  });
 });
 
 describe("where it is constructed", () => {
   it("is constructed by no production code, and loaded by none through `@app/storage`", () => {
-    // It has no streamed read and sends no credential (ADR-0156 Decision 7):
-    // the change that wires it gets this review.
+    // It sends no credential (ADR-0156 Decision 7, ADR-0157): the change that
+    // wires it gets this review.
     const repo = join(__dirname, "..", "..", "..", "..");
     const sources = (dir: string): string[] =>
       readdirSync(dir).flatMap((name) => {

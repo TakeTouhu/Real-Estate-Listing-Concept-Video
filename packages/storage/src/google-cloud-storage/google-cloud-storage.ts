@@ -1,6 +1,10 @@
+import { Readable } from "node:stream";
 import { Gaxios, type GaxiosOptions, type GaxiosResponse } from "gaxios";
 import {
   isCanonicalStorageKey,
+  resolveObjectByteRange,
+  type ObjectByteRange,
+  type ObjectRead,
   type ObjectStorage,
   type SignedDownloadOptions,
   type SignedUrl,
@@ -25,9 +29,11 @@ import { signedStorageUrl, type SignedPurpose } from "../signing";
  * - **A refusal names nothing.** Its message is its code alone: no bucket, no
  *   key, no host and nothing the store said.
  * - **Nothing is asked again.** A request that fails is not retried.
+ * - **A streamed read reads one generation.** It asks the object's size and
+ *   generation, then that generation's bytes alone, as the caller pulls them
+ *   (ADR-0157).
  *
- * The streamed read the port names is not written yet, so this is not an
- * `ObjectStorage` and nothing constructs it.
+ * Nothing constructs it yet: the change that wires it does (RD-3c).
  *
  * It sends no credential: as written it can speak only to a store that asks
  * for none, such as the emulator the tests use.
@@ -35,10 +41,11 @@ import { signedStorageUrl, type SignedPurpose } from "../signing";
 
 /**
  * The milliseconds a question that moves no object's bytes is given to be
- * answered in full: `exists`, and the list that proves a bucket after a `404`.
- * A setting of gaxios's own, which keeps the deadline; none is written here
- * (ADR-0156 Decision 3). A put, a delete and a whole object's read are given
- * none.
+ * answered in full: `exists`, the list that proves a bucket after a `404`, and
+ * the size and generation a streamed read asks first. A setting of gaxios's
+ * own, which keeps the deadline; none is written here (ADR-0156 Decision 3,
+ * ADR-0157). A put, a delete, a whole object's read and a streamed read's bytes
+ * are given none.
  */
 export const GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS = 3_000;
 
@@ -56,6 +63,12 @@ const BUCKET_NAME = /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/;
 /** A code named by the transport: one plain word, as Node.js's are. */
 const TRANSPORT_CODE = /^[A-Z0-9][A-Z0-9_]{0,39}$/;
 
+/** An object's size, a decimal string in the JSON API. */
+const SIZE = /^(0|[1-9][0-9]*)$/;
+
+/** A generation, a decimal string never read as a number: it can pass 2^53. Never `0`, which pins nothing. */
+const GENERATION = /^[1-9][0-9]*$/;
+
 export interface GoogleCloudStorageOptions {
   /** The bucket, by Cloud Storage's naming rules. */
   readonly bucket: string;
@@ -68,9 +81,6 @@ export interface GoogleCloudStorageOptions {
   readonly now?: () => Date;
 }
 
-/** The port's operations, without the streamed read. */
-export type GoogleCloudStorageObjects = Omit<ObjectStorage, "readObject">;
-
 /**
  * A request the store did not answer as asked. The message is the code:
  *
@@ -79,8 +89,11 @@ export type GoogleCloudStorageObjects = Omit<ObjectStorage, "readObject">;
  * - `STORAGE_RATE_LIMITED`: `429`;
  * - `STORAGE_UNAVAILABLE`: a `5xx`;
  * - `STORAGE_BUCKET_MISSING`: the bucket answered `404`;
+ * - `STORAGE_OBJECT_CHANGED`: the object was written again between a streamed
+ *   read's two requests;
  * - `STORAGE_REFUSED`: any other status;
- * - `STORAGE_UNEXPECTED_ANSWER`: a list that cannot be read, or proves nothing;
+ * - `STORAGE_UNEXPECTED_ANSWER`: an answer that cannot be read, proves nothing,
+ *   or is not the bytes asked for;
  * - the transport's own one-word code, such as `ECONNREFUSED`;
  * - `STORAGE_UNREACHABLE`: a failure that names none.
  */
@@ -175,7 +188,140 @@ function firstListedName(body: unknown): string | null {
   return name;
 }
 
-export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): GoogleCloudStorageObjects {
+/**
+ * The size and generation an object's metadata names. Throws when it names
+ * them otherwise than Cloud Storage does, or names an encoding: an encoded
+ * object is served decoded and whole, whatever range is asked, so its size
+ * counts other bytes than those served (ADR-0157).
+ */
+function storedObjectOf(body: unknown): { readonly size: number; readonly generation: string } {
+  let parsed: unknown;
+  try {
+    parsed = typeof body === "string" ? JSON.parse(body) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new GoogleCloudStorageError("STORAGE_UNEXPECTED_ANSWER");
+  }
+  const { size, generation, contentEncoding } = parsed as {
+    readonly size?: unknown;
+    readonly generation?: unknown;
+    readonly contentEncoding?: unknown;
+  };
+  if (
+    typeof size !== "string" ||
+    !SIZE.test(size) ||
+    !Number.isSafeInteger(Number(size)) ||
+    typeof generation !== "string" ||
+    !GENERATION.test(generation) ||
+    (contentEncoding !== undefined && contentEncoding !== "identity")
+  ) {
+    throw new GoogleCloudStorageError("STORAGE_UNEXPECTED_ANSWER");
+  }
+  return { size: Number(size), generation };
+}
+
+/**
+ * Whether a media answer holds the bytes asked for, as stored: the range, or
+ * the whole object answered whole; of the generation asked, when it names one;
+ * as many bytes as asked, when it says how many; and not encoded.
+ */
+function isAskedBytes(
+  answer: GaxiosResponse<unknown>,
+  asked: { readonly start: number; readonly length: number; readonly size: number; readonly generation: string },
+): boolean {
+  const { status, headers } = answer;
+  const last = asked.start + asked.length - 1;
+  const ranged =
+    status === 206
+      ? headers.get("content-range") === `bytes ${asked.start}-${last}/${asked.size}`
+      : status === 200 && asked.start === 0 && asked.length === asked.size;
+  const length = headers.get("content-length");
+  const encoding = headers.get("content-encoding");
+  const generation = headers.get("x-goog-generation");
+  return (
+    ranged &&
+    (length === null || length === String(asked.length)) &&
+    (encoding === null || encoding === "identity") &&
+    (generation === null || generation === asked.generation)
+  );
+}
+
+/** A stream of no bytes, already ended. */
+function emptyStream(): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.close();
+    },
+  });
+}
+
+/**
+ * The `length` bytes an answer carries, as a stream read only as the caller
+ * pulls: one read of the answer, all it holds then, for each pull, and none
+ * before the first.
+ * It ends once it has handed over exactly `length` bytes, whether or not the
+ * answer has ended; an answer that ends short of them, brings a chunk past
+ * them or fails errors it with a code alone. The answer is let go at the
+ * stream's end, on cancel and on failure (ADR-0157).
+ */
+function answerStream(body: Readable, length: number): ReadableStream<Uint8Array> {
+  let chunks: AsyncIterator<unknown> | undefined;
+  let received = 0;
+  let released = false;
+  // Destroying the answer lets its connection go in every state: a pull
+  // waiting, nothing read, or every byte arrived.
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    body.destroy();
+  };
+  const fail = (controller: ReadableStreamDefaultController<Uint8Array>, code: string): void => {
+    release();
+    controller.error(new GoogleCloudStorageError(code));
+  };
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        let next: IteratorResult<unknown>;
+        try {
+          chunks ??= body[Symbol.asyncIterator]();
+          next = await chunks.next();
+        } catch (error) {
+          // Once cancelled, the reader has gone: what the release ended is no failure.
+          if (!released) fail(controller, transportCode(error));
+          return;
+        }
+        if (released) return;
+        // Every byte asked for closes the stream when it is handed over, so an end now is short of them.
+        if (next.done === true) {
+          fail(controller, "STORAGE_UNEXPECTED_ANSWER");
+          return;
+        }
+        const chunk: unknown = next.value;
+        if (!(chunk instanceof Uint8Array) || received + chunk.byteLength > length) {
+          fail(controller, "STORAGE_UNEXPECTED_ANSWER");
+          return;
+        }
+        received += chunk.byteLength;
+        controller.enqueue(chunk);
+        // The last byte is handed over: the answer is let go now, not on a later pull.
+        if (received === length) {
+          release();
+          controller.close();
+        }
+      },
+      cancel() {
+        release();
+      },
+    },
+    // Nothing is taken from the answer before the reader asks for it.
+    { highWaterMark: 0 },
+  );
+}
+
+export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): ObjectStorage {
   if (typeof options.bucket !== "string" || !BUCKET_NAME.test(options.bucket)) {
     throw configurationError("The storage bucket must be named by Cloud Storage's rules");
   }
@@ -283,6 +429,55 @@ export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): Go
       if (response.status !== 404) throw statusFailure(response.status);
       // Nothing to delete, once the bucket is proved to be there.
       await listed(name);
+    },
+
+    async readObject(key: string, range: ObjectByteRange | null): Promise<ObjectRead> {
+      const name = nameOf(key);
+      const metadata = await ask({
+        url: `${objectUrl(name)}?fields=size,generation,contentEncoding`,
+        responseType: "text",
+        timeout: GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS,
+      });
+      if (metadata.status === 404) {
+        // Absent when the read was asked, once the bucket is proved to be there.
+        await listed(name);
+        return { kind: "ABSENT" };
+      }
+      if (metadata.status !== 200) throw statusFailure(metadata.status);
+      const { size, generation } = storedObjectOf(metadata.data);
+      const bytes = resolveObjectByteRange(range, size);
+      if (bytes === null) return { kind: "UNSATISFIABLE", size };
+      // No bytes to read: nothing is asked for them.
+      if (bytes.length === 0) return { kind: "READ", size, start: bytes.start, length: 0, body: emptyStream() };
+
+      const last = bytes.start + bytes.length - 1;
+      const media: GaxiosOptions & { readonly compress: false } = {
+        // Pinned to the generation the size is that of: never another object's bytes.
+        url: `${objectUrl(name)}?alt=media&generation=${generation}`,
+        headers: { range: `bytes=${bytes.start}-${last}`, "accept-encoding": "identity" },
+        responseType: "stream",
+        // The bytes as they are stored, never decoded.
+        compress: false,
+      };
+      const answer = await ask(media);
+      const body: unknown = answer.data;
+      if (!(body instanceof Readable)) throw new GoogleCloudStorageError("STORAGE_UNEXPECTED_ANSWER");
+      if (isAskedBytes(answer, { ...bytes, size, generation })) {
+        return { kind: "READ", size, start: bytes.start, length: bytes.length, body: answerStream(body, bytes.length) };
+      }
+      // An answer not passed on is let go of now, so its connection is not held.
+      body.destroy();
+      const { status } = answer;
+      if (status === 404) {
+        // The generation is gone: deleted, or written over.
+        if (await listed(name)) throw new GoogleCloudStorageError("STORAGE_OBJECT_CHANGED");
+        return { kind: "ABSENT" };
+      }
+      // A generation's bytes never change, so a range of them that held is never unsatisfiable.
+      if ((status >= 200 && status < 300) || status === 416) {
+        throw new GoogleCloudStorageError("STORAGE_UNEXPECTED_ANSWER");
+      }
+      throw statusFailure(status);
     },
 
     exists(key: string): Promise<boolean> {
