@@ -83,6 +83,48 @@ jobs:
       - name: Media tests
         run: pnpm run test:media
 
+  storage:
+    # The Cloud Storage emulator (ADR-0156): proves the Google Cloud Storage
+    # adapter against a store that speaks the JSON API. A service container
+    # takes no arguments, so the emulator is configured by its FAKE_GCS_*
+    # variables. No Google account, credential or store on the network is
+    # involved, and the suites refuse an emulator that is not on this machine.
+    runs-on: ubuntu-24.04
+    services:
+      gcs:
+        image: fsouza/fake-gcs-server:1.56.1@sha256:797ce226d62f947c009dc40246b30cfb456b8473d8241407f9d6f2c04e4d69ef
+        env:
+          FAKE_GCS_SCHEME: http
+          FAKE_GCS_BACKEND: memory
+          FAKE_GCS_PORT: "4443"
+        ports: ["4443:4443"]
+        options: >-
+          --health-cmd "wget -q -O /dev/null http://127.0.0.1:4443/_internal/healthcheck"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT: http://127.0.0.1:4443
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cloud Storage emulator tests
+        run: pnpm run test:gcs
+
   database:
     # Live PostgreSQL: proves the migrations apply to an empty database, that
     # the committed schema has no drift, and that the Prisma repositories obey

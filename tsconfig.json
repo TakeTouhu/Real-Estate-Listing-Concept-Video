@@ -6,6 +6,7 @@
     "vitest.config.ts",
     "vitest.integration.config.ts",
     "vitest.media.config.ts",
+    "vitest.gcs.config.ts",
     "playwright.config.ts",
     "tests/**/*.ts"
   ]

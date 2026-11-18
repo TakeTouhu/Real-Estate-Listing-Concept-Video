@@ -34,6 +34,25 @@ Every input is generated in the test or committed in `assets/disclosure/`; no
 customer or provider media is used. Without FFmpeg the run fails, its tests
 reported as skipped. CI runs them in the `media` job on Ubuntu 24.04.
 
+## `tests/storage/*.gcs.test.ts`
+
+Suites that speak to the Cloud Storage emulator (ADR-0156): the Google Cloud
+Storage adapter storing, reading and deleting objects in a bucket of each
+test's own. They are **excluded** from `pnpm test` and run explicitly, with
+the emulator running and named:
+
+```bash
+export GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT=http://127.0.0.1:4443
+pnpm test:gcs
+```
+
+Without the variable the run fails: Vitest marks the file failed and its
+tests skipped. An origin that is not on this machine is refused, and the
+suite clears the proxy variables, so no suite reaches a real store. The
+emulator has no permissions, so what Google answers a caller that may not
+read or list is not seen here. CI runs them in the `storage` job beside the
+emulator's service container.
+
 ## `tests/e2e/*.spec.ts`
 
 The browser test (ADR-0121): Playwright's Chromium drives the web app, which

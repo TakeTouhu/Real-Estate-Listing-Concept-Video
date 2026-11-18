@@ -1090,6 +1090,18 @@ client, and no deadline is set: its first connection waits by its own
 settings. The start check does not refuse such an address. RD-2 is complete
 in five parts for the web app.
 
+**RD-3a — the Google Cloud Storage adapter's objects** (ADR-0156, no
+migration): an adapter for one Cloud Storage bucket, over the Cloud Storage
+JSON API through gaxios, stores, reads, checks and deletes objects, and
+makes the application's own signed links. A key is called absent only once
+a list in the bucket has answered, so a missing bucket is never read as an
+empty one. A list is ended by gaxios's own 3-second setting, which decides
+how the adapter's `exists` is limited; no deadline is written in the
+repository's code. A new CI job runs it against the Cloud Storage emulator.
+It has no streamed read and sends no credential, and nothing constructs it.
+RD-3 is split for size: RD-3b adds the streamed read, and RD-3c wires the
+adapter into the web app.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

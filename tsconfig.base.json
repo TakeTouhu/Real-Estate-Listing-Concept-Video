@@ -34,6 +34,7 @@
         "./packages/domain/src/provider-output-byte-source-access/index.ts"
       ],
       "@app/storage/testing": ["./packages/storage/src/testing/index.ts"],
+      "@app/storage/google-cloud-storage": ["./packages/storage/src/google-cloud-storage/index.ts"],
       "@/*": ["./apps/web/src/*"]
     }
   }

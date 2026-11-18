@@ -2733,3 +2733,25 @@ request that used the database failed.
 
 **Rolling back.** To RD-2d's build: safe. Readiness again reads `ready`
 with an address the web app's own client cannot read.
+
+## RD-3a — the Google Cloud Storage adapter's objects
+
+**No migration** (ADR-0156). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing: no application constructs the new
+adapter, and no setting is read. `@app/storage` depends on gaxios 7.3.1, so
+an install adds ten packages.
+
+**For the first deployment that uses it** (RD-3c onward): the account the
+web app runs as needs `storage.objects.get`, `storage.objects.create`,
+`storage.objects.delete` and `storage.objects.list` on the one bucket. The
+list permission is how the adapter tells a missing object from a missing
+bucket (ADR-0156 Decision 2); without it every `exists` is refused. What
+Google answers an account without it is not measured, and is a check for
+that deployment (`docs/decisions/TODO.md`).
+
+**On a development machine.** Nothing to do. To run the new suites, start
+the emulator and name it (`docs/local-setup.md`, *Cloud Storage emulator
+tests*).
+
+**Rolling back.** To RD-2e's build: safe. Nothing used the adapter.
