@@ -1174,9 +1174,9 @@ describe("a production build's transport", () => {
 });
 
 describe("where it is constructed", () => {
-  it("is constructed by no production code, and loaded by none through `@app/storage`", () => {
-    // It reaches Google's store with the process's own identity (ADR-0158): the
-    // change that wires it gets this review.
+  it("is constructed only by the web app's adapters, and loaded by none through `@app/storage`", () => {
+    // It reaches Google's store with the process's own identity (ADR-0158): anything else that
+    // constructs it gets this review (ADR-0159).
     const repo = join(__dirname, "..", "..", "..", "..");
     const sources = (dir: string): string[] =>
       readdirSync(dir).flatMap((name) => {
@@ -1188,7 +1188,8 @@ describe("where it is constructed", () => {
     const production = ["packages", "apps"].flatMap((root) => sources(join(repo, root)));
     const naming = (pattern: RegExp): string[] =>
       production.filter((file) => pattern.test(readFileSync(file, "utf8"))).map((file) => file.slice(repo.length + 1));
-    expect(naming(/createGoogleCloudStorage\(/)).toEqual([
+    expect(naming(/createGoogleCloudStorage\(/).sort()).toEqual([
+      "apps/web/src/lib/adapters.ts",
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
     ]);
     // The token is asked for by the adapter alone, and nothing in it is read from the environment.
@@ -1203,6 +1204,7 @@ describe("where it is constructed", () => {
     // Any quoted path beginning with gaxios, or naming the folder or anything below it, so an alias is caught too.
     const loading = /["'`]gaxios(?:\/[^"'`]*)?["'`]|google-cloud-storage(?:\/[\w.-]*)*["'`]/;
     expect(naming(loading).sort()).toEqual([
+      "apps/web/src/lib/adapters.ts",
       "packages/storage/src/google-cloud-storage/access-token.ts",
       "packages/storage/src/google-cloud-storage/client.ts",
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",

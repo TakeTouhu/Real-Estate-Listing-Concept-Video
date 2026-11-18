@@ -22,7 +22,7 @@ describe("production guard — LocalObjectStorage", () => {
       expect(err.adapter).toBe("LocalObjectStorage");
       expect(err.message).toContain("LocalObjectStorage");
       expect(err.message).toContain("NODE_ENV=production");
-      expect(err.message).toMatch(/S3\/Azure/);
+      expect(err.message).toMatch(/Google Cloud Storage/);
     }
   });
 

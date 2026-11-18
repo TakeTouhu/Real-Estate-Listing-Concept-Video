@@ -11,8 +11,12 @@ import type { ServerEnv } from "@app/shared";
  * without loading one (ADR-0151 Decision 5): this module imports no adapter.
  */
 export interface WebAdapterChoice {
-  /** The folder shared with the worker (ADR-0085), or this process's own memory (ADR-0008). */
-  readonly storage: "shared-folder" | "memory";
+  /**
+   * Google's own Cloud Storage, a Cloud Storage emulator in development and CI
+   * (ADR-0159), the folder shared with the worker (ADR-0085), or this
+   * process's own memory (ADR-0008).
+   */
+  readonly storage: "gcs" | "gcs-emulator" | "shared-folder" | "memory";
   /** The test scanner, which knows only the EICAR test file (ADR-0008). */
   readonly malwareScanner: "passthrough";
   /** The development outbox (ADR-0126), or none: then no email is sent (ADR-0129). */
@@ -23,10 +27,18 @@ export interface WebAdapterChoice {
   readonly promptModeration: "offline";
 }
 
+/** A bucket is Google's, or with an endpoint an emulator's; the schema keeps an endpoint out of production. */
+function storageOf(env: ServerEnv): WebAdapterChoice["storage"] {
+  if (env.GOOGLE_CLOUD_STORAGE_BUCKET !== undefined) {
+    return env.GOOGLE_CLOUD_STORAGE_ENDPOINT !== undefined ? "gcs-emulator" : "gcs";
+  }
+  return env.SHARED_STORAGE_DIR !== undefined ? "shared-folder" : "memory";
+}
+
 /** Which adapter serves each port, from the environment alone. Constructs nothing. */
 export function chooseWebAdapters(env: ServerEnv): WebAdapterChoice {
   return {
-    storage: env.SHARED_STORAGE_DIR !== undefined ? "shared-folder" : "memory",
+    storage: storageOf(env),
     malwareScanner: "passthrough",
     email: env.EMAIL_OUTBOX_DIR !== undefined ? "outbox" : "none",
     imageAnalysis: env.ANALYSIS_PROVIDER,

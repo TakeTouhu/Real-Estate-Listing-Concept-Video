@@ -19,12 +19,12 @@ export interface LocalObjectStorageOptions extends ProductionGuardOptions {
 
 /**
  * In-process object storage used for local development and tests. It implements
- * the same {@link ObjectStorage} contract as a real S3/Azure driver: keys are
- * opaque and organization-prefixed, and access is only granted through
- * short-lived, single-purpose signed URLs.
+ * the same {@link ObjectStorage} contract as the Google Cloud Storage adapter:
+ * keys are opaque and organization-prefixed, and access is only granted
+ * through short-lived, single-purpose signed URLs.
  *
- * A production S3/Azure adapter replaces this class without touching domain
- * code (see ADR-0008).
+ * In production the Google Cloud Storage adapter takes its place, without
+ * touching domain code (ADR-0008, ADR-0054 Decision 1, ADR-0159).
  *
  * NOT PRODUCTION-SAFE: construction throws under NODE_ENV=production.
  */
@@ -38,7 +38,7 @@ export class LocalObjectStorage implements ObjectStorage {
     assertNotProduction(
       "LocalObjectStorage",
       "objects are held in process memory, so uploads are lost on restart and are not shared between instances",
-      "configure a durable S3/Azure ObjectStorage adapter",
+      "configure the Google Cloud Storage adapter",
       options,
     );
     this.secret = options.secret;

@@ -9,7 +9,7 @@ import {
   type SignedDownloadOptions,
   type SignedUrl,
 } from "@app/domain";
-import { AppError } from "@app/shared";
+import { AppError, GOOGLE_CLOUD_STORAGE_ORIGIN, isCloudStorageBucketName } from "@app/shared";
 import { signedStorageUrl, type SignedPurpose } from "../signing";
 import { METADATA_SERVER_ORIGIN, metadataAccessToken } from "./access-token";
 import { googleCloudStorageClient } from "./client";
@@ -40,11 +40,8 @@ import { googleCloudStorageClient } from "./client";
  * - **Every request goes straight to its origin**, on connections of the
  *   adapter's own, never through a proxy (ADR-0158).
  *
- * Nothing constructs it yet: the change that wires it does (RD-3d).
+ * The web app's adapters construct it (`apps/web/src/lib/adapters.ts`, ADR-0159).
  */
-
-/** The one origin a token is sent to: Google's own store (ADR-0158 Decision 2). */
-const GOOGLE_CLOUD_STORAGE_ORIGIN = "https://storage.googleapis.com";
 
 /**
  * The milliseconds a question that moves no object's bytes is given to be
@@ -58,14 +55,6 @@ export const GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS = 3_000;
 
 /** The most bytes Cloud Storage takes in an object's name. */
 export const GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES = 1024;
-
-/**
- * Lowercase letters, digits, `-`, `_` and `.`, 3 to 63 of them, beginning and
- * ending with a letter or a digit. Every name Cloud Storage allows of at most
- * 63 characters, and some it refuses (an address such as `192.168.5.4`, a name
- * beginning `goog`), which no bucket can have; none can reach another path.
- */
-const BUCKET_NAME = /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/;
 
 /** A code named by the transport: one plain word, as Node.js's are. */
 const TRANSPORT_CODE = /^[A-Z0-9][A-Z0-9_]{0,39}$/;
@@ -342,7 +331,9 @@ function answerStream(body: Readable, length: number): ReadableStream<Uint8Array
 }
 
 export function createGoogleCloudStorage(options: GoogleCloudStorageOptions): ObjectStorage {
-  if (typeof options.bucket !== "string" || !BUCKET_NAME.test(options.bucket)) {
+  // The rule the environment's schema applies too (ADR-0159); the one origin a token is sent to is
+  // Google's own store (ADR-0158 Decision 2). Both are `@app/shared`'s.
+  if (typeof options.bucket !== "string" || !isCloudStorageBucketName(options.bucket)) {
     throw configurationError("The storage bucket must be named by Cloud Storage's rules");
   }
   const origin = originOf(options.endpoint);

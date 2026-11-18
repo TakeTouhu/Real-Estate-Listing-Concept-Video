@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { loadServerEnv, resetServerEnvCache, serverEnvSchema } from "./env";
+import { isCloudStorageBucketName, loadServerEnv, resetServerEnvCache, serverEnvSchema } from "./env";
 
 const base = {
   SESSION_SECRET: "session-secret-abcdef123456",
@@ -111,6 +111,141 @@ describe("serverEnvSchema", () => {
     }
   });
 
+  describe("Google Cloud Storage (ADR-0159)", () => {
+    const BUCKET = "vtavision-objects";
+    const EMULATOR = "http://127.0.0.1:4443";
+    const NAMING =
+      "GOOGLE_CLOUD_STORAGE_BUCKET must be 3 to 63 lowercase letters, digits, '.', '-' or '_', " +
+      "beginning and ending with a letter or a digit";
+    const NEEDS_EMULATOR =
+      "GOOGLE_CLOUD_STORAGE_ENDPOINT must name an emulator when GOOGLE_CLOUD_STORAGE_BUCKET is set " +
+      "outside production, so that development never asks Google";
+    const NOT_GOOGLE =
+      "GOOGLE_CLOUD_STORAGE_ENDPOINT must name an emulator, not Google's own API domain: " +
+      "outside production nothing asks Google";
+    const IN_PRODUCTION =
+      "GOOGLE_CLOUD_STORAGE_ENDPOINT is for development and CI only; it must not be set in production";
+    const NEEDS_BUCKET = "GOOGLE_CLOUD_STORAGE_BUCKET is required when GOOGLE_CLOUD_STORAGE_ENDPOINT is set";
+    const WITH_FOLDER =
+      "GOOGLE_CLOUD_STORAGE_BUCKET and SHARED_STORAGE_DIR must not both be set: " +
+      "the web app would keep objects in the bucket, and the worker look for them in the folder";
+    const NOT_ORIGIN = "GOOGLE_CLOUD_STORAGE_ENDPOINT must be an origin, with no path, query or fragment";
+
+    /** Each issue as `path: message`, or none when the environment is accepted. */
+    const issuesOf = (settings: Record<string, string>): string[] => {
+      const result = serverEnvSchema.safeParse({ ...base, ...settings });
+      return result.success ? [] : result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+    };
+
+    it("takes neither by default, in development and in production", () => {
+      for (const NODE_ENV of ["development", "test", "production"]) {
+        const env = serverEnvSchema.parse({ ...base, NODE_ENV });
+        expect([env.GOOGLE_CLOUD_STORAGE_BUCKET, env.GOOGLE_CLOUD_STORAGE_ENDPOINT]).toEqual([undefined, undefined]);
+      }
+    });
+
+    it("takes a bucket alone in production, and a bucket with an emulator's origin elsewhere", () => {
+      const production = { ...base, NODE_ENV: "production", GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET };
+      expect(serverEnvSchema.parse(production).GOOGLE_CLOUD_STORAGE_BUCKET).toBe(BUCKET);
+      for (const NODE_ENV of ["development", "test"]) {
+        for (const endpoint of [EMULATOR, "http://localhost:4443/", "https://[::1]:4443", "http://gcs.example.test"]) {
+          const settings = { NODE_ENV, GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET, GOOGLE_CLOUD_STORAGE_ENDPOINT: endpoint };
+          expect(issuesOf(settings)).toEqual([]);
+        }
+      }
+    });
+
+    it("names a bucket only by Cloud Storage's rules, the adapter's own", () => {
+      for (const good of ["abc", "a-b_c.d", "0bucket9", "a".repeat(63), "goog-is-refused-by-google-not-here"]) {
+        expect(isCloudStorageBucketName(good)).toBe(true);
+        expect(issuesOf({ NODE_ENV: "production", GOOGLE_CLOUD_STORAGE_BUCKET: good })).toEqual([]);
+      }
+      for (const bad of ["", "ab", "a".repeat(64), "Bucket", "-abc", "abc-", "a/b", "a b", "abc%2F", "abc\n"]) {
+        expect(isCloudStorageBucketName(bad)).toBe(false);
+        expect(issuesOf({ NODE_ENV: "production", GOOGLE_CLOUD_STORAGE_BUCKET: bad })).toEqual([
+          `GOOGLE_CLOUD_STORAGE_BUCKET: ${NAMING}`,
+        ]);
+      }
+    });
+
+    it("refuses a bucket without an emulator outside production, so development never asks Google", () => {
+      for (const NODE_ENV of ["development", "test"]) {
+        expect(issuesOf({ NODE_ENV, GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET })).toEqual([
+          `GOOGLE_CLOUD_STORAGE_ENDPOINT: ${NEEDS_EMULATOR}`,
+        ]);
+      }
+    });
+
+    it("refuses an endpoint at Google's API domain outside production, however it is written", () => {
+      for (const google of [
+        "https://storage.googleapis.com",
+        "https://STORAGE.googleapis.com:443/",
+        "http://storage.googleapis.com",
+        "https://storage.googleapis.com.",
+        "https://storage.asia-northeast1.rep.googleapis.com",
+        "https://googleapis.com",
+      ]) {
+        const settings = { NODE_ENV: "development", GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET };
+        expect(issuesOf({ ...settings, GOOGLE_CLOUD_STORAGE_ENDPOINT: google })).toEqual([
+          `GOOGLE_CLOUD_STORAGE_ENDPOINT: ${NOT_GOOGLE}`,
+        ]);
+      }
+      const near = "https://storage.googleapis.com.example.test";
+      expect(issuesOf({ GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET, GOOGLE_CLOUD_STORAGE_ENDPOINT: near })).toEqual([]);
+    });
+
+    it("refuses an endpoint in production, Google's own included", () => {
+      for (const endpoint of [EMULATOR, "https://storage.googleapis.com"]) {
+        const settings = { NODE_ENV: "production", GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET };
+        expect(issuesOf({ ...settings, GOOGLE_CLOUD_STORAGE_ENDPOINT: endpoint })).toEqual([
+          `GOOGLE_CLOUD_STORAGE_ENDPOINT: ${IN_PRODUCTION}`,
+        ]);
+      }
+    });
+
+    it("takes an endpoint only as an http(s) origin, and only with a bucket", () => {
+      const refused: [string, string[]][] = [
+        ["", ["Invalid url", "GOOGLE_CLOUD_STORAGE_ENDPOINT must be an absolute address"]],
+        ["127.0.0.1:4443", ["Invalid url", "GOOGLE_CLOUD_STORAGE_ENDPOINT must be an absolute address"]],
+        ["localhost:4443", ["GOOGLE_CLOUD_STORAGE_ENDPOINT must use http or https"]],
+        ["ftp://127.0.0.1:4443", ["GOOGLE_CLOUD_STORAGE_ENDPOINT must use http or https"]],
+        ["http://user:pw@127.0.0.1:4443", ["GOOGLE_CLOUD_STORAGE_ENDPOINT must not name a user"]],
+        ["http://127.0.0.1:4443/storage/v1", [NOT_ORIGIN]],
+        ["http://127.0.0.1:4443?", [NOT_ORIGIN]],
+        ["http://127.0.0.1:4443/#", [NOT_ORIGIN]],
+      ];
+      for (const [endpoint, messages] of refused) {
+        const issues = issuesOf({ GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET, GOOGLE_CLOUD_STORAGE_ENDPOINT: endpoint });
+        expect(issues).toEqual(messages.map((message) => `GOOGLE_CLOUD_STORAGE_ENDPOINT: ${message}`));
+      }
+      for (const NODE_ENV of ["development", "production"]) {
+        const issues = issuesOf({ NODE_ENV, GOOGLE_CLOUD_STORAGE_ENDPOINT: EMULATOR });
+        expect(issues).toContain(`GOOGLE_CLOUD_STORAGE_BUCKET: ${NEEDS_BUCKET}`);
+      }
+    });
+
+    it("refuses a bucket beside the shared folder, which the worker reads", () => {
+      const folder = { SHARED_STORAGE_DIR: "/var/tmp/vtavision-storage", GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET };
+      expect(issuesOf({ ...folder, GOOGLE_CLOUD_STORAGE_ENDPOINT: EMULATOR })).toEqual([
+        `GOOGLE_CLOUD_STORAGE_BUCKET: ${WITH_FOLDER}`,
+      ]);
+    });
+  });
+
+  it("refuses NODE_DEBUG in production, whatever it names, and leaves it alone elsewhere (ADR-0159)", () => {
+    const line = "NODE_DEBUG: NODE_DEBUG must not be set in production: " +
+      "Node.js would write requests, their tokens included, to the error output";
+    for (const value of ["https", "HTTPS", "foo,https", "*", "h*", "*s", "http", "net", "tls", " "]) {
+      const result = serverEnvSchema.safeParse({ ...base, NODE_ENV: "production", NODE_DEBUG: value });
+      const issues = result.success ? [] : result.error.issues;
+      expect(issues.map((i) => `${i.path.join(".")}: ${i.message}`)).toEqual([line]);
+      for (const NODE_ENV of ["development", "test"]) {
+        expect(serverEnvSchema.safeParse({ ...base, NODE_ENV, NODE_DEBUG: value }).success).toBe(true);
+      }
+    }
+    expect(serverEnvSchema.safeParse({ ...base, NODE_ENV: "production", NODE_DEBUG: "" }).success).toBe(true);
+  });
+
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);
@@ -140,6 +275,9 @@ describe("loadServerEnv", () => {
       SHARED_STORAGE_DIR: "marker/relative",
       EMAIL_OUTBOX_DIR: "marker/relative",
       APP_BASE_URL: "http://marker.example.com/path",
+      GOOGLE_CLOUD_STORAGE_BUCKET: "marker_Bad",
+      GOOGLE_CLOUD_STORAGE_ENDPOINT: "http://marker.example.com/path",
+      NODE_DEBUG: "marker,https",
       MFA_SECRET_KEY: "marker-not-hex",
       VIDEO_PROVIDER: "wavespeed",
       WAVESPEED_API_KEY: "",
