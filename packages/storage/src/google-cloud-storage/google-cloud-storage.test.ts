@@ -1,19 +1,25 @@
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, globalAgent, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import { globalAgent as globalTlsAgent } from "node:https";
 import type { AddressInfo, Socket } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { Gaxios, type GaxiosOptions, type GaxiosResponse } from "gaxios";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { ObjectRead, ObjectStorage } from "@app/domain";
+import { managedCleanMasterKey, type ObjectRead, type ObjectStorage } from "@app/domain";
 import { AppError } from "@app/shared";
 import {
   GOOGLE_CLOUD_STORAGE_MAX_KEY_BYTES,
   GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS,
   GoogleCloudStorageError,
   createGoogleCloudStorage,
+  createGoogleCloudStorageViews,
+  type GoogleCloudStorageObjectClient,
 } from "./index";
+import type { S3ObjectBody } from "../managed-output/s3-staging-sink";
 import {
   GOOGLE_CLOUD_STORAGE_CREDENTIAL_LIMIT_MS,
   GOOGLE_CLOUD_STORAGE_TOKEN_MARGIN_MS,
@@ -1173,6 +1179,206 @@ describe("a production build's transport", () => {
   });
 });
 
+describe("the worker's view (ADR-0160)", () => {
+  const TEN = Buffer.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const MASTER = managedCleanMasterKey({ organizationId: "org_1", deliverableVersionId: "gdv_1" });
+  const UPLOAD = `POST /upload/storage/v1/b/${BUCKET}/o?uploadType=media&name=${encodeURIComponent(MASTER)}`;
+  const target = (key: string) => ({ bucket: BUCKET, key, expectedBucketOwner: undefined });
+  const clientAt = (origin: string): GoogleCloudStorageObjectClient =>
+    createGoogleCloudStorageViews({ bucket: BUCKET, endpoint: origin, secret: SECRET }).objectClient;
+  let folder: string;
+  let files = 0;
+
+  beforeEach(async () => {
+    folder = await mkdtemp(join(tmpdir(), "vta-gcs-worker-"));
+  });
+
+  afterEach(async () => {
+    await rm(folder, { recursive: true, force: true });
+  });
+
+  /** A local file of `data`, as the worker hands one over. */
+  const file = async (data: Uint8Array): Promise<string> => {
+    files += 1;
+    const path = join(folder, `file-${files}`);
+    await writeFile(path, data);
+    return path;
+  };
+  const put = (client: GoogleCloudStorageObjectClient, localPath: string) =>
+    client.putObjectIfAbsent({ ...target(MASTER), localPath, contentType: "video/mp4" });
+
+  /** Every byte a body holds, read to its end. */
+  async function drained(body: S3ObjectBody): Promise<Uint8Array> {
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const chunk = await body.read();
+      if (chunk === null) return joined(chunks);
+      chunks.push(chunk);
+    }
+  }
+
+  it("reads a stored object's one generation as the worker pulls it, then ends", async () => {
+    const store = await standIn(holding(TEN));
+    const { contentLength, body } = await clientAt(store.origin).getObject(target(ASSET));
+    expect(contentLength).toBe(10);
+    expect(await drained(body!)).toEqual(new Uint8Array(TEN));
+    expect(await body!.read()).toBeNull();
+    expect(store.seen.map(({ method, url }) => `${method} ${url}`)).toEqual([
+      `GET /storage/v1/b/${BUCKET}/o/${ESCAPED_ASSET}?fields=size,generation,contentEncoding`,
+      `GET /storage/v1/b/${BUCKET}/o/${ESCAPED_ASSET}?alt=media&generation=${GENERATION}`,
+    ]);
+  });
+
+  it("calls an object absent only once the bucket is proved, and a missing bucket never", async () => {
+    const absent = await standIn((request) =>
+      request.url.includes("/o?prefix=") ? { status: 200, body: LISTED_NONE } : { status: 404, body: "{}" },
+    );
+    expect(await clientAt(absent.origin).getObject(target(ASSET))).toEqual({ contentLength: null, body: null });
+    const missing = await standIn(() => ({ status: 404, body: "{}" }));
+    expect(await failureOf(() => clientAt(missing.origin).getObject(target(ASSET)))).toMatchObject({
+      code: "STORAGE_BUCKET_MISSING",
+    });
+  });
+
+  it("fails a read with a code when the answer ends short, never with an end", async () => {
+    const store = await standIn((request) =>
+      isMedia(request)
+        ? { status: 206, headers: { "content-range": "bytes 0-9/10" }, body: TEN.subarray(0, 4) }
+        : { status: 200, body: metadata(10) },
+    );
+    const { body } = await clientAt(store.origin).getObject(target(ASSET));
+    expect(await failureOf(() => drained(body!))).toMatchObject({
+      code: "STORAGE_UNEXPECTED_ANSWER",
+      message: "STORAGE_UNEXPECTED_ANSWER",
+    });
+  });
+
+  it("refuses a read once the body is cancelled", async () => {
+    const store = await standIn(holding(TEN));
+    const { body } = await clientAt(store.origin).getObject(target(ASSET));
+    await body!.cancel();
+    await body!.cancel();
+    expect(await failureOf(() => body!.read())).toMatchObject({
+      code: "STORAGE_BODY_CANCELLED",
+      message: "STORAGE_BODY_CANCELLED",
+    });
+  });
+
+  it("sends nothing for another bucket, an owner, or a key that is not canonical, and names none", async () => {
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const client = clientAt(store.origin);
+    const localPath = await file(new Uint8Array([1]));
+    for (const input of [
+      { ...target(ASSET), bucket: "vtavision-other" },
+      { ...target(ASSET), expectedBucketOwner: "123456789012" },
+    ]) {
+      for (const call of [
+        () => client.getObject(input),
+        () => client.putObjectIfAbsent({ ...input, localPath, contentType: "video/mp4" }),
+      ]) {
+        const error = await failureOf(call);
+        expect(error).toBeInstanceOf(AppError);
+        expect(error).toMatchObject({
+          code: "CONFIGURATION_ERROR",
+          message: "A worker's request must name the store's own bucket, and no owner",
+        });
+        expect(JSON.stringify(error)).not.toMatch(/vtavision|123456789012|org/);
+      }
+    }
+    for (const key of ["../x", "org//x", "org/a\nb"]) {
+      for (const call of [
+        () => client.getObject(target(key)),
+        () => client.putObjectIfAbsent({ ...target(key), localPath, contentType: "video/mp4" }),
+      ]) {
+        expect(await failureOf(call)).toMatchObject({ code: "INTERNAL_ERROR" });
+      }
+    }
+    expect(store.seen).toEqual([]);
+  });
+
+  it("stores a local file only where nothing is stored, with its length and MD5", async () => {
+    const data = Buffer.from("a deliverable's bytes");
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    expect(await put(clientAt(store.origin), await file(data))).toEqual({ kind: "CREATED" });
+    expect(store.seen.map(({ method, url }) => `${method} ${url}`)).toEqual([`${UPLOAD}&ifGenerationMatch=0`]);
+    const [sent] = store.seen;
+    expect(sent!.headers["content-type"]).toBe("video/mp4");
+    expect(sent!.headers["content-length"]).toBe(String(data.byteLength));
+    expect(sent!.headers["x-goog-hash"]).toBe(`md5=${createHash("md5").update(data).digest("base64")}`);
+    expect(sent!.body).toEqual(data);
+    expect(sent!.headers.authorization).toBeUndefined();
+  });
+
+  it("sends an empty file as no bytes, with the MD5 of none", async () => {
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    expect(await put(clientAt(store.origin), await file(new Uint8Array(0)))).toEqual({ kind: "CREATED" });
+    expect(store.seen[0]!.headers["content-length"]).toBe("0");
+    expect(store.seen[0]!.headers["x-goog-hash"]).toBe("md5=1B2M2Y8AsgTpgAmY7PhCfg==");
+    expect(store.seen[0]!.body.byteLength).toBe(0);
+  });
+
+  it("reads a 412 as an object already stored, and any other refusal as its code alone", async () => {
+    const localPath = await file(new Uint8Array([1, 2]));
+    const answers: Array<[number, unknown]> = [
+      [412, { kind: "ALREADY_EXISTS" }],
+      [404, "STORAGE_BUCKET_MISSING"],
+      // As Google refuses bytes whose MD5 is not the one sent.
+      [400, "STORAGE_REFUSED"],
+      [403, "STORAGE_FORBIDDEN"],
+      [429, "STORAGE_RATE_LIMITED"],
+      [503, "STORAGE_UNAVAILABLE"],
+      [307, "STORAGE_REFUSED"],
+    ];
+    for (const [status, outcome] of answers) {
+      const store = await standIn(() => ({ status, body: "{\"error\":\"org/org_1\"}" }));
+      if (typeof outcome === "string") {
+        expect(await failureOf(() => put(clientAt(store.origin), localPath))).toMatchObject({
+          code: outcome,
+          message: outcome,
+        });
+      } else {
+        expect(await put(clientAt(store.origin), localPath)).toEqual(outcome);
+      }
+      expect(store.seen).toHaveLength(1);
+    }
+  });
+
+  it("names no path when the file cannot be read, and sends nothing", async () => {
+    const store = await standIn(() => ({ status: 200, body: "{}" }));
+    const error = await failureOf(() => put(clientAt(store.origin), join(folder, "missing")));
+    expect(error).toMatchObject({ code: "ENOENT", message: "ENOENT" });
+    expect(JSON.stringify(error)).not.toContain(folder);
+    expect(store.seen).toEqual([]);
+  });
+
+  it("gives the put no limit, as every request that carries bytes", async () => {
+    const afterMs = GOOGLE_CLOUD_STORAGE_QUESTION_LIMIT_MS + 500;
+    const store = await standIn(() => ({ status: 200, body: "{}", afterMs }));
+    expect(await put(clientAt(store.origin), await file(new Uint8Array([1])))).toEqual({ kind: "CREATED" });
+    expect(requests.mock.calls.map(([options]) => options?.timeout)).toEqual([undefined]);
+  });
+
+  it("asks Google's metadata server once for both views, and sends the worker's requests its token", async () => {
+    const asked = answeringAsGoogle((url) =>
+      url.origin === METADATA_SERVER ? TOKEN_ANSWER(MARKER) : asGoogleStore(url),
+    );
+    const { objectStorage, objectClient } = createGoogleCloudStorageViews({
+      bucket: BUCKET,
+      endpoint: GOOGLE,
+      secret: SECRET,
+    });
+    expect(await objectStorage.exists(ASSET)).toBe(true);
+    expect(await put(objectClient, await file(new Uint8Array(0)))).toEqual({ kind: "CREATED" });
+    const { body } = await objectClient.getObject(target(ASSET));
+    expect(await drained(body!)).toEqual(new Uint8Array([1, 2, 3]));
+    const [first, ...rest] = asked;
+    expect(first?.url.origin).toBe(METADATA_SERVER);
+    expect(rest.map(({ url, authorization }) => [url.origin, authorization])).toEqual(
+      Array.from({ length: 4 }, () => [GOOGLE, `Bearer ${MARKER}`]),
+    );
+  });
+});
+
 describe("where it is constructed", () => {
   it("is constructed only by the web app's adapters, and loaded by none through `@app/storage`", () => {
     // It reaches Google's store with the process's own identity (ADR-0158): anything else that
@@ -1188,7 +1394,7 @@ describe("where it is constructed", () => {
     const production = ["packages", "apps"].flatMap((root) => sources(join(repo, root)));
     const naming = (pattern: RegExp): string[] =>
       production.filter((file) => pattern.test(readFileSync(file, "utf8"))).map((file) => file.slice(repo.length + 1));
-    expect(naming(/createGoogleCloudStorage\(/).sort()).toEqual([
+    expect(naming(/createGoogleCloudStorage\w*\(/).sort()).toEqual([
       "apps/web/src/lib/adapters.ts",
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
     ]);

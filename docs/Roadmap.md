@@ -1139,6 +1139,20 @@ malware scanning and email, and `NODE_DEBUG`, which would write the token,
 is refused in production. A real production build was measured reading a
 timeout as one. RD-3 is complete; RD-4 gives the worker Cloud Storage.
 
+**RD-4a — the worker's reads and first-wins writes in Google Cloud
+Storage** (ADR-0160, no migration): the Google Cloud Storage adapter gives,
+beside the web app's port and on the same connections and token, the
+worker's view of its bucket. It reads an object as the web app does, its
+size and then that generation's bytes, one chunk as the worker asks, and
+calls a key absent only once a list proves it. It stores a file only where
+nothing is stored, in one upload that Cloud Storage refuses with `412` when
+an object is there, streamed with its length and its MD5, which Cloud
+Storage checks. It refuses another bucket and a bucket owner, which Cloud
+Storage cannot check. Composition, media validation and the Clean Master
+store ran on it against the emulator. Nothing constructs it yet: RD-4 is
+split in three, and RD-4b adds the staging sink's upload, RD-4c the
+development pipeline beside the emulator.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

@@ -52,7 +52,7 @@ changed lines.
 | RD-1 | The web app's adapters chosen in one place (ADR-0150) | none |
 | RD-2 | Boot-time check of adapters and secrets (*RD-2a, ADR-0151*); readiness checks the database and storage (*RD-2b, ADR-0152*); how those checks are limited (*RD-2c, ADR-0153*); a start RD-2a could not check (*RD-2d, ADR-0154*); an address the web app's own database client cannot read (*RD-2e, ADR-0155*) | none |
 | RD-3 | Google Cloud Storage adapter for the web storage port, tested on an emulator (*its objects over the JSON API, and the emulator in CI: RD-3a, ADR-0156; its streamed read: RD-3b, ADR-0157; its credential and its own connections: RD-3c, ADR-0158; in the web app: RD-3d, ADR-0159*) | none |
-| RD-4 | Google Cloud Storage for the worker's copy and deliverable writes | none |
+| RD-4 | Google Cloud Storage for the worker's copy and deliverable writes (*the worker's reads and first-wins writes: RD-4a, ADR-0160*) | none |
 | RD-5 | ClamAV scanner, with ClamAV in CI | none |
 | RD-6 | SMTP email adapter, tested with a mail catcher | none |
 | RD-7 | Rate limiter in PostgreSQL; sign-in, reset, verification resend, MFA | 1 |
