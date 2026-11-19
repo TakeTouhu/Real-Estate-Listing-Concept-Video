@@ -2877,3 +2877,26 @@ URI lets anyone who holds it write to the bucket.
 **On a development machine.** Nothing to do.
 
 **Rolling back.** To RD-4a's build: safe. Nothing used the worker's view.
+
+## RD-4c — the development pipeline beside the Cloud Storage emulator
+
+**No migration** (ADR-0162). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing: no setting or package is added, and
+nothing in production builds the worker's view. The development pipeline,
+which is refused in production, may now run on the emulator.
+
+**For the first deployment that uses it.** Nothing new: the pipeline never
+builds Google's store. RD-4a's and RD-4b's checks stand for part 2.
+
+**On a development machine.** A machine whose web app keeps its objects in
+the emulator gives the pipeline the same `GOOGLE_CLOUD_STORAGE_BUCKET` and
+`GOOGLE_CLOUD_STORAGE_ENDPOINT`, without `SHARED_STORAGE_DIR`, with the
+emulator running and its bucket made (`docs/local-setup.md`, 3b and 4a). A
+machine on the folder changes nothing. A local `pnpm test:db` runs the
+pipeline's suite on the emulator too when `GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT`
+names one, and on the folder alone otherwise; CI's `database` job names
+one.
+
+**Rolling back.** To RD-4b's build: safe. Its pipeline refuses to start
+without `SHARED_STORAGE_DIR`, and objects in the emulator stay there.

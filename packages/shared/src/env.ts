@@ -49,8 +49,13 @@ export function isCloudStorageBucketName(name: string): boolean {
   return CLOUD_STORAGE_BUCKET_NAME.test(name);
 }
 
-/** Whether an address is at Google's API domain, `googleapis.com` or a name below it, with a final dot or not. */
-function isGoogleApiAddress(value: string): boolean {
+/**
+ * Whether an address is at Google's API domain, `googleapis.com` or a name below it, with a final dot or not: the
+ * one rule the environment and the development pipeline share (ADR-0162). An address that does not parse is not;
+ * whoever reads it refuses it for that.
+ */
+export function isGoogleApiAddress(value: string): boolean {
+  if (!URL.canParse(value)) return false;
   const host = new URL(value).hostname.replace(/\.$/, "");
   return host === "googleapis.com" || host.endsWith(".googleapis.com");
 }

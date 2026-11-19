@@ -2124,9 +2124,9 @@ describe("the staging sink's upload (ADR-0161)", () => {
 });
 
 describe("where it is constructed", () => {
-  it("is constructed only by the web app's adapters, and loaded by none through `@app/storage`", () => {
+  it("is built only by the web app's adapters and the development pipeline, loaded by none from `@app/storage`", () => {
     // It reaches Google's store with the process's own identity (ADR-0158): anything else that
-    // constructs it gets this review (ADR-0159).
+    // constructs it gets this review (ADR-0159). The development pipeline builds it on an emulator alone (ADR-0162).
     const repo = join(__dirname, "..", "..", "..", "..");
     const sources = (dir: string): string[] =>
       readdirSync(dir).flatMap((name) => {
@@ -2140,6 +2140,14 @@ describe("where it is constructed", () => {
       production.filter((file) => pattern.test(readFileSync(file, "utf8"))).map((file) => file.slice(repo.length + 1));
     expect(naming(/createGoogleCloudStorage\w*\(/).sort()).toEqual([
       "apps/web/src/lib/adapters.ts",
+      "apps/worker/src/development-pipeline/assembly.ts",
+      "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
+    ]);
+    // Google's own origin is named by the settings' rules, the adapter and the web app's adapters: never by the
+    // pipeline, which refuses Google's whole API domain (ADR-0162).
+    expect(naming(/GOOGLE_CLOUD_STORAGE_ORIGIN/).sort()).toEqual([
+      "apps/web/src/lib/adapters.ts",
+      "packages/shared/src/env.ts",
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",
     ]);
     // The token is asked for by the adapter alone, and nothing in it is read from the environment.
@@ -2155,6 +2163,7 @@ describe("where it is constructed", () => {
     const loading = /["'`]gaxios(?:\/[^"'`]*)?["'`]|google-cloud-storage(?:\/[\w.-]*)*["'`]/;
     expect(naming(loading).sort()).toEqual([
       "apps/web/src/lib/adapters.ts",
+      "apps/worker/src/development-pipeline/assembly.ts",
       "packages/storage/src/google-cloud-storage/access-token.ts",
       "packages/storage/src/google-cloud-storage/client.ts",
       "packages/storage/src/google-cloud-storage/google-cloud-storage.ts",

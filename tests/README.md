@@ -19,6 +19,11 @@ delete rows under fixture ids and must never run against production data. CI
 runs them in the `database` job against a PostgreSQL 16 service container with
 throwaway credentials.
 
+The development pipeline's suite runs each case on the shared folder and, when
+`GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT` names a Cloud Storage emulator, again in a
+fresh bucket there (ADR-0162). The `database` job names one, and in CI a missing
+name fails the file; a local run without one runs the folder's cases alone.
+
 ## `tests/media/*.media.test.ts`
 
 Suites that run the real `ffmpeg` and `ffprobe` (ADR-0072): the dormant

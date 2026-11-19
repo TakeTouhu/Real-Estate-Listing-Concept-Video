@@ -50,7 +50,7 @@ import {
   type ReconciliationPolicy,
   type TransitionContext,
 } from "@app/domain";
-import { AppError, randomId, type ServerEnv } from "@app/shared";
+import { AppError, isGoogleApiAddress, randomId, type ServerEnv } from "@app/shared";
 import {
   FfprobeCleanMasterInspector,
   FfprobeMediaProbe,
@@ -68,6 +68,7 @@ import {
   createSharedFolderStorage,
   nodeManagedOutputTempFileFactory,
 } from "@app/storage";
+import { createGoogleCloudStorageViews } from "@app/storage/google-cloud-storage";
 import {
   FakeVideoProvider,
   createFakeClipStudio,
@@ -79,18 +80,20 @@ import { createSharedFolderPhotoReader } from "./photo-reader";
 
 /**
  * The development pipeline's assembly (GS-9b, ADR-0106, ADR-0107): every
- * generation step, built on the test provider and the shared folder, for the
- * pipeline command to run when a person or a test starts it.
+ * generation step, built on the test provider and the shared folder or a Cloud
+ * Storage emulator's bucket (ADR-0162), for the pipeline command to run when a
+ * person or a test starts it.
  *
  * It runs nothing. It builds the runners and hands them back; no timer, loop
  * or startup hook calls them, and nothing in the worker's start-up imports
  * this module. It is refused in production, given or ambient, and unless
  * `VIDEO_PROVIDER` is `fake`, before anything is opened.
  *
- * Every runner reads and writes the database it is given and the shared folder
- * the web app stores photos in (ADR-0085). The test provider reads each photo
+ * Every runner reads and writes the database it is given and the store the web
+ * app keeps photos in: the shared folder (ADR-0085) or the emulator's bucket,
+ * never both and never Google's own store. The test provider reads each photo
  * through the URL preparation signed (ADR-0092), and its clips are copied into
- * the same folder. FFmpeg and ffprobe on the machine validate the clips, compose
+ * the same store. FFmpeg and ffprobe on the machine validate the clips, compose
  * the video and its Clean Master, and validate the video, as in the media suite.
  */
 
@@ -122,8 +125,47 @@ export const DEVELOPMENT_RECONCILIATION = {
 
 export type DevelopmentPipelineEnv = Pick<
   ServerEnv,
-  "NODE_ENV" | "VIDEO_PROVIDER" | "SHARED_STORAGE_DIR" | "STORAGE_SIGNING_SECRET"
+  | "NODE_ENV"
+  | "VIDEO_PROVIDER"
+  | "SHARED_STORAGE_DIR"
+  | "GOOGLE_CLOUD_STORAGE_BUCKET"
+  | "GOOGLE_CLOUD_STORAGE_ENDPOINT"
+  | "STORAGE_SIGNING_SECRET"
 >;
+
+/** Where the pipeline keeps objects: the shared folder, or a bucket in a Cloud Storage emulator (ADR-0162). */
+type DevelopmentStore =
+  | { readonly kind: "FOLDER"; readonly root: string }
+  | { readonly kind: "EMULATOR"; readonly bucket: string; readonly endpoint: string };
+
+/**
+ * The store the environment names, refused as the settings' rules and the web
+ * app's adapters refuse it (ADR-0159 Decision 2), since the pipeline may be
+ * given an environment no schema parsed. Opens nothing. The endpoint's form and
+ * the bucket's name are the adapter's to refuse.
+ */
+function developmentStore(env: DevelopmentPipelineEnv): DevelopmentStore {
+  const { SHARED_STORAGE_DIR: root, GOOGLE_CLOUD_STORAGE_BUCKET: bucket } = env;
+  const endpoint = env.GOOGLE_CLOUD_STORAGE_ENDPOINT;
+  const refuse = (message: string) => new AppError("CONFIGURATION_ERROR", message);
+  if (bucket === undefined && endpoint === undefined) {
+    if (root !== undefined) return { kind: "FOLDER", root };
+    throw refuse(
+      "The development pipeline needs SHARED_STORAGE_DIR, or a Cloud Storage emulator's bucket and endpoint",
+    );
+  }
+  if (root !== undefined) {
+    throw refuse("The development pipeline takes SHARED_STORAGE_DIR or the Cloud Storage settings, not both");
+  }
+  if (bucket === undefined) {
+    throw refuse("The development pipeline needs GOOGLE_CLOUD_STORAGE_BUCKET with GOOGLE_CLOUD_STORAGE_ENDPOINT");
+  }
+  // A bucket alone is Google's own store, which only a production build uses, with the process's own identity.
+  if (endpoint === undefined || isGoogleApiAddress(endpoint)) {
+    throw refuse("The development pipeline uses a Cloud Storage emulator, never Google's own store");
+  }
+  return { kind: "EMULATOR", bucket, endpoint };
+}
 
 export interface DevelopmentPipelineOptions {
   /** The test provider's own folder, for its clips. Absolute. */
@@ -200,20 +242,23 @@ export function assembleDevelopmentPipeline(
   if (env.VIDEO_PROVIDER !== "fake") {
     throw new AppError("CONFIGURATION_ERROR", "The development pipeline needs VIDEO_PROVIDER=fake");
   }
-  if (env.SHARED_STORAGE_DIR === undefined) {
-    throw new AppError("CONFIGURATION_ERROR", "The development pipeline needs SHARED_STORAGE_DIR");
-  }
+  const chosen = developmentStore(env);
   if (typeof options.providerFolder !== "string" || !isAbsolute(options.providerFolder)) {
     throw new AppError("CONFIGURATION_ERROR", "The test provider's folder must be an absolute path");
   }
 
   const { prisma } = deps;
   const secret = env.STORAGE_SIGNING_SECRET;
-  const storage = createSharedFolderStorage({
-    root: env.SHARED_STORAGE_DIR,
-    secret,
-    basePath: DEVELOPMENT_SIGNED_URL_BASE,
-  });
+  // Either store signs under the pipeline's own base, and each seam names the store's own bucket: the emulator's
+  // views refuse any other, and a seam takes that refusal for one worth trying again (ADR-0162).
+  const basePath = DEVELOPMENT_SIGNED_URL_BASE;
+  const storage =
+    chosen.kind === "FOLDER"
+      ? { bucket: SHARED_FOLDER_STORAGE_BUCKET, ...createSharedFolderStorage({ root: chosen.root, secret, basePath }) }
+      : {
+          bucket: chosen.bucket,
+          ...createGoogleCloudStorageViews({ bucket: chosen.bucket, endpoint: chosen.endpoint, secret, basePath }),
+        };
   const kit = createFakeRouteKit(env);
   // FFmpeg and ffprobe, launched with an argument list and never a shell.
   const processes = createDefaultProcessRunner();
@@ -243,13 +288,13 @@ export function assembleDevelopmentPipeline(
   });
   const completion = createCompletionRepository(prisma);
   const reconciliation = createReconciliationRepository(prisma);
-  // One validator reads both a clip and a composed video back from the folder.
+  // One validator reads both a clip and a composed video back from the store.
   const validator = new S3ManagedOutputMediaValidator(
-    { bucket: SHARED_FOLDER_STORAGE_BUCKET },
+    { bucket: storage.bucket },
     { reader: storage.objectClient, probe: new FfprobeMediaProbe({}, { runner: processes }) },
   );
   const io = { client: storage.objectClient, tempFiles: nodeManagedOutputTempFileFactory };
-  const bucket = { bucket: SHARED_FOLDER_STORAGE_BUCKET };
+  const bucket = { bucket: storage.bucket };
 
   return {
     launch: new JobLaunchRunner({
@@ -291,10 +336,7 @@ export function assembleDevelopmentPipeline(
         { maxBytes: MAX_MANAGED_PROVIDER_OUTPUT_BYTES },
         {
           source: studio.byteSource,
-          staging: new S3ManagedOutputStagingSink(
-            { bucket: SHARED_FOLDER_STORAGE_BUCKET },
-            { client: storage.objectClient },
-          ),
+          staging: new S3ManagedOutputStagingSink(bucket, { client: storage.objectClient }),
         },
       ),
       completion: createProviderCompletionService({ completion, clock }),

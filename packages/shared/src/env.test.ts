@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isCloudStorageBucketName, loadServerEnv, resetServerEnvCache, serverEnvSchema } from "./env";
+import {
+  isCloudStorageBucketName,
+  isGoogleApiAddress,
+  loadServerEnv,
+  resetServerEnvCache,
+  serverEnvSchema,
+} from "./env";
 
 const base = {
   SESSION_SECRET: "session-secret-abcdef123456",
@@ -194,6 +200,14 @@ describe("serverEnvSchema", () => {
       for (const near of ["https://storage.googleapis.com.example.test", "http://notgoogleapis.com"]) {
         expect(issuesOf({ GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET, GOOGLE_CLOUD_STORAGE_ENDPOINT: near })).toEqual([]);
       }
+    });
+
+    it("shares its rule for Google's API domain, which answers for any text (ADR-0162)", () => {
+      expect(isGoogleApiAddress("https://storage.googleapis.com.")).toBe(true);
+      expect(isGoogleApiAddress("https://storage%2Egoogleapis.com")).toBe(true);
+      expect(isGoogleApiAddress("http://notgoogleapis.com")).toBe(false);
+      // An address that does not parse is refused by whoever reads it, not taken for Google's.
+      for (const text of ["", "storage.googleapis.com", "not a url"]) expect(isGoogleApiAddress(text)).toBe(false);
     });
 
     it("refuses an endpoint in production, Google's own included", () => {
