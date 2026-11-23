@@ -177,9 +177,9 @@ pnpm --filter @app/worker pipeline \
   --provider-folder /absolute/path/to/Real-Estate-Listing-Concept-Video/.dev-provider
 ```
 
-`--provider-folder` is where the test provider keeps the clips it makes, a
-folder on either store. Use the same folder every time: a later run collects
-a clip from it. It runs every
+`--provider-folder` is where the test provider keeps the clips it makes: a
+folder on disk, whichever store the pipeline uses. Use the same folder every
+time: a later run collects a clip from it. It runs every
 step once per cycle until cycles that change nothing have read all the waiting
 work, printing one line per cycle, counts only:
 

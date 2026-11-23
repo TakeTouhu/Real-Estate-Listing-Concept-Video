@@ -119,7 +119,8 @@ export const serverEnvSchema = z
     // Set, it is used instead of the shared folder or memory: in production,
     // Google's own store, at an origin no setting names, with the token of the
     // account the process runs as (ADR-0158); elsewhere, the emulator the
-    // endpoint names. Never beside the shared folder, which the worker reads.
+    // endpoint names. Never beside the shared folder: the web app and the
+    // development pipeline keep their objects in one store (ADR-0162).
     GOOGLE_CLOUD_STORAGE_BUCKET: z.string().optional(),
 
     // A Cloud Storage emulator's origin, in development and CI only
@@ -232,7 +233,7 @@ export const serverEnvSchema = z
         storageIssue(
           "BUCKET",
           "GOOGLE_CLOUD_STORAGE_BUCKET and SHARED_STORAGE_DIR must not both be set: " +
-            "the web app would keep objects in the bucket, and the worker look for them in the folder",
+            "the web app and the development pipeline keep their objects in one store",
         );
       }
       if (endpoint === undefined && !production) {

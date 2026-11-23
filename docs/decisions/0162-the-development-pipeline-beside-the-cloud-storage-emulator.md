@@ -94,8 +94,8 @@ publisher, and the Clean Master store are given the store's own bucket from
 one value: the folder's fixed name, or the configured bucket. The views
 sign under the pipeline's own base (`DEVELOPMENT_SIGNED_URL_BASE`, ADR-0106
 Decision 3), as the folder does, so the photo reader and the test provider
-are unchanged. The test provider keeps its clips in its own folder
-(`--provider-folder`) on either store.
+are unchanged. The test provider keeps its clips in its own folder on disk
+(`--provider-folder`), whichever store is used.
 
 ## Decision 4 — The construction guard admits the assembly
 
@@ -105,10 +105,13 @@ Decision 1, whose lists held the web app's adapters alone. The guard now
 also lists who names Google's origin, `GOOGLE_CLOUD_STORAGE_ORIGIN`: the
 settings, the adapter and the web app's adapters, never the pipeline.
 
-Every other guard is unchanged: the pipeline's own, which keeps it out of
-every start-up, route, root script and workflow (ADR-0106 Decision 8,
+Every other guard keeps its checks: the pipeline's own, which keeps it out
+of every start-up, route, root script and workflow (ADR-0106 Decision 8,
 ADR-0108 Decision 8); the scheduler guard; the signer guard; the Clean
-Master's and the managed output's.
+Master's and the managed output's. The pipeline's own guard reads names: its
+title now says that the assembly names no HTTP client, socket module or real
+provider, since the assembly's one way to a network, the emulator's views,
+is the construction guard's to pin.
 
 ## Decision 5 — CI runs the pipeline on the emulator
 
@@ -121,8 +124,9 @@ parsed by the settings' schema as the command's is, opens the web app's
 store through the web app's own adapters, where the photo is put, and
 assembles the pipeline.
 
-On both stores, the case that makes the video now also reads the video a
-range at a time, as the web app serves it. On the emulator it checks that
+On both stores, the case that makes the video now also reads the video's
+first 1,024 bytes as a range, through the web app's store, as its download
+route serves a range. On the emulator it checks that
 the bucket holds exactly the photo, the two clips, the video and its Clean
 Master. In CI a missing endpoint fails the file rather than dropping its
 emulator cases; a local run without one runs the folder's cases alone.
@@ -135,10 +139,12 @@ Google (ADR-0161 Decision 4).
 ## Decision 6 — What stays
 
 - No new setting: the pipeline reads the web app's two, and the settings'
-  rules are unchanged, a bucket beside the folder included.
+  rules are unchanged, a bucket beside the folder included. That refusal's
+  reason now names the pipeline, which reads the bucket in the folder's
+  place: the web app and the pipeline keep their objects in one store.
 - The command (`cli.ts`), the photo reader, the adapter and the web app's
-  adapters are unchanged. The command's usage names the emulator's
-  settings.
+  adapters are unchanged in code; the reader's and the adapter's comments
+  name the emulator. The command's usage names the emulator's settings.
 - The browser test (ADR-0121) keeps its folder and refuses both Cloud
   Storage settings (ADR-0159). Running it on the emulator is left open.
 - Building Google's store for the worker, where both `NODE_ENV` values say
@@ -166,13 +172,15 @@ Google (ADR-0161 Decision 4).
 
 ## What was measured
 
-- **Unit tests** (24 new): no store, each mix of the folder with a Cloud
+- **Unit tests** (26 new): no store, each mix of the folder with a Cloud
   Storage setting, an endpoint without a bucket and a bucket without an
   endpoint; nine spellings of Google's API domain; five endpoints that are
   no http origin and a bucket no store can name; each refused before any
-  folder is made. Production refused with an emulator, by either value.
-  Every step built on an emulator's bucket while a stand-in at its endpoint
-  is asked nothing. The shared rule answering for text that is no address.
+  folder is made. Production refused with an emulator, by either value;
+  production and another provider refused before the store's settings are
+  read. Every step built on an emulator's bucket while a stand-in at its
+  endpoint is asked nothing, a quarter of a second after. The shared rule
+  answering for text that is no address.
 - **The construction guard** fails without the assembly's entries, and its
   origin list fails if the assembly names Google's origin.
 - **The pipeline end to end on the emulator**, on a local PostgreSQL 16 and
@@ -183,7 +191,17 @@ Google (ADR-0161 Decision 4).
 - **The command, unchanged**, given the emulator's settings and a local
   database: one quiet cycle and exit 0. Given a bucket alone, Google's
   endpoint or no store: exit 2, with the refusal printed.
-- **Mutation.** MUTATION-TBD
+- **Mutation.** 27 mutants of the new code were each run against the unit
+  tests, offline, or the database suite on the emulator: each refusal
+  removed, the domain rule weakened three ways, each seam's bucket and then
+  the signing base put back to the folder's, and the store chosen after the
+  folders are made or before production. 23 failed a test at first; a seam
+  left on the folder's bucket failed from two to five of the 7 emulator
+  cases. The two tests of the refusals' order were then added, and the
+  stand-in test made to wait before it looks: each of the three mutants that
+  showed them missing now fails. The one that survives is equivalent: it
+  chooses the store after the test provider's folder is checked, and both
+  refuse before anything is opened.
 
 ## What cannot be shown here
 

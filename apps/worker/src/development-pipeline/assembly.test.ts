@@ -133,6 +133,20 @@ describe("assembling the development pipeline", () => {
     expect([existsSync(shared), existsSync(provider)]).toEqual([false, false]);
   });
 
+  it.each([
+    ["production", { NODE_ENV: "production", ...at(undefined) }, "The development pipeline is refused in production"],
+    [
+      "another provider",
+      { VIDEO_PROVIDER: "wavespeed", SHARED_STORAGE_DIR: undefined },
+      "The development pipeline needs VIDEO_PROVIDER=fake",
+    ],
+  ] as const)("refuses %s before it reads the store's settings (ADR-0162)", (_, overrides, message) => {
+    const { shared, provider } = folders();
+    expect(() => assembleDevelopmentPipeline(env(shared, overrides), { providerFolder: provider }, { prisma })).toThrow(
+      expect.objectContaining({ code: "CONFIGURATION_ERROR", message }),
+    );
+  });
+
   it.each(REFUSED_STORES)("is refused with %s, before anything is opened", (_, overrides, message) => {
     const { shared, provider } = folders();
     expect(() => assembleDevelopmentPipeline(env(shared, overrides), { providerFolder: provider }, { prisma })).toThrow(
@@ -172,6 +186,8 @@ describe("assembling the development pipeline", () => {
       expect(steps.deliverableValidation).toBeInstanceOf(DeliverableValidationRunner);
       // The test provider keeps its clips in its own folder; no shared folder is made.
       expect([existsSync(shared), existsSync(join(provider, "clips"))]).toEqual([false, true]);
+      // A request sent while the steps were built would have reached the stand-in by now.
+      await new Promise((settled) => setTimeout(settled, 250));
       expect(asked).toEqual([]);
     } finally {
       await new Promise((closed) => store.close(closed));

@@ -134,7 +134,7 @@ describe("serverEnvSchema", () => {
     const NEEDS_BUCKET = "GOOGLE_CLOUD_STORAGE_BUCKET is required when GOOGLE_CLOUD_STORAGE_ENDPOINT is set";
     const WITH_FOLDER =
       "GOOGLE_CLOUD_STORAGE_BUCKET and SHARED_STORAGE_DIR must not both be set: " +
-      "the web app would keep objects in the bucket, and the worker look for them in the folder";
+      "the web app and the development pipeline keep their objects in one store";
     const NOT_ORIGIN = "GOOGLE_CLOUD_STORAGE_ENDPOINT must be an origin, with no path, query or fragment";
 
     /** Each issue as `path: message`, or none when the environment is accepted. */
@@ -240,7 +240,7 @@ describe("serverEnvSchema", () => {
       }
     });
 
-    it("refuses a bucket beside the shared folder, which the worker reads", () => {
+    it("refuses a bucket beside the shared folder: the web app and the pipeline keep one store", () => {
       const folder = { SHARED_STORAGE_DIR: "/var/tmp/vtavision-storage", GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET };
       expect(issuesOf({ ...folder, GOOGLE_CLOUD_STORAGE_ENDPOINT: EMULATOR })).toEqual([
         `GOOGLE_CLOUD_STORAGE_BUCKET: ${WITH_FOLDER}`,

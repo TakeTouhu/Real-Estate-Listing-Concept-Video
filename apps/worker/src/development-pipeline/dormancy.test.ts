@@ -33,7 +33,7 @@ function sourceFiles(dir: string): { name: string; text: string }[] {
 }
 
 describe("the development pipeline's assembly", () => {
-  it("runs no step, starts nothing by itself and reaches no network or real provider", () => {
+  it("runs no step, starts nothing by itself and names no HTTP client, socket module or real provider", () => {
     const files = sourceFiles(FOLDER);
     expect(files.map(({ name }) => name).sort()).toEqual([ASSEMBLY, ENTRY_POINT, COMMAND, PHOTO_READER]);
     for (const { name, text } of files) {

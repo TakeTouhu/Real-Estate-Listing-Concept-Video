@@ -34,6 +34,14 @@ An endpoint that is not an http(s) origin, or a bucket Cloud Storage
 cannot name, is refused by the adapter as it is built, with its own
 messages (ADR-0156).
 
+The settings still refuse a bucket beside `SHARED_STORAGE_DIR`. Only that
+refusal's reason changes, since the worker no longer looks for objects in
+the folder when a bucket is set:
+
+| Message | Was |
+| --- | --- |
+| GOOGLE_CLOUD_STORAGE_BUCKET and SHARED_STORAGE_DIR must not both be set: the web app and the development pipeline keep their objects in one store | … must not both be set: the web app would keep objects in the bucket, and the worker look for them in the folder |
+
 ## Internal API
 
 ### New
@@ -52,6 +60,6 @@ messages (ADR-0156).
 
 ### Unchanged
 
-`@app/storage` and its Cloud Storage subpath; the web app's adapters; the
-command's arguments and exit codes; the photo reader; the browser test,
-which keeps its folder.
+`@app/storage` and its Cloud Storage subpath, and the photo reader, but for
+comments that name the emulator; the web app's adapters; the command's
+arguments and exit codes; the browser test, which keeps its folder.
