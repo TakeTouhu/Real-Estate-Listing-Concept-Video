@@ -5,10 +5,11 @@ import type { FakeSourcePhotoReader } from "@app/video-providers";
 /**
  * How the test provider reads a scene's photo in the development pipeline
  * (GS-9b, ADR-0106): through the signed URL preparation gave it, redeemed the
- * way the download route redeems one, from the shared folder.
+ * way the download route redeems one, from the pipeline's store: the shared
+ * folder, or the Cloud Storage emulator's bucket (ADR-0162).
  *
  * A URL is read only under the pipeline's own base, for download, with a token
- * signed with the shared folder's secret that has not expired. The web app
+ * signed with the storage signing secret that has not expired. The web app
  * signs with the same secret, so its download tokens read here too, as the
  * pipeline's would at its route. Anything else names nothing readable, and the
  * test provider then refuses the request, as a real provider refuses a URL it
@@ -20,7 +21,7 @@ import type { FakeSourcePhotoReader } from "@app/video-providers";
 export interface SharedFolderPhotoReaderOptions {
   /** The base the pipeline signs URLs under, e.g. `https://development.invalid/api/storage`. */
   readonly base: string;
-  /** The secret the shared folder signs with. */
+  /** The secret the pipeline's store signs with, `STORAGE_SIGNING_SECRET`. */
   readonly secret: string;
   readonly storage: Pick<ObjectStorage, "getObject">;
 }

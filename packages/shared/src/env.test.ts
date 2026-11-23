@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isCloudStorageBucketName, loadServerEnv, resetServerEnvCache, serverEnvSchema } from "./env";
+import {
+  isCloudStorageBucketName,
+  isGoogleApiAddress,
+  loadServerEnv,
+  resetServerEnvCache,
+  serverEnvSchema,
+} from "./env";
 
 const base = {
   SESSION_SECRET: "session-secret-abcdef123456",
@@ -128,7 +134,7 @@ describe("serverEnvSchema", () => {
     const NEEDS_BUCKET = "GOOGLE_CLOUD_STORAGE_BUCKET is required when GOOGLE_CLOUD_STORAGE_ENDPOINT is set";
     const WITH_FOLDER =
       "GOOGLE_CLOUD_STORAGE_BUCKET and SHARED_STORAGE_DIR must not both be set: " +
-      "the web app would keep objects in the bucket, and the worker look for them in the folder";
+      "the web app and the development pipeline keep their objects in one store";
     const NOT_ORIGIN = "GOOGLE_CLOUD_STORAGE_ENDPOINT must be an origin, with no path, query or fragment";
 
     /** Each issue as `path: message`, or none when the environment is accepted. */
@@ -196,6 +202,14 @@ describe("serverEnvSchema", () => {
       }
     });
 
+    it("shares its rule for Google's API domain, which answers for any text (ADR-0162)", () => {
+      expect(isGoogleApiAddress("https://storage.googleapis.com.")).toBe(true);
+      expect(isGoogleApiAddress("https://storage%2Egoogleapis.com")).toBe(true);
+      expect(isGoogleApiAddress("http://notgoogleapis.com")).toBe(false);
+      // An address that does not parse is refused by whoever reads it, not taken for Google's.
+      for (const text of ["", "storage.googleapis.com", "not a url"]) expect(isGoogleApiAddress(text)).toBe(false);
+    });
+
     it("refuses an endpoint in production, Google's own included", () => {
       for (const endpoint of [EMULATOR, "https://storage.googleapis.com"]) {
         const settings = { NODE_ENV: "production", GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET };
@@ -226,7 +240,7 @@ describe("serverEnvSchema", () => {
       }
     });
 
-    it("refuses a bucket beside the shared folder, which the worker reads", () => {
+    it("refuses a bucket beside the shared folder: the web app and the pipeline keep one store", () => {
       const folder = { SHARED_STORAGE_DIR: "/var/tmp/vtavision-storage", GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET };
       expect(issuesOf({ ...folder, GOOGLE_CLOUD_STORAGE_ENDPOINT: EMULATOR })).toEqual([
         `GOOGLE_CLOUD_STORAGE_BUCKET: ${WITH_FOLDER}`,

@@ -53,7 +53,8 @@ export const USAGE = [
   "  --provider-folder <absolute path: the test provider's own folder, for its clips> \\",
   `  [--limit <1 to ${MAX_PIPELINE_LIMIT}: items each step takes per pass; 10 if omitted>] \\`,
   `  [--max-cycles <1 to ${MAX_PIPELINE_CYCLES}: cycles before it gives up; 50 if omitted>]`,
-  "Runs only with VIDEO_PROVIDER=fake, SHARED_STORAGE_DIR and a database on this machine, never in production.",
+  "Runs only with VIDEO_PROVIDER=fake, a database on this machine and SHARED_STORAGE_DIR, or in its place",
+  "GOOGLE_CLOUD_STORAGE_BUCKET and GOOGLE_CLOUD_STORAGE_ENDPOINT naming an emulator; never in production.",
 ].join("\n");
 
 export interface PipelineArguments {

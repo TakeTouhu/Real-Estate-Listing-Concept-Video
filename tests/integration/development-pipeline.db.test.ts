@@ -20,10 +20,12 @@ import {
   managedDeliverableOutputKey,
   managedGenerationOutputKey,
   type CompiledPrompt,
+  type ObjectStorage,
   type StoryboardScene,
 } from "@app/domain";
-import { createSharedFolderStorage } from "@app/storage";
+import { serverEnvSchema, type ServerEnv } from "@app/shared";
 import type { FakeClipRenderer } from "@app/video-providers";
+import { createWebAdapters } from "@/lib/adapters";
 import {
   assembleDevelopmentPipeline,
   developmentPipelineContext,
@@ -34,15 +36,22 @@ import {
   refuseForeignAttempts,
   runDevelopmentPipeline,
 } from "../../apps/worker/src/development-pipeline/command";
+import { createEmulatorBucket, emulatorEndpoint, emulatorObjectNames } from "../storage/emulator";
 import { ctx } from "./orchestration-fixture";
 
 /**
  * The development pipeline's assembly against live PostgreSQL (GS-9b,
  * ADR-0106, ADR-0107): a job started by the real start commit is launched, its
  * scenes' photos are signed and sent to the test provider, each clip is copied
- * into the shared folder and validated, and the video is planned, composed with
- * its disclosure, validated and published, on the system clock and the billing
+ * into the store and validated, and the video is planned, composed with its
+ * disclosure, validated and published, on the system clock and the billing
  * cycle's own revenue, as the pipeline command will run them.
+ *
+ * Every case runs on the shared folder, and again on the Cloud Storage emulator
+ * when `GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT` names one (ADR-0162), as CI's
+ * database job does. Each reads one environment, parsed as the command parses
+ * its own, from which the web app's adapters open the store the photo is put in
+ * and the pipeline is assembled.
  *
  * The steps run the machine's FFmpeg and ffprobe, which this suite's CI job
  * installs (ADR-0107). Where a test needs a clip it can control, a stand-in
@@ -50,6 +59,39 @@ import { ctx } from "./orchestration-fixture";
  * a video.
  */
 const HAS_DB = Boolean(process.env.DATABASE_URL);
+/** The Cloud Storage emulator on this machine, when one is named. */
+const EMULATOR = process.env.GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT ? emulatorEndpoint() : undefined;
+// CI's database job names one: there a missing name is a broken job, never fewer cases.
+if (HAS_DB && EMULATOR === undefined && process.env.CI === "true") {
+  throw new Error("Set GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT: CI runs this suite on the Cloud Storage emulator too");
+}
+
+/** A store the web app and the pipeline share: its settings, fresh for each test. */
+interface Store {
+  readonly name: string;
+  readonly open: () => Promise<Record<string, string>>;
+}
+
+const STORES: readonly Store[] = [
+  {
+    name: "the shared folder",
+    open: async () => {
+      await rm(join(dir, "shared"), { recursive: true, force: true });
+      return { SHARED_STORAGE_DIR: join(dir, "shared") };
+    },
+  },
+  ...(EMULATOR === undefined
+    ? []
+    : [
+        {
+          name: "the Cloud Storage emulator",
+          open: async () => ({
+            GOOGLE_CLOUD_STORAGE_BUCKET: await createEmulatorBucket(EMULATOR),
+            GOOGLE_CLOUD_STORAGE_ENDPOINT: EMULATOR,
+          }),
+        },
+      ]),
+];
 
 const ORG = "org_itest_devpipe";
 const USER = "usr_itest_devpipe";
@@ -77,6 +119,10 @@ let dir: string;
 let PHOTO: Buffer;
 let made: Buffer[];
 let render: "MAKE" | "FAIL";
+/** The test's environment, as `loadServerEnv` parses the command's. */
+let env: ServerEnv;
+/** The store as the web app's adapters open it from that environment. */
+let web: ObjectStorage;
 
 const renderer: FakeClipRenderer = {
   async render({ photoPath, outputPath }) {
@@ -90,20 +136,15 @@ const renderer: FakeClipRenderer = {
 /** The steps, with the stand-in clip maker or FFmpeg's. */
 function pipeline(clips: "STAND_IN" | "FFMPEG" = "STAND_IN"): DevelopmentPipeline {
   return assembleDevelopmentPipeline(
-    {
-      NODE_ENV: "test",
-      VIDEO_PROVIDER: "fake",
-      SHARED_STORAGE_DIR: join(dir, "shared"),
-      STORAGE_SIGNING_SECRET: SECRET,
-    },
+    env,
     { providerFolder: join(dir, "provider") },
     clips === "STAND_IN" ? { prisma, renderer } : { prisma },
   );
 }
 
-/** The shared folder as the web app opens it. */
-function shared() {
-  return createSharedFolderStorage({ root: join(dir, "shared"), secret: SECRET }).objectStorage;
+/** The store as the web app opens it. */
+function shared(): ObjectStorage {
+  return web;
 }
 
 function compiledPrompt(position: number): string {
@@ -280,16 +321,6 @@ beforeAll(async () => {
   PHOTO = await readFile(photo);
 });
 
-beforeEach(async () => {
-  if (!HAS_DB) return;
-  made = [];
-  render = "MAKE";
-  await rm(join(dir, "shared"), { recursive: true, force: true });
-  await rm(join(dir, "provider"), { recursive: true, force: true });
-  await cleanup();
-  await seed();
-});
-
 afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
   if (!HAS_DB) return;
@@ -297,8 +328,25 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider", () => {
-  it("launches a started job, sends its scenes' photos, and copies each clip into the shared folder", async () => {
+describe.skipIf(!HAS_DB).each(STORES)("the development pipeline's steps, on the test provider, in $name", (store) => {
+  beforeEach(async () => {
+    made = [];
+    render = "MAKE";
+    env = serverEnvSchema.parse({
+      NODE_ENV: "test",
+      VIDEO_PROVIDER: "fake",
+      STORAGE_SIGNING_SECRET: SECRET,
+      SESSION_SECRET: "development-pipeline-session-secret",
+      HEALTHCHECK_API_TOKEN: "development-pipeline-health-token",
+      ...(await store.open()),
+    });
+    web = createWebAdapters(env).storage();
+    await rm(join(dir, "provider"), { recursive: true, force: true });
+    await cleanup();
+    await seed();
+  });
+
+  it("launches a started job, sends its scenes' photos, and copies each clip into the store", async () => {
     const job = await start();
     const steps = pipeline();
 
@@ -383,7 +431,7 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
       context: developmentPipelineContext("provider_output"),
     });
 
-    // Each clip FFmpeg made from the photo is read back from the folder and found usable.
+    // Each clip FFmpeg made from the photo is read back from the store and found usable.
     const validated = await steps.mediaValidation.runOnce(10);
     expect(validated.outcomes.map(({ outcome }) => outcome)).toEqual([{ kind: "VALID" }, { kind: "VALID" }]);
     const delivered = await steps.sceneDelivery.runOnce(10);
@@ -429,7 +477,7 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
       expect(at?.getTime()).toBeLessThanOrEqual(Date.now());
     }
 
-    // The video, with its disclosure, and its Clean Master are both in the folder.
+    // The video, with its disclosure, and its Clean Master are both in the store.
     const keys = { organizationId: ORG, deliverableVersionId: version };
     const video = await shared().getObject(managedDeliverableOutputKey(keys));
     const master = await shared().getObject(managedCleanMasterKey(keys));
@@ -441,6 +489,20 @@ describe.skipIf(!HAS_DB)("the development pipeline's steps, on the test provider
     const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
     expect([composition.outputSha256, receipt.sha256]).toEqual([sha(video!), sha(master!)]);
     await expect(shared().createSignedDownloadUrl(managedCleanMasterKey(keys), 60)).rejects.toThrow();
+    // The web app serves the video a range at a time from the same store, as its download route does.
+    const ranged = await shared().readObject(managedDeliverableOutputKey(keys), { kind: "FROM", start: 0, end: 1023 });
+    if (ranged.kind !== "READ") throw new Error(`read: ${ranged.kind}`);
+    expect([ranged.size, ranged.start, ranged.length]).toEqual([video!.byteLength, 0, 1024]);
+    expect(Buffer.from(await new Response(ranged.body).arrayBuffer())).toEqual(Buffer.from(video!.subarray(0, 1024)));
+    const bucket = env.GOOGLE_CLOUD_STORAGE_BUCKET;
+    if (EMULATOR !== undefined && bucket !== undefined) {
+      // Nothing else is left in the bucket: the photo, each clip, the video and its Clean Master.
+      const clipOf = ({ id }: { id: string }) => managedGenerationOutputKey({ organizationId: ORG, attemptId: id });
+      const clips = (await attempts(job)).map(clipOf);
+      const photo = (await prisma.mediaAsset.findUniqueOrThrow({ where: { id: ASSET } })).storageKey;
+      const expected = [photo, ...clips, managedDeliverableOutputKey(keys), managedCleanMasterKey(keys)];
+      expect(await emulatorObjectNames(EMULATOR, bucket)).toEqual(expected.sort());
+    }
     const path = join(dir, "video.mp4");
     await writeFile(path, video!);
     const { stdout } = await promisify(execFile)("ffprobe", [

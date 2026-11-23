@@ -58,7 +58,8 @@ import { googleCloudStorageClient } from "./client";
  * - **Every request goes straight to its origin**, on connections of the
  *   adapter's own, never through a proxy (ADR-0158).
  *
- * The web app's adapters construct it (`apps/web/src/lib/adapters.ts`, ADR-0159).
+ * The web app's adapters construct it (`apps/web/src/lib/adapters.ts`, ADR-0159),
+ * and the development pipeline's assembly, on an emulator alone (ADR-0162).
  * `createGoogleCloudStorageViews` also gives the worker's view, on the same
  * connections and token, for the worker to be given it (ADR-0160): its reads,
  * its first-wins write, and the staging sink's multipart upload as one

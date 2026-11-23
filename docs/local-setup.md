@@ -115,10 +115,16 @@ GOOGLE_CLOUD_STORAGE_ENDPOINT=http://127.0.0.1:4443
 
 Readiness then reads `adapter=gcs-emulator`. Outside production a bucket
 needs the endpoint, and an endpoint at Google's own domain is refused, so
-development never uses Google's own store or its token. The emulator keeps
-its objects in memory until it stops. The development pipeline does not read
-the emulator: run it with the folder, and so does the browser test, which
-refuses to start while either setting is in its environment.
+development never uses Google's own store or its token. The development
+pipeline reads the same bucket when given the same two settings (section
+4a). The emulator keeps its objects in memory until it stops, while the
+database keeps its rows: keep it running between the web app and the
+pipeline. After a restart, make the bucket again: until then a run that
+finds a job waiting to send its photo ends with exit 1, and the job waits
+with its Unit reserved. Once it is made, a waiting job whose photo is gone
+fails, and its Unit is given back. The browser test
+keeps its own folder, and refuses to start while either setting is in its
+environment.
 
 ## 3c. Sign up and verify your email address
 
@@ -163,16 +169,19 @@ A started video becomes a published one only when you run the pipeline, on
 the test provider (ADR-0108). Until GS-10 adds a way for a customer to start
 a video, only the tests start one, so on a fresh database the pipeline finds
 nothing to do. Export the variables of `.env.local` in your shell, with
-`VIDEO_PROVIDER=fake` and the same `SHARED_STORAGE_DIR` as the web app
-(section 3b), have FFmpeg on the `PATH`, and run:
+`VIDEO_PROVIDER=fake` and the same store as the web app (section 3b): the
+same `SHARED_STORAGE_DIR`, or the same `GOOGLE_CLOUD_STORAGE_BUCKET` and
+`GOOGLE_CLOUD_STORAGE_ENDPOINT` with the emulator running. Have FFmpeg on
+the `PATH`, and run:
 
 ```bash
 pnpm --filter @app/worker pipeline \
   --provider-folder /absolute/path/to/Real-Estate-Listing-Concept-Video/.dev-provider
 ```
 
-`--provider-folder` is where the test provider keeps the clips it makes. Use
-the same folder every time: a later run collects a clip from it. It runs every
+`--provider-folder` is where the test provider keeps the clips it makes: a
+folder on disk, whichever store the pipeline uses. Use the same folder every
+time: a later run collects a clip from it. It runs every
 step once per cycle until cycles that change nothing have read all the waiting
 work, printing one line per cycle, counts only:
 
@@ -191,7 +200,9 @@ many items each step takes per pass, and `--max-cycles` (1 to 1000, 50 if
 omitted) bounds one run. Exit code 0 means nothing more to do now, 1 that it
 stopped or a step reported a failure (`(1 failed)` after a step's count), 2
 that it was refused before any step ran: in production, without the test
-provider or the shared folder, when `DATABASE_URL` does not name a database on
+provider, without a store or with both, with a bucket and no endpoint or an
+endpoint and no bucket, with an endpoint at Google's own domain, when
+`DATABASE_URL` does not name a database on
 this machine (`localhost`, `127.0.0.1` or `[::1]`), or on a database holding
 attempts of another provider, which a development database never does. Do not
 point it at a shared database through a tunnel: it acts on every
@@ -291,7 +302,10 @@ against the schema.
 
 The development pipeline's suite makes a real video, so `pnpm test:db` also
 needs `ffmpeg` and `ffprobe` on the `PATH` (ADR-0107); on Ubuntu,
-`sudo apt-get install ffmpeg`. The `database` job installs them.
+`sudo apt-get install ffmpeg`. The `database` job installs them. With
+`GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT` naming the emulator (section 5, *Cloud
+Storage emulator tests*), that suite runs on the emulator too, as the
+`database` job runs it; without it, on the folder alone (ADR-0162).
 
 ### Media tests
 

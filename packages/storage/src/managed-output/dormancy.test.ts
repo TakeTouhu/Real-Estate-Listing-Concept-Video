@@ -254,7 +254,7 @@ describe("no production composition", () => {
     for (const { name, text } of productionSources()) {
       if (name.endsWith("managed-output/index.ts")) continue;
       if (name.endsWith("packages/storage/src/index.ts")) continue;
-      // The assembly stages into the shared folder's S3-shaped client, not an S3Client.
+      // The assembly stages into the shared folder's or the emulator views' S3-shaped client, never an S3Client.
       if (!name.endsWith(AUTHORIZED_SINK) && name !== DEVELOPMENT_ASSEMBLY) {
         for (const banned of ["new S3ManagedOutputStagingSink", "S3ManagedOutputStagingSink("]) {
           expect(`${name}:${banned}: ${text.includes(banned)}`).toBe(`${name}:${banned}: false`);

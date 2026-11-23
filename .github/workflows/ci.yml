@@ -97,6 +97,8 @@ jobs:
           FAKE_GCS_SCHEME: http
           FAKE_GCS_BACKEND: memory
           FAKE_GCS_PORT: "4443"
+          # Warnings only: at the default level it logs each upload session's id.
+          FAKE_GCS_LOG_LEVEL: warn
         ports: ["4443:4443"]
         options: >-
           --health-cmd "wget -q -O /dev/null http://127.0.0.1:4443/_internal/healthcheck"
@@ -130,7 +132,8 @@ jobs:
     # the committed schema has no drift, and that the Prisma repositories obey
     # their tenant-scoping contract. Throwaway credentials only. The development
     # pipeline's suite also runs FFmpeg (ADR-0107), so this job installs it on
-    # the same Ubuntu 24.04 as the media job.
+    # the same Ubuntu 24.04 as the media job. That suite runs on the Cloud
+    # Storage emulator too, a service as in the storage job (ADR-0162).
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -145,9 +148,24 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      gcs:
+        image: fsouza/fake-gcs-server:1.56.1@sha256:797ce226d62f947c009dc40246b30cfb456b8473d8241407f9d6f2c04e4d69ef
+        env:
+          FAKE_GCS_SCHEME: http
+          FAKE_GCS_BACKEND: memory
+          FAKE_GCS_PORT: "4443"
+          # Warnings only: at the default level it logs each upload session's id.
+          FAKE_GCS_LOG_LEVEL: warn
+        ports: ["4443:4443"]
+        options: >-
+          --health-cmd "wget -q -O /dev/null http://127.0.0.1:4443/_internal/healthcheck"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
     env:
       DATABASE_URL: postgresql://revt:revt-ci-local@localhost:5432/revt?schema=public
       SHADOW_DATABASE_URL: postgresql://revt:revt-ci-local@localhost:5432/revt_shadow?schema=public
+      GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT: http://127.0.0.1:4443
     steps:
       - uses: actions/checkout@v4
 

@@ -212,6 +212,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       chunk only where nothing is stored; the worker is not given it yet.
       RD-4c gives the development pipeline the view beside the emulator.
       The item still closes at part 2.*
+      *Amended in RD-4c (ADR-0162): the development pipeline builds the
+      worker's view on the emulator; nothing builds it in production. The
+      item still closes at part 2.*
 - [ ] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
       an approved vendor) behind the `MalwareScanner` port. Still required — the
       guard blocks production use, it does not provide real scanning.
@@ -1960,12 +1963,32 @@ into on 2026-11-17.
       on the emulator alone, under these rules. Building Google's store for
       the worker is part 2's, which assembles the worker's production
       runtime and its adapters (ADR-0150 Decision 3).*
-- [ ] **Let the development pipeline run beside the emulator.** A bucket is
+      *Amended in RD-4c (ADR-0162 Decision 2): the development pipeline
+      builds the worker's view on the emulator alone. It is refused where
+      either `NODE_ENV` says production, and given a bucket without an
+      endpoint or an endpoint at Google's API domain, before anything is
+      opened. Building Google's store only where both values say
+      production stays part 2's.*
+- [x] **Let the development pipeline run beside the emulator.** A bucket is
       refused beside `SHARED_STORAGE_DIR` (ADR-0159 Decision 6), and the
       pipeline reads only the folder, so a development machine that keeps
       the web app's objects in the emulator cannot run the pipeline on them.
       RD-4 is to decide.
       *Decided in RD-4a (ADR-0160 Decision 6): yes, as RD-4c.*
+      *Done in RD-4c (ADR-0162 Decisions 1 and 5): given the web app's
+      bucket and endpoint in place of `SHARED_STORAGE_DIR`, the pipeline
+      keeps its copies, Clean Masters and videos in the emulator's bucket,
+      where the web app keeps its photos. It refuses both stores together.
+      CI's `database` job runs the pipeline's suite on both stores.*
+
+## Open in RD-4c — what the development pipeline beside the emulator leaves open
+
+- [ ] **Run the browser test on the emulator.** It keeps objects in its own
+      folder and refuses both Cloud Storage settings (ADR-0159), so the web
+      app's routes and the browser are not run against the emulator; the
+      database suite runs the assembled pipeline there (ADR-0162 Decision
+      5). Its helpers would need a second server or run. RD-11's
+      production-mode test or part 2 is to decide.
 
 ## Open in RD-4b — what the staging sink's upload leaves open
 
@@ -2646,6 +2669,8 @@ them is **built**. Each item below records the settled decision and what remains
       upload.*
       *RD-4b (ADR-0161) adds the staging sink's upload, one resumable
       upload; RD-4c is to give the development pipeline the view.*
+      *RD-4c (ADR-0162) gives the development pipeline the view, on the
+      emulator. Part 2 is to give the worker Google's store.*
 - [x] **Remove `REVIEWER` from the role vocabulary** where it survives in code
       or schema, and confirm nothing gates final-video delivery on an approval.
       Source-photo review becomes `analysis.review`. *Done in Phase 6C

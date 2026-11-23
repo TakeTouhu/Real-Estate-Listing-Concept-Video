@@ -1169,6 +1169,17 @@ read the winner back. When Google checks the precondition is not in its
 documents: part 2 may not let the worker store a scene until a real bucket
 shows it is checked at the end.
 
+**RD-4c — the development pipeline beside the Cloud Storage emulator**
+(ADR-0162, no migration): given the web app's bucket and endpoint in place
+of `SHARED_STORAGE_DIR`, the development pipeline keeps its copies, Clean
+Masters and videos in the emulator's bucket, where the web app keeps its
+photos. Every seam is given that one bucket, and photo URLs are signed and
+read as before. The pipeline refuses both stores together, either Cloud
+Storage setting alone and Google's API domain, before anything is opened,
+so it never builds Google's store or asks for a token. CI's `database` job
+gains the emulator and runs the pipeline's suite on both stores. RD-4 is
+complete: part 2 builds Google's store for the worker, in production.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
