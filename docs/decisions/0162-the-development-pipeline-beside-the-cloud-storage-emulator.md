@@ -191,17 +191,21 @@ Google (ADR-0161 Decision 4).
 - **The command, unchanged**, given the emulator's settings and a local
   database: one quiet cycle and exit 0. Given a bucket alone, Google's
   endpoint or no store: exit 2, with the refusal printed.
-- **Mutation.** 27 mutants of the new code were each run against the unit
-  tests, offline, or the database suite on the emulator: each refusal
-  removed, the domain rule weakened three ways, each seam's bucket and then
-  the signing base put back to the folder's, and the store chosen after the
-  folders are made or before production. 23 failed a test at first; a seam
-  left on the folder's bucket failed from two to five of the 7 emulator
-  cases. The two tests of the refusals' order were then added, and the
-  stand-in test made to wait before it looks: each of the three mutants that
-  showed them missing now fails. The one that survives is equivalent: it
-  chooses the store after the test provider's folder is checked, and both
-  refuse before anything is opened.
+- **Mutation.** 27 mutants of the new code were each run against the
+  pipeline's, the settings' and the adapter's unit files, offline, or the
+  database suite on either store: each refusal removed, the domain rule
+  weakened four ways, each seam's bucket and then the signing base put back
+  to the folder's, and the store chosen after the folders are made or
+  before production. 23 failed a test at first; a seam left on the folder's
+  bucket failed from two to five of the 7 emulator cases. Three showed
+  gaps: two orders of the refusals that no test pinned, and a request sent
+  while the steps are built, which the stand-in test looked for too early.
+  The pipeline's own guard catches such a request sent with `fetch(`, but
+  not one sent through the emulator's views. The two tests of the order
+  were added and the stand-in test made to wait before it looks; each of
+  those mutants, and a request through the views, now fails a test. The one
+  that survives is equivalent: it chooses the store after the test
+  provider's folder is checked, and both refuse before anything is opened.
 
 ## What cannot be shown here
 
