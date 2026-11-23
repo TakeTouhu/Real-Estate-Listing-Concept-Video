@@ -60,10 +60,12 @@ What decides this record:
 
 Each refusal is a `CONFIGURATION_ERROR` that names settings, never a value,
 and the command exits 2 (ADR-0108 Decision 1). They come after the
-refusals of production and of another provider, and before anything is
-opened. The endpoint's form and the bucket's name are left to the adapter,
-which refuses them as it is built, before anything is asked, with messages
-that name no value either.
+refusals of production and of another provider, and before the refusal of
+a relative test provider folder, where ADR-0106 Decision 2 put the missing
+folder's; all of them before anything is opened. The endpoint's form and
+the bucket's name are left to the adapter, which refuses them as it is
+built, before anything is asked, with messages that name no value
+either.
 
 The web app's photos and the pipeline's copies are then in one store: a
 development machine gives the web app and the pipeline the same two
@@ -172,13 +174,14 @@ Google (ADR-0161 Decision 4).
 
 ## What was measured
 
-- **Unit tests** (26 new): no store, each mix of the folder with a Cloud
+- **Unit tests** (28 new): no store, each mix of the folder with a Cloud
   Storage setting, an endpoint without a bucket and a bucket without an
   endpoint; nine spellings of Google's API domain; five endpoints that are
   no http origin and a bucket no store can name; each refused before any
   folder is made. Production refused with an emulator, by either value;
   production and another provider refused before the store's settings are
-  read. Every step built on an emulator's bucket while a stand-in at its
+  read, and no store or Google's own store before a relative test provider
+  folder. Every step built on an emulator's bucket while a stand-in at its
   endpoint is asked nothing, a quarter of a second after. The shared rule
   answering for text that is no address.
 - **The construction guard** fails without the assembly's entries, and its
@@ -201,18 +204,17 @@ Google (ADR-0161 Decision 4).
   seam's bucket and then the signing base back to the folder's; and chose
   the store after the folders are made or before production. 23 failed a
   test at first; a seam left on the folder's bucket failed from two to five
-  of the 7 emulator cases. Three showed gaps: two orders of the refusals
-  that no test pinned, and a request sent while the steps are built, which
-  the stand-in test looked for too early. The pipeline's own guard
+  of the 7 emulator cases. Four showed gaps: a request sent while the steps
+  are built, which the stand-in test looked for too early, and three orders
+  of the refusals that no test pinned. The pipeline's own guard
   (`dormancy.test.ts`, not run with the mutants) catches such a request
   sent with `fetch(`, as the mutant sent it, but not one sent through the
-  emulator's views. The two tests of the order were added and the stand-in
-  test made to wait before it looks; each of those mutants, and a request
-  through the views, now fails a test. The one that survives changes only
-  which refusal is printed when the store's settings and the test
-  provider's folder are both wrong, an order no decision states: it checks
-  the folder before it chooses the store, and both refuse before anything
-  is opened.
+  emulator's views. Two of the orders read the store's settings before
+  production or another provider is refused; the third checks the test
+  provider's folder before it chooses the store, against the order of
+  ADR-0106 Decision 2. The stand-in test was made to wait before it looks,
+  and tests of the three orders were added: each of those mutants, and a
+  request through the views, now fails a test, and none survives.
 
 ## What cannot be shown here
 

@@ -49,6 +49,7 @@ const EMULATOR = {
   GOOGLE_CLOUD_STORAGE_BUCKET: "vtavision-dev",
   GOOGLE_CLOUD_STORAGE_ENDPOINT: "http://127.0.0.1:1",
 } as const;
+const NO_STORE = "The development pipeline needs SHARED_STORAGE_DIR, or a Cloud Storage emulator's bucket and endpoint";
 const NOT_GOOGLE = "The development pipeline uses a Cloud Storage emulator, never Google's own store";
 const NOT_BOTH = "The development pipeline takes SHARED_STORAGE_DIR or the Cloud Storage settings, not both";
 const { GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET, GOOGLE_CLOUD_STORAGE_ENDPOINT: ENDPOINT } = EMULATOR;
@@ -57,11 +58,7 @@ const at = (endpoint: string | undefined) => ({ ...EMULATOR, GOOGLE_CLOUD_STORAG
 
 /** Each way the environment can name a store the pipeline refuses (ADR-0162), and the refusal. */
 const REFUSED_STORES: readonly (readonly [string, Partial<DevelopmentPipelineEnv>, string])[] = [
-  [
-    "no store",
-    { SHARED_STORAGE_DIR: undefined },
-    "The development pipeline needs SHARED_STORAGE_DIR, or a Cloud Storage emulator's bucket and endpoint",
-  ],
+  ["no store", { SHARED_STORAGE_DIR: undefined }, NO_STORE],
   ["a bucket and an endpoint beside the folder", { ...EMULATOR, SHARED_STORAGE_DIR: "/unused" }, NOT_BOTH],
   ["an endpoint beside the folder", { GOOGLE_CLOUD_STORAGE_ENDPOINT: ENDPOINT }, NOT_BOTH],
   ["a bucket beside the folder", { GOOGLE_CLOUD_STORAGE_BUCKET: BUCKET }, NOT_BOTH],
@@ -212,6 +209,16 @@ describe("assembling the development pipeline", () => {
       }),
     );
     expect(existsSync(shared)).toBe(false);
+  });
+
+  it.each([
+    ["no store", { SHARED_STORAGE_DIR: undefined }, NO_STORE],
+    ["Google's own store", at(undefined), NOT_GOOGLE],
+  ] as const)("refuses %s before a relative test provider folder, in ADR-0106's order", (_, overrides, message) => {
+    const given = env(folders().shared, overrides);
+    expect(() => assembleDevelopmentPipeline(given, { providerFolder: "provider" }, { prisma })).toThrow(
+      expect.objectContaining({ code: "CONFIGURATION_ERROR", message }),
+    );
   });
 
   it("builds every step on the test provider and the shared folder", () => {
