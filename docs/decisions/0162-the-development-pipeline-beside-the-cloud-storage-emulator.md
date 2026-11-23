@@ -191,21 +191,28 @@ Google (ADR-0161 Decision 4).
 - **The command, unchanged**, given the emulator's settings and a local
   database: one quiet cycle and exit 0. Given a bucket alone, Google's
   endpoint or no store: exit 2, with the refusal printed.
-- **Mutation.** 27 mutants of the new code were each run against the
-  pipeline's, the settings' and the adapter's unit files, offline, or the
-  database suite on either store: each refusal removed, the domain rule
-  weakened four ways, each seam's bucket and then the signing base put back
-  to the folder's, and the store chosen after the folders are made or
-  before production. 23 failed a test at first; a seam left on the folder's
-  bucket failed from two to five of the 7 emulator cases. Three showed
-  gaps: two orders of the refusals that no test pinned, and a request sent
-  while the steps are built, which the stand-in test looked for too early.
-  The pipeline's own guard catches such a request sent with `fetch(`, but
-  not one sent through the emulator's views. The two tests of the order
-  were added and the stand-in test made to wait before it looks; each of
-  those mutants, and a request through the views, now fails a test. The one
-  that survives is equivalent: it chooses the store after the test
-  provider's folder is checked, and both refuse before anything is opened.
+- **Mutation.** 27 mutants were made of the new code and of the settings'
+  domain rule it now shares. Each was run, offline, against the assembly's
+  unit file (`assembly.test.ts`), all but two also against the settings'
+  and the adapter's (`env.test.ts`, `google-cloud-storage.test.ts`), or
+  against the database suite on either store. They removed each of the
+  assembly's new refusals but the one for no store, and the settings' own
+  refusal of Google's domain; weakened the domain rule four ways; put each
+  seam's bucket and then the signing base back to the folder's; and chose
+  the store after the folders are made or before production. 23 failed a
+  test at first; a seam left on the folder's bucket failed from two to five
+  of the 7 emulator cases. Three showed gaps: two orders of the refusals
+  that no test pinned, and a request sent while the steps are built, which
+  the stand-in test looked for too early. The pipeline's own guard
+  (`dormancy.test.ts`, not run with the mutants) catches such a request
+  sent with `fetch(`, as the mutant sent it, but not one sent through the
+  emulator's views. The two tests of the order were added and the stand-in
+  test made to wait before it looks; each of those mutants, and a request
+  through the views, now fails a test. The one that survives changes only
+  which refusal is printed when the store's settings and the test
+  provider's folder are both wrong, an order no decision states: it checks
+  the folder before it chooses the store, and both refuse before anything
+  is opened.
 
 ## What cannot be shown here
 
@@ -216,8 +223,9 @@ Google (ADR-0161 Decision 4).
   database still names objects it no longer holds, and the bucket must be
   made again: a waiting job whose photo is gone then fails and its Unit is
   released (measured on an emptied bucket). Until the bucket is made
-  again, the command ends with exit 1 and the job waits with its Unit
-  reserved (measured on a bucket the emulator never held).
+  again, a run that finds a job waiting to send its photo ends with exit 1,
+  and the job waits with its Unit reserved (measured on a bucket the
+  emulator never held).
 - CI does not run the command itself, the web app's routes or the browser
   on the emulator; the command was run by hand.
 
