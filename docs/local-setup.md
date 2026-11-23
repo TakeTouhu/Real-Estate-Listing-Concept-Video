@@ -119,8 +119,9 @@ development never uses Google's own store or its token. The development
 pipeline reads the same bucket when given the same two settings (section
 4a). The emulator keeps its objects in memory until it stops, while the
 database keeps its rows: keep it running between the web app and the
-pipeline. After a restart, make the bucket again; a waiting job whose
-photo is gone then fails, and its Unit is given back. The browser test
+pipeline. After a restart, make the bucket again: until then the pipeline
+ends with exit 1 and its jobs wait, and once it is made, a waiting job whose
+photo is gone fails, and its Unit is given back. The browser test
 keeps its own folder, and refuses to start while either setting is in its
 environment.
 

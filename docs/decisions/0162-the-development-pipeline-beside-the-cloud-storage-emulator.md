@@ -211,7 +211,9 @@ Google (ADR-0161 Decision 4).
 - The emulator keeps its objects in memory. After it restarts, the
   database still names objects it no longer holds, and the bucket must be
   made again: a waiting job whose photo is gone then fails and its Unit is
-  released (measured on an emptied bucket).
+  released (measured on an emptied bucket). Until the bucket is made
+  again, the command ends with exit 1 and the job waits with its Unit
+  reserved (measured on a bucket the emulator never held).
 - CI does not run the command itself, the web app's routes or the browser
   on the emulator; the command was run by hand.
 
