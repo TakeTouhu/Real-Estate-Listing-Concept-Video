@@ -1180,6 +1180,18 @@ so it never builds Google's store or asks for a token. CI's `database` job
 gains the emulator and runs the pipeline's suite on both stores. RD-4 is
 complete: part 2 builds Google's store for the worker, in production.
 
+**RD-5a — the ClamAV scanner** (ADR-0163, no migration): a scanner that
+sends each photo to a ClamAV daemon over TCP, one connection per scan,
+and reads its one answer strictly. Only `stream: OK`, alone and after the
+whole photo was sent, is clean; a detection is `INFECTED` with no
+signature's name; everything else, a photo the daemon did not read in
+full included, fails with a code. A connection quiet for 60 seconds is
+given up, by the connection's own setting. The upload now goes on only on
+a clean verdict, so a scanner that throws fails the photo instead of
+leaving it `SCANNING`. CI's `storage` job runs a pinned ClamAV beside the
+emulator, and the suite finds EICAR in a ZIP behind a real JPEG. Nothing
+builds the scanner yet: RD-5b gives it to the web app.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

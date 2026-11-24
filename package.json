@@ -17,6 +17,7 @@
     "test:db": "vitest run --config vitest.integration.config.ts",
     "test:media": "vitest run --config vitest.media.config.ts",
     "test:gcs": "vitest run --config vitest.gcs.config.ts",
+    "test:clamav": "vitest run --config vitest.clamav.config.ts",
     "test:e2e": "playwright test",
     "build": "pnpm --filter @app/web build",
     "dev": "pnpm --filter @app/web dev",

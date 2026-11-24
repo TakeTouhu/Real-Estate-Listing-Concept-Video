@@ -65,6 +65,25 @@ precondition before its last chunk, or cancel one, so when Google checks
 the precondition, and that a cancel cancels, are not seen here either. CI
 runs them in the `storage` job beside the emulator's service container.
 
+## `tests/scanner/*.clamav.test.ts`
+
+Suites that speak to a ClamAV daemon (ADR-0163): the ClamAV scanner
+passing clean photos and finding EICAR, a ZIP holding it behind a real
+JPEG, and that ZIP at the end of a photo as large as an upload may be;
+failing a photo past the daemon's limit and a scan no daemon answers; and
+an upload through `completeUpload` ending `READY`, `QUARANTINED` and
+`FAILED`. They are **excluded** from `pnpm test` and run explicitly, with
+a daemon on this machine and its port named:
+
+```bash
+export CLAMAV_TEST_PORT=3310
+pnpm test:clamav
+```
+
+Without the variable the run fails: Vitest marks the file failed and its
+tests skipped. The host is always `127.0.0.1`. CI runs them in the
+`storage` job beside a pinned ClamAV service container.
+
 ## `tests/e2e/*.spec.ts`
 
 The browser test (ADR-0121): Playwright's Chromium drives the web app, which

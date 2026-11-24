@@ -89,6 +89,9 @@ jobs:
     # takes no arguments, so the emulator is configured by its FAKE_GCS_*
     # variables. No Google account, credential or store on the network is
     # involved, and the suites refuse an emulator that is not on this machine.
+    # Beside it, a ClamAV daemon (ADR-0163) proves the scanner adapter. Its
+    # signature updater and mail filter are off, so it sends no request; its
+    # own image's PING check, every 2 s, says when it has loaded.
     runs-on: ubuntu-24.04
     services:
       gcs:
@@ -105,8 +108,21 @@ jobs:
           --health-interval 2s
           --health-timeout 2s
           --health-retries 15
+      clamav:
+        image: clamav/clamav:1.5.5@sha256:64e30c0bf976198024deb3dc6d5cfe2485fb969c0f73549ba0fdb364b9469614
+        env:
+          CLAMAV_NO_FRESHCLAMD: "true"
+          CLAMAV_NO_MILTERD: "true"
+        ports: ["3310:3310"]
+        options: >-
+          --health-cmd clamdcheck.sh
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 45
+          --health-start-period 1s
     env:
       GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT: http://127.0.0.1:4443
+      CLAMAV_TEST_PORT: "3310"
     steps:
       - uses: actions/checkout@v4
 
@@ -126,6 +142,9 @@ jobs:
 
       - name: Cloud Storage emulator tests
         run: pnpm run test:gcs
+
+      - name: ClamAV scanner tests
+        run: pnpm run test:clamav
 
   database:
     # Live PostgreSQL: proves the migrations apply to an empty database, that

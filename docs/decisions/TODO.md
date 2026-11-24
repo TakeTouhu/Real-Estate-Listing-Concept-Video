@@ -222,6 +222,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       mandatory and `PassthroughMalwareScanner` is not permitted in production.**
       Uploads stay quarantined until validation and scanning succeed, and failed
       or unscanned prohibited input is never sent to the AI Provider.
+      *Amended in RD-5a (ADR-0163): the ClamAV scanner is built and runs
+      in CI against a pinned ClamAV, and an upload goes on only on a clean
+      verdict; nothing builds the scanner yet. RD-5b gives it to the web
+      app, the only caller; what a deployment needs is under "Open in
+      RD-5a".*
 - [ ] Extend the production-safety guard to boot-time validation of the whole
       adapter set, so a misconfigured production deployment fails before serving
       any traffic rather than on first use (Phase 7 hardening). *Done for the
@@ -1989,6 +1994,39 @@ into on 2026-11-17.
       database suite runs the assembled pipeline there (ADR-0162 Decision
       5). Its helpers would need a second server or run. RD-11's
       production-mode test or part 2 is to decide.
+
+## Open in RD-5a — what the ClamAV scanner leaves open
+
+- [ ] **Set up clamd for the deployment** (ADR-0163 Decision 6): on a
+      private network or as a sidecar on loopback, its port reachable from
+      the web app alone, since it speaks plain text, asks no credential and
+      answers `SHUTDOWN`; its scan limits never below the 1.5.5 defaults,
+      since a file past `MaxFileSize` is answered `OK` unscanned;
+      `AlertBrokenMedia` off. Whether `AlertExceedsMax` and
+      `ScanImageFuzzyHash` are on, and how freshclam updates its
+      signatures, are part 2's.
+- [ ] **Measure the idle limit on the deployment's CPUs.** Sixty seconds
+      held for 60 large photos at once on 4 CPUs; the silence a photo waits
+      through grows with the photos ahead of it (ADR-0163 Decision 3).
+- [ ] **Decide whether a peer that trickles bytes needs a deadline.** The
+      idle limit does not end a connection that sends a byte now and then;
+      only a deadline in our code would, and that is the product owner's
+      to allow. Real clamd never did this. Not proposed now.
+- [ ] **Decide whether the scanner counts toward readiness.** No `PING`
+      or readiness check in RD-5: `PING` waited 3.7 to 7.5 seconds once
+      clamd's queue was full. Decided with the deployment's layout in part
+      2.
+- [ ] **Photos left `SCANNING` by a restart mid-scan.** The scan runs
+      inside the request; a deploy or a crash while it runs leaves the
+      photo `SCANNING`, holding one of the Property's places, and nothing
+      frees it. A sweep needs a rule on when a scan is abandoned and a
+      loop: the product owner's, and blocked by the rule on schedulers.
+- [ ] **Fix the upload panel's Retry before production.** Retry on a
+      `FAILED` photo resets it to wait for its file, and choosing the file
+      again makes a new asset, so the reset row keeps its place; with a
+      scanner that can fail, an outage fills a Property.
+      Retry should complete the photo again, which scans its stored bytes,
+      and not show on `QUARANTINED`.
 
 ## Open in RD-4b — what the staging sink's upload leaves open
 

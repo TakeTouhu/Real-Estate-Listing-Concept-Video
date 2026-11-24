@@ -347,6 +347,28 @@ emulator's memory until it stops. The web app's own storage, as its settings
 choose it, is tested there too (ADR-0159). CI runs them in the `storage`
 job.
 
+### ClamAV scanner tests
+
+The suites for the ClamAV scanner (ADR-0163) speak to a ClamAV daemon on
+this machine. Start one with Docker, with its signature updater off so it
+sends no request, published on `127.0.0.1` alone, since the daemon asks
+no credential:
+
+```bash
+docker run --rm -p 127.0.0.1:3310:3310 \
+  -e CLAMAV_NO_FRESHCLAMD=true -e CLAMAV_NO_MILTERD=true clamav/clamav:1.5.5
+```
+
+It answers once its signatures are loaded, about 15 seconds in, and needs
+about 1 GiB. Then name its port and run them:
+
+```bash
+export CLAMAV_TEST_PORT=3310
+pnpm test:clamav   # vitest.clamav.config.ts
+```
+
+Without that variable the run fails. CI runs them in the `storage` job.
+
 ### Browser tests
 
 The browser test (ADR-0121) drives the web app in Playwright's Chromium. It
