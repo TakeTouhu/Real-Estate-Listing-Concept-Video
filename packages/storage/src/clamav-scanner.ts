@@ -5,9 +5,9 @@ import { AppError, CLAMAV_DEFAULT_PORT, isClamAvHost } from "@app/shared";
 /**
  * The milliseconds a connection to the daemon may go without a byte either way before it is given up: the
  * connection's own setting (`net.createConnection`'s `timeout` option), which ends that one connection. Nothing
- * here keeps a deadline of its own. The daemon answers only once it has read and scanned the whole photo, so the
- * quiet a scan waits through is its turn in the daemon's queue plus its scan: 60 s held for 60 large photos at once
- * where 30 s failed healthy scans (ADR-0163).
+ * here keeps a deadline of its own. The daemon gives its verdict only once it has read and scanned the whole
+ * photo, so the quiet a scan waits through is its turn in the daemon's queue plus its scan: 60 s held for 60 large
+ * photos at once where 30 s failed healthy scans (ADR-0163).
  */
 export const CLAMAV_IDLE_LIMIT_MS = 60_000;
 

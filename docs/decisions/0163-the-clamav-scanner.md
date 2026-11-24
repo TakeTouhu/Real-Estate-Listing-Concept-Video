@@ -48,9 +48,10 @@ and this decision rests on:
   14 and 16 of 20 runs. At the 100 MiB default this adapter read the
   answer in 20 of 20 runs of 100 MiB and one byte. Every run ended
   without a verdict of clean.
-- clamd's `stream: OK` does not prove that it read everything: an
-  appended archive nesting a member that expands past `MaxFileSize`, with
-  EICAR after it, came back `OK`, with `AlertExceedsMax` off and on.
+- clamd's `stream: OK` does not prove that it read everything: a JPEG
+  with a ZIP appended, holding a stored ZIP of 101 MiB of zeros and then
+  `eicar.com`, came back `OK`, with `AlertExceedsMax` off and on; the
+  same file after 101 MiB in the outer ZIP was found.
 - The domain went on with any verdict but `INFECTED` and `SCAN_FAILED`,
   and a scanner that threw left the photo `SCANNING` for good, holding one
   of the Property's 20 places.
@@ -93,10 +94,10 @@ never throws, so a photo is never left being scanned by the adapter.
 
 `Heuristics.Limits.Exceeded` means the daemon did not read the photo in
 full: a scan that failed (ADR-0008's `SCAN_FAILED`, `FAILED` and
-retryable), not a detection. The photo fails and may be scanned again, where `INFECTED` would quarantine a
-clean photo for good. `detail` carries only these codes. No signature's
-name leaves the adapter, so nothing can log it, and the audit is
-unchanged.
+retryable), not a detection. The photo fails and may be scanned again,
+where `INFECTED` would quarantine a clean photo for good. `detail` carries
+only these codes. No signature's name leaves the adapter, so nothing can
+log it, and the audit is unchanged.
 
 ## Decision 3 — The idle limit, and no deadline of our own
 
@@ -106,12 +107,13 @@ option, which ends that one connection: by the product owner's answer of
 2026-11-16 it is set without asking. Our code keeps no timer. Sixty
 seconds held for 60 large photos at once where 30 failed healthy scans;
 at 110, past clamd's own queue of 100, 24 waited longer than 60 seconds
-and would have failed. The cost is that a frozen daemon makes an upload wait about a minute
-before it fails.
+and would have failed. The cost is that a frozen daemon makes an upload
+wait about a minute before it fails.
 
 No deadline bounds a whole scan. Only a peer that never finishes but
-sends or reads a byte more often than the idle limit escapes it; real clamd never did, and a deadline in
-our code would have to be put to the product owner first. The risk is
+sends or reads a byte more often than the idle limit escapes it; real
+clamd never did, and a deadline in our code would have to be put to the
+product owner first. The risk is
 recorded in TODO. Nor is there a `PING` or a readiness check: once
 clamd's queue was full, `PING` waited 3.7 to 7.5 seconds, so a check
 that decides readiness would take the web app out of service during an
@@ -128,23 +130,25 @@ bytes again.
 
 ## Decision 5 — ClamAV in CI
 
-CI's `storage` job runs a second service container,
-`clamav/clamav:1.5.5` pinned by its digest, with the signature updater
-and the mail filter off (`CLAMAV_NO_FRESHCLAMD`, `CLAMAV_NO_MILTERD`), so
-it sends no request. The job waits for the image's own `PING` check, run
-every 2 seconds; it loaded in about 14 seconds here, with no network.
-`pnpm test:clamav` (`vitest.clamav.config.ts`) runs
-`tests/scanner/*.clamav.test.ts` against it on `127.0.0.1` at
-`CLAMAV_TEST_PORT`, and fails without that variable. The suite passes a
-clean JPEG and PNG, finds EICAR, a ZIP holding it behind a real JPEG,
-and that ZIP at the end of a photo as large as an upload may be. It
-fails a photo past the daemon's limit, checking the verdict only (the
-code can race, as measured with a lower limit), and a scan of a port no daemon listens on. An
-upload through `completeUpload` ends `READY`, `QUARANTINED` and `FAILED`
-there. The `1.5.5` tag moves with each image build, so a pulled digest
-may lose its tag; should it stop being served, the job fails loudly and
-`clamav/clamav:1.5.4@sha256:7054e3f34308c384ea43cd786ea17abf899bd44af40af9f1b099853d7a5c214e`
-is the recorded fallback.
+CI's `storage` job runs a second service container, `clamav/clamav:1.5.5`
+pinned by its digest, with the signature updater and the mail filter off
+(`CLAMAV_NO_FRESHCLAMD`, `CLAMAV_NO_MILTERD`), so it sends no request. The
+job waits for the image's own `PING` check, run every 2 seconds; it loaded
+in about 14 seconds here, with no network. `pnpm test:clamav`
+(`vitest.clamav.config.ts`) runs `tests/scanner/*.clamav.test.ts` against
+it on `127.0.0.1` at `CLAMAV_TEST_PORT`, and fails without that variable.
+The suite passes a clean JPEG and PNG, finds EICAR, a ZIP holding it
+behind a real JPEG, and that ZIP at the end of a photo as large as an
+upload may be. It fails a photo past the daemon's limit, checking the
+verdict only (the code can race, as measured with a lower limit), and a
+scan of a port no daemon listens on. An upload through `completeUpload`
+ends `READY`, `QUARANTINED` and `FAILED` there. The `1.5.5` tag moves with
+each image build, so a pulled digest may lose its tag; should it stop
+being served, the job fails loudly and this is the recorded fallback:
+
+```text
+clamav/clamav:1.5.4@sha256:7054e3f34308c384ea43cd786ea17abf899bd44af40af9f1b099853d7a5c214e
+```
 
 ## Decision 6 — What a deployment needs
 

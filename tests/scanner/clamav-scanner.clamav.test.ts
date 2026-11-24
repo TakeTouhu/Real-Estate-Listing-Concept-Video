@@ -43,7 +43,7 @@ describe("the ClamAV scanner against a daemon", () => {
     expect(await scanner().scan(new Uint8Array(disguised))).toEqual({ verdict: "INFECTED" });
   });
 
-  it("reads a photo as large as an upload may be to its last byte", async () => {
+  it("finds the test file at the end of a photo as large as an upload may be", async () => {
     const head = await photo("jpeg");
     const zip = storedZip("eicar.com", EICAR);
     const limit = DEFAULT_UPLOAD_LIMITS.maxFileSizeBytes;
