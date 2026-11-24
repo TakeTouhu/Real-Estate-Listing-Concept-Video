@@ -1184,8 +1184,8 @@ complete: part 2 builds Google's store for the worker, in production.
 sends each photo to a ClamAV daemon over TCP, one connection per scan,
 and reads its one answer strictly. Only `stream: OK`, alone and after the
 whole photo was sent, is clean; a detection is `INFECTED` with no
-signature's name; everything else, a photo the daemon did not read in
-full included, fails with a code. A connection quiet for 60 seconds is
+signature's name; everything else, a photo the daemon says it did not
+read in full included, fails with a code. A connection quiet for 60 seconds is
 given up, by the connection's own setting. The upload now goes on only on
 a clean verdict, so a scanner that throws fails the photo instead of
 leaving it `SCANNING`. CI's `storage` job runs a pinned ClamAV beside the

@@ -13,7 +13,9 @@ import { createTestDeps, InMemoryMediaAssetRepository, InMemoryPropertyRepositor
 import { LocalObjectStorage, SharpImageProcessor, createClamAvScanner } from "@app/storage";
 import { clamAvTestPort, EICAR, plainPng, storedZip } from "./clamav";
 
-const scanner = (port = clamAvTestPort()) => createClamAvScanner({ host: "127.0.0.1", port });
+/** Read as the file loads, so a run without the daemon's port fails before any test runs. */
+const PORT = clamAvTestPort();
+const scanner = (port = PORT) => createClamAvScanner({ host: "127.0.0.1", port });
 /** A clean photo: the PNG, or the JPEG the upload's own image processing makes of it. */
 const photo = async (format: "jpeg" | "png"): Promise<Buffer> =>
   format === "png" ? plainPng() : Buffer.from((await new SharpImageProcessor().process(plainPng())).normalized);
@@ -111,9 +113,9 @@ describe("an upload scanned by the daemon", () => {
 
   it("is READY when clean, QUARANTINED when the daemon finds something, and FAILED when none answers", async () => {
     const clean = await photo("jpeg");
-    expect((await upload(clean, clamAvTestPort())).status).toBe("READY");
+    expect((await upload(clean, PORT)).status).toBe("READY");
     const disguised = Buffer.concat([clean, storedZip("eicar.com", EICAR)]);
-    expect((await upload(disguised, clamAvTestPort())).status).toBe("QUARANTINED");
+    expect((await upload(disguised, PORT)).status).toBe("QUARANTINED");
     const failed = await upload(clean, await closedPort());
     expect([failed.status, failed.failureReason]).toEqual(["FAILED", "Malware scan could not be completed"]);
   });

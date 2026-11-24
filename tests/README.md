@@ -80,8 +80,8 @@ export CLAMAV_TEST_PORT=3310
 pnpm test:clamav
 ```
 
-Without the variable the run fails: Vitest marks the file failed and its
-tests skipped. The host is always `127.0.0.1`. CI runs them in the
+Without the variable the run fails: the file fails as it loads, and none
+of its tests runs. The host is always `127.0.0.1`. CI runs them in the
 `storage` job beside a pinned ClamAV service container.
 
 ## `tests/e2e/*.spec.ts`

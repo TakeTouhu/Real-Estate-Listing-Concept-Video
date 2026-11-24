@@ -7,7 +7,7 @@ import baseConfig from "./vitest.config";
  * needs no daemon; CI runs them in the `storage` job beside the daemon's
  * service container, and `pnpm test:clamav` runs them locally once
  * `CLAMAV_TEST_PORT` names a daemon's port on this machine. Without it the
- * run fails: Vitest marks the file failed and its tests skipped.
+ * run fails: the file fails as it loads, and none of its tests runs.
  *
  * The base `test` block is spread rather than merged, because Vite's
  * mergeConfig concatenates arrays and would re-add the unit-test globs.

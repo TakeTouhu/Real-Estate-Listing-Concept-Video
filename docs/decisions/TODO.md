@@ -222,7 +222,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       mandatory and `PassthroughMalwareScanner` is not permitted in production.**
       Uploads stay quarantined until validation and scanning succeed, and failed
       or unscanned prohibited input is never sent to the AI Provider.
-      *Amended in RD-5a (ADR-0163): the ClamAV scanner is built and runs
+      *Amended in RD-5a (ADR-0163): the ClamAV scanner is written and runs
       in CI against a pinned ClamAV, and an upload goes on only on a clean
       verdict; nothing builds the scanner yet. RD-5b gives it to the web
       app, the only caller; what a deployment needs is under "Open in

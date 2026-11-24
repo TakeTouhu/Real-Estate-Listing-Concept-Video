@@ -127,7 +127,7 @@ describe("createClamAvScanner", () => {
     expect(await scanner(port).scan(small)).toEqual({ verdict: "SCAN_FAILED", detail: "CLAMAV_IDLE" });
   });
 
-  it("gives up on a daemon that stops reading, without the photo's sending ever finishing", async () => {
+  it("gives up on a daemon that stops reading", async () => {
     const { port } = await daemon((socket) => socket.once("data", () => socket.pause()));
     expect(await scanner(port).scan(large)).toEqual({ verdict: "SCAN_FAILED", detail: "CLAMAV_IDLE" });
   });
@@ -138,6 +138,14 @@ describe("createClamAvScanner", () => {
       socket.end("stream: OK\0");
     });
     expect(await scanner(port).scan(large)).toEqual({ verdict: "SCAN_FAILED", detail: "CLAMAV_EARLY_ANSWER" });
+  });
+
+  it("keeps a refusal sent before the whole photo was, when the daemon closes its side", async () => {
+    const { port } = await daemon((socket) => {
+      socket.pause();
+      socket.end("INSTREAM size limit exceeded. ERROR\0");
+    });
+    expect(await scanner(port).scan(large)).toEqual({ verdict: "SCAN_FAILED", detail: "CLAMAV_SIZE_LIMIT" });
   });
 
   it("keeps a refusal sent before the whole photo was, through the connection's reset", async () => {

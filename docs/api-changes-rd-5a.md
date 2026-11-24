@@ -37,7 +37,7 @@ What `scan` answers:
 | --- | --- |
 | `CLEAN` | none |
 | `INFECTED` | none: no signature's name |
-| `SCAN_FAILED` | `CLAMAV_LIMITS_EXCEEDED`, `CLAMAV_SIZE_LIMIT`, `CLAMAV_ERROR`, `CLAMAV_EARLY_ANSWER`, `CLAMAV_CLOSED`, `CLAMAV_UNEXPECTED_ANSWER`, `CLAMAV_IDLE`, or the transport's code such as `ECONNREFUSED` |
+| `SCAN_FAILED` | `CLAMAV_LIMITS_EXCEEDED`, `CLAMAV_SIZE_LIMIT`, `CLAMAV_ERROR`, `CLAMAV_EARLY_ANSWER`, `CLAMAV_CLOSED`, `CLAMAV_UNEXPECTED_ANSWER`, `CLAMAV_IDLE`, the transport's code such as `ECONNREFUSED`, or `CLAMAV_UNREACHABLE` for a connection error that carries no code |
 
 It never throws.
 
@@ -45,7 +45,7 @@ It never throws.
 
 | Export | Change |
 | --- | --- |
-| `AssetService.completeUpload` (`@app/domain`) | goes on to image processing only on `CLEAN`; a throw or any verdict but `INFECTED` fails the photo |
+| `AssetService.completeUpload` (`@app/domain`) | goes on to image processing only on `CLEAN`; a throw or any verdict other than `CLEAN` or `INFECTED` fails the photo |
 
 ### Unchanged
 

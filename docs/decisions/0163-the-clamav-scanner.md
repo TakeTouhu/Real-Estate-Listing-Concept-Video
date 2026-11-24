@@ -18,8 +18,8 @@ ADR-0156 Decision 8 (a service container in CI's `storage` job).
 ## Context
 
 The `MalwareScanner` port has one adapter, `PassthroughMalwareScanner`,
-which knows only a file that starts with the EICAR test string and is
-refused in production. ADR-0054 Decision 5 names ClamAV or an approved
+which knows only the EICAR test string within a file's first 1,024 bytes
+and is refused in production. ADR-0054 Decision 5 names ClamAV or an approved
 vendor; the production readiness proposal chose ClamAV, self-hosted.
 
 Four investigations, recorded in `/mnt/project-files/cto/rd-5/`
@@ -42,12 +42,15 @@ and this decision rests on:
   37.8 s for 60, 69.8 s for 110. With a 30-second idle limit, 20 and 26
   of 60 healthy scans were given up, with the two prototypes; with 60
   seconds, none.
-- Past clamd's 100 MiB `StreamMaxLength`, a client usually sees its write
-  fail (`EPIPE`) before it reads the size-limit answer: 14 and 16 of 20
-  runs. Every run ended without a verdict of clean.
-- clamd's `stream: OK` does not prove that it read everything: a nested
-  archive whose content passes its limits came back `OK` with EICAR
-  inside, with `AlertExceedsMax` off and on.
+- Past clamd's `StreamMaxLength`, which answers with a size-limit refusal
+  and closes, a client may see its write fail (`EPIPE`) before it reads
+  that answer. With the limit lowered to 1 MiB and 24 MB photos, it did in
+  14 and 16 of 20 runs. At the 100 MiB default this adapter read the
+  answer in 20 of 20 runs of 100 MiB and one byte. Every run ended
+  without a verdict of clean.
+- clamd's `stream: OK` does not prove that it read everything: an
+  appended archive nesting a member that expands past `MaxFileSize`, with
+  EICAR after it, came back `OK`, with `AlertExceedsMax` off and on.
 - The domain went on with any verdict but `INFECTED` and `SCAN_FAILED`,
   and a scanner that threw left the photo `SCANNING` for good, holding one
   of the Property's 20 places.
@@ -82,14 +85,15 @@ The answer is read when the daemon closes its side.
 
 "Sent" means the zero-length chunk's write has completed. A connection
 that is refused, reset or broken is `SCAN_FAILED` with the transport's
-own code (for example `ECONNREFUSED`), unless the daemon's refusal had
+own code (for example `ECONNREFUSED`), or `CLAMAV_UNREACHABLE` for an
+error that carries none, unless the daemon's refusal had
 already arrived, which is kept; a verdict cut off by a reset is never
 read. A connection quiet for the idle limit is `CLAMAV_IDLE`. A scan
 never throws, so a photo is never left being scanned by the adapter.
 
 `Heuristics.Limits.Exceeded` means the daemon did not read the photo in
-full, which is ADR-0008's "could not be completed", not a detection: the
-photo fails and may be scanned again, where `INFECTED` would quarantine a
+full: a scan that failed (ADR-0008's `SCAN_FAILED`, `FAILED` and
+retryable), not a detection. The photo fails and may be scanned again, where `INFECTED` would quarantine a
 clean photo for good. `detail` carries only these codes. No signature's
 name leaves the adapter, so nothing can log it, and the audit is
 unchanged.
@@ -101,11 +105,12 @@ A connection quiet for 60 seconds either way is given up
 option, which ends that one connection: by the product owner's answer of
 2026-11-16 it is set without asking. Our code keeps no timer. Sixty
 seconds held for 60 large photos at once where 30 failed healthy scans;
-the cost is that a frozen daemon makes an upload wait about a minute
+at 110, past clamd's own queue of 100, 24 waited longer than 60 seconds
+and would have failed. The cost is that a frozen daemon makes an upload wait about a minute
 before it fails.
 
-No deadline bounds a whole scan. Only a peer that trickles bytes slower
-than the idle limit escapes it; real clamd never did, and a deadline in
+No deadline bounds a whole scan. Only a peer that never finishes but
+sends or reads a byte more often than the idle limit escapes it; real clamd never did, and a deadline in
 our code would have to be put to the product owner first. The risk is
 recorded in TODO. Nor is there a `PING` or a readiness check: once
 clamd's queue was full, `PING` waited 3.7 to 7.5 seconds, so a check
@@ -134,11 +139,12 @@ every 2 seconds; it loaded in about 14 seconds here, with no network.
 clean JPEG and PNG, finds EICAR, a ZIP holding it behind a real JPEG,
 and that ZIP at the end of a photo as large as an upload may be. It
 fails a photo past the daemon's limit, checking the verdict only (the
-code races, as measured), and a scan of a port no daemon listens on. An
+code can race, as measured with a lower limit), and a scan of a port no daemon listens on. An
 upload through `completeUpload` ends `READY`, `QUARANTINED` and `FAILED`
 there. The `1.5.5` tag moves with each image build, so a pulled digest
 may lose its tag; should it stop being served, the job fails loudly and
-`1.5.4` pinned by its digest is the recorded fallback.
+`clamav/clamav:1.5.4@sha256:7054e3f34308c384ea43cd786ea17abf899bd44af40af9f1b099853d7a5c214e`
+is the recorded fallback.
 
 ## Decision 6 — What a deployment needs
 
@@ -146,8 +152,9 @@ Recorded now, decided with the deployment in part 2, and kept in TODO:
 clamd on a private network or as a sidecar on loopback, its port
 reachable from the web app alone, since it speaks plain text, asks no
 credential and answers `SHUTDOWN`; its scan limits never below the 1.5.5
-defaults (100 MiB, four times the upload limit), since a file past
-`MaxFileSize` is answered `OK` unscanned; `AlertBrokenMedia` off, since
+defaults (`StreamMaxLength` and `MaxFileSize` 100 MiB, four times the
+upload limit; `MaxScanSize` 400 MiB), since a file past `MaxFileSize` is
+answered `OK` unscanned; `AlertBrokenMedia` off, since
 sharp already fails a broken image. `AlertExceedsMax`,
 `ScanImageFuzzyHash` and freshclam's updates are part 2's.
 
@@ -173,16 +180,19 @@ appended ZIP nor EICAR (measured with the repository's sharp 0.33.5).
 
 ## What was measured
 
-- The adapter's unit suite (24 tests) runs on stand-in daemons on this
+- The adapter's unit suite (25 tests) runs on stand-in daemons on this
   machine: the framing of a 150,000-byte photo (two full chunks, 18,928
   bytes, then zero), an empty photo, each answer of Decision 2, an `OK`
   left open, a daemon that never answers or stops reading, an `OK` sent
-  before a 16 MiB photo was, a refusal kept through a reset, an `OK` cut
+  before a 16 MiB photo was, a refusal kept when the daemon closes and
+  through a reset, an `OK` cut
   off by one, a refused connection, three scans at once, each refusal
   when it is built, and a guard that nothing in `apps/` or `packages/`
   builds the adapter yet.
 - The container suite (6 tests) passed against `clamav/clamav:1.5.5` on
-  this machine, the 25 MiB photo in about 1.4 seconds.
+  this machine, the 25 MiB photo in about 1.4 seconds. Twenty scans of
+  100 MiB and one byte there all ended `SCAN_FAILED` with
+  `CLAMAV_SIZE_LIMIT`.
 - The domain's two new tests fail on the code before Decision 4: a
   throwing scanner made `completeUpload` throw, and an unknown verdict
   ended the photo `READY`.
@@ -194,6 +204,9 @@ appended ZIP nor EICAR (measured with the repository's sharp 0.33.5).
 - A GitHub runner's start time for the service, and a cold pull.
 - What a provider would do with the uploaded bytes: it is never given
   them.
+- That the adapter waits whenever the connection asks it to, and counts
+  the photo sent only once the zero-length chunk's write has completed:
+  both are in the code, but no test fails when either is taken out.
 
 ## Consequences
 

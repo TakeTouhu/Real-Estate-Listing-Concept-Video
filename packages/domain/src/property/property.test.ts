@@ -589,6 +589,8 @@ describe("upload security", () => {
     const { asset: result } = await ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id);
     expect([result.status, result.failureReason]).toEqual(["FAILED", "Malware scan could not be completed"]);
     expect(ctx.images.processed).toBe(0);
+    const actions = (await ctx.deps.repos.auditLogs.listByOrganization(ctx.orgId)).map((a) => a.action);
+    expect(actions).toContain("asset.failed");
   });
 
   it("enforces minimum and maximum image dimensions", async () => {
