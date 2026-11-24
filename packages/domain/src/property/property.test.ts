@@ -616,6 +616,38 @@ describe("upload security", () => {
     await expect(request()).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 
+  it("completes or relinks a failed photo only where a place is left (ADR-0165)", async () => {
+    const failed: string[] = [];
+    ctx.scanner.verdict = "SCAN_FAILED";
+    for (let i = 0; i < 2; i += 1) {
+      const { asset } = await request();
+      await ctx.storage.putObject(asset.storageKey, jpegBytes());
+      expect((await ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id)).asset.status).toBe("FAILED");
+      failed.push(asset.id);
+    }
+    ctx.scanner.verdict = "CLEAN";
+    // A failed photo holds no place: 19 more fit beside the two, and the first, tried again, takes the 20th.
+    for (let i = 0; i < 19; i += 1) await request();
+    const [first, second] = failed as [string, string];
+    expect((await ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, first)).asset.status).toBe("READY");
+    const full = { code: "VALIDATION_FAILED", message: "This property already has the maximum of 20 photos" };
+    const scans = ctx.scanner.scanned;
+    await expect(ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, second)).rejects.toMatchObject(full);
+    await expect(ctx.assets.retryUpload(ctx.ownerId, ctx.orgId, second)).rejects.toMatchObject(full);
+    expect(ctx.scanner.scanned).toBe(scans);
+    expect((await ctx.assetRepo.findById(ctx.orgId, second))?.status).toBe("FAILED");
+  });
+
+  it("completes a photo still waiting for its bytes at the limit: it already holds its place", async () => {
+    const assets = [];
+    for (let i = 0; i < 20; i += 1) assets.push((await request()).asset);
+    const last = assets[19]!;
+    await ctx.storage.putObject(last.storageKey, jpegBytes());
+    expect((await ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, last.id)).asset.status).toBe("READY");
+    const retried = await ctx.assets.retryUpload(ctx.ownerId, ctx.orgId, assets[0]!.id);
+    expect(retried.asset.status).toBe("PENDING_UPLOAD");
+  });
+
   it("rejects completing an upload with no stored object", async () => {
     const { asset } = await request();
     await expect(

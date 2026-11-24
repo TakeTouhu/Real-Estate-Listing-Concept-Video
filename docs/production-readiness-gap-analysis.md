@@ -53,7 +53,7 @@ changed lines.
 | RD-2 | Boot-time check of adapters and secrets (*RD-2a, ADR-0151*); readiness checks the database and storage (*RD-2b, ADR-0152*); how those checks are limited (*RD-2c, ADR-0153*); a start RD-2a could not check (*RD-2d, ADR-0154*); an address the web app's own database client cannot read (*RD-2e, ADR-0155*) | none |
 | RD-3 | Google Cloud Storage adapter for the web storage port, tested on an emulator (*its objects over the JSON API, and the emulator in CI: RD-3a, ADR-0156; its streamed read: RD-3b, ADR-0157; its credential and its own connections: RD-3c, ADR-0158; in the web app: RD-3d, ADR-0159*) | none |
 | RD-4 | Google Cloud Storage for the worker's copy and deliverable writes (*the worker's reads and first-wins writes: RD-4a, ADR-0160; the staging sink's upload: RD-4b, ADR-0161; the development pipeline beside the emulator: RD-4c, ADR-0162*) | none |
-| RD-5 | ClamAV scanner, with ClamAV in CI (*the scanner, ClamAV in CI and the upload going on only on a clean verdict: RD-5a, ADR-0163; in the web app: RD-5b, ADR-0164*) | none |
+| RD-5 | ClamAV scanner, with ClamAV in CI (*the scanner, ClamAV in CI and the upload going on only on a clean verdict: RD-5a, ADR-0163; in the web app: RD-5b, ADR-0164; the upload panel's Retry: RD-5c, ADR-0165*) | none |
 | RD-6 | SMTP email adapter, tested with a mail catcher | none |
 | RD-7 | Rate limiter in PostgreSQL; sign-in, reset, verification resend, MFA | 1 |
 | RD-8 | Rate limits on invitations, uploads, analysis, generation start, downloads, Unit purchase | none |

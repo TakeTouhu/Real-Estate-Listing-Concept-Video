@@ -2943,3 +2943,17 @@ completed` and its `code`.
 
 **Rolling back.** To RD-5a's build: safe. The two settings are no longer
 read, and uploads are scanned by the test scanner again.
+
+## RD-5c — the upload panel's Retry
+
+**No migration** (ADR-0165). Migration 34 stays the last.
+
+**What changes at deploy.** The Property page's upload panel: its Retry
+tries the same photo, and is not offered on a quarantined or rejected
+photo. Completing or retrying a `FAILED` photo is refused where the
+Property has no place left. No setting changes. Photos an earlier Retry
+left `PENDING_UPLOAD` still hold their places; nothing frees them.
+
+**Rolling back.** To RD-5b's build: safe. Retry again asks for the file
+and makes a new photo, and a failed photo completed again is not checked
+against the limit.
