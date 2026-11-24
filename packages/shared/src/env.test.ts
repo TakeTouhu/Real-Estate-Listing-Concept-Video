@@ -263,6 +263,36 @@ describe("serverEnvSchema", () => {
     expect(serverEnvSchema.safeParse({ ...base, NODE_ENV: "production", NODE_DEBUG: "" }).success).toBe(true);
   });
 
+  it("takes a ClamAV host and port, and refuses either by a message that repeats neither (ADR-0164)", () => {
+    const issuesOf = (settings: Record<string, string>): string[] => {
+      const result = serverEnvSchema.safeParse({ ...base, ...settings });
+      return result.success ? [] : result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+    };
+    expect(serverEnvSchema.parse({ ...base, CLAMAV_HOST: "clamav" })).toMatchObject({ CLAMAV_HOST: "clamav" });
+    expect(serverEnvSchema.parse({ ...base, CLAMAV_HOST: "clamav" }).CLAMAV_PORT).toBeUndefined();
+    for (const [CLAMAV_HOST, port] of [["127.0.0.1", "1"], ["fd00::7", "3310"], ["clamav.internal", "65535"]]) {
+      const env = serverEnvSchema.parse({ ...base, NODE_ENV: "production", CLAMAV_HOST, CLAMAV_PORT: port });
+      expect([env.CLAMAV_HOST, env.CLAMAV_PORT]).toEqual([CLAMAV_HOST, port]);
+    }
+    const badHost = "CLAMAV_HOST: CLAMAV_HOST must be a DNS name or an IP address, with no port";
+    for (const host of ["", "clamav:3310", "tcp://clamav", "[::1]", "clam av", "user@clamav"]) {
+      expect(issuesOf({ CLAMAV_HOST: host })).toEqual([badHost]);
+    }
+    const badPort = "CLAMAV_PORT: CLAMAV_PORT must be a whole number from 1 to 65535";
+    const ports = ["", "0", "65536", "99999", "999999", "abc", "3310.5", "03310", " 3310", "0x0cee", "1e3", "-1"];
+    for (const port of [...ports, "\uff13\uff13\uff11\uff10"]) {
+      expect(issuesOf({ CLAMAV_HOST: "clamav", CLAMAV_PORT: port })).toEqual([badPort]);
+    }
+    const needsHost = "CLAMAV_PORT: CLAMAV_HOST is required when CLAMAV_PORT is set";
+    expect(issuesOf({ CLAMAV_PORT: "3310" })).toEqual([needsHost]);
+    // A wrong port is refused beside the other refusals, and hides none of them.
+    expect(issuesOf({ CLAMAV_PORT: "0" })).toEqual([badPort, needsHost]);
+    expect(issuesOf({ CLAMAV_HOST: "clamav", CLAMAV_PORT: "0", SHARED_STORAGE_DIR: "relative" })).toEqual([
+      badPort,
+      "SHARED_STORAGE_DIR: SHARED_STORAGE_DIR must be an absolute path",
+    ]);
+  });
+
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);

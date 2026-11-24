@@ -72,8 +72,10 @@ passing clean photos and finding EICAR, a ZIP holding it behind a real
 JPEG, and that ZIP at the end of a photo as large as an upload may be;
 failing a photo past the daemon's limit and a scan no daemon answers; and
 an upload through `completeUpload` ending `READY`, `QUARANTINED` and
-`FAILED`. They are **excluded** from `pnpm test` and run explicitly, with
-a daemon on this machine and its port named:
+`FAILED`; and the web app's scanner, built from `CLAMAV_HOST` and
+`CLAMAV_PORT`, asking the daemon (ADR-0164). They are **excluded** from
+`pnpm test` and run explicitly, with a daemon on this machine and its
+port named:
 
 ```bash
 export CLAMAV_TEST_PORT=3310

@@ -29,7 +29,7 @@ const production = serverEnvSchema.parse({
 });
 
 /**
- * No environment passes until RD-5 and RD-6 add production adapters.
+ * No environment passes until RD-6 adds a production email adapter.
  * This list and environment stand for one that does: every chosen adapter
  * allowed, every setting set.
  */
@@ -100,6 +100,23 @@ describe("productionStartProblems", () => {
     });
     expect(productionStartProblems(google)).toEqual([
       'malware scanning: "passthrough" is not a production adapter',
+      "email: none is configured, so sign-up cannot send its verification link",
+    ]);
+  });
+
+  it("allows a ClamAV daemon, and only it, for malware scanning (ADR-0164)", () => {
+    expect(PRODUCTION_ADAPTERS.malwareScanner).toEqual(["clamav"]);
+    const scanned = serverEnvSchema.parse({
+      ...base,
+      NODE_ENV: "production",
+      DATABASE_URL: "postgresql://user:password@db.internal:5432/app",
+      MFA_SECRET_KEY: "11".repeat(32),
+      APP_BASE_URL: "https://app.example.com",
+      GOOGLE_CLOUD_STORAGE_BUCKET: "vtavision-objects",
+      CLAMAV_HOST: "clamav.internal",
+      CLAMAV_PORT: "3311",
+    });
+    expect(productionStartProblems(scanned)).toEqual([
       "email: none is configured, so sign-up cannot send its verification link",
     ]);
   });
@@ -215,6 +232,24 @@ describe("NODE_DEBUG (ADR-0158 Decision 6, ADR-0159)", () => {
     const { start: other, reports: otherReports } = recorded(() => serverEnvSchema.parse({ ...raw, NODE_ENV: "test" }));
     checkWebStart(other, allowingTodays);
     expect(otherReports.join("\n")).toContain('NODE_ENV is not "production", but this is a production build');
+  });
+});
+
+describe("the ClamAV settings (ADR-0164)", () => {
+  it("end a production start they are wrong for, with the schema's lines, naming neither value", () => {
+    const raw = { ...base, NODE_ENV: "production" as const, CLAMAV_HOST: "marker-host:3310", CLAMAV_PORT: "99999" };
+    vi.stubEnv("NODE_ENV", "production");
+    resetServerEnvCache();
+    const { start, reports, exits } = recorded(() => loadServerEnv(raw));
+    checkWebStart(start, allowingTodays);
+    expect(exits).toEqual([1]);
+    expect(reports).toEqual([
+      "The web app cannot start in production. Invalid server environment configuration:\n" +
+        "  - CLAMAV_HOST: CLAMAV_HOST must be a DNS name or an IP address, with no port\n" +
+        "  - CLAMAV_PORT: CLAMAV_PORT must be a whole number from 1 to 65535",
+    ]);
+    expect(reports.join("\n")).not.toMatch(/marker|99999/);
+    resetServerEnvCache();
   });
 });
 

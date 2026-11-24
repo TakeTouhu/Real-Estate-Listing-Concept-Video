@@ -17,8 +17,11 @@ export interface WebAdapterChoice {
    * process's own memory (ADR-0008).
    */
   readonly storage: "gcs" | "gcs-emulator" | "shared-folder" | "memory";
-  /** The test scanner, which knows only the EICAR test file (ADR-0008). */
-  readonly malwareScanner: "passthrough";
+  /**
+   * The ClamAV daemon `CLAMAV_HOST` names (ADR-0163, ADR-0164), or the test
+   * scanner, which knows only the EICAR test file (ADR-0008).
+   */
+  readonly malwareScanner: "clamav" | "passthrough";
   /** The development outbox (ADR-0126), or none: then no email is sent (ADR-0129). */
   readonly email: "outbox" | "none";
   /** The offline analysis (ADR-0009). */
@@ -39,7 +42,7 @@ function storageOf(env: ServerEnv): WebAdapterChoice["storage"] {
 export function chooseWebAdapters(env: ServerEnv): WebAdapterChoice {
   return {
     storage: storageOf(env),
-    malwareScanner: "passthrough",
+    malwareScanner: env.CLAMAV_HOST !== undefined ? "clamav" : "passthrough",
     email: env.EMAIL_OUTBOX_DIR !== undefined ? "outbox" : "none",
     imageAnalysis: env.ANALYSIS_PROVIDER,
     promptModeration: "offline",

@@ -68,7 +68,7 @@ export function e2eDatabaseUrl(source: NodeJS.ProcessEnv = process.env): string 
  * The environment of the web app and of every command the test runs: one
  * database, one shared folder and one signing secret, so a photo the web app
  * stored is the one a command reads, and one outbox. Refused under
- * `NODE_ENV=production`, and beside a Cloud Storage setting.
+ * `NODE_ENV=production`, and beside a Cloud Storage or ClamAV setting.
  */
 export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   if (source.NODE_ENV === "production") {
@@ -79,6 +79,10 @@ export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<
     throw new Error(
       "The browser test keeps objects in its own folder: unset GOOGLE_CLOUD_STORAGE_BUCKET and _ENDPOINT",
     );
+  }
+  // It runs no daemon: a setting from the shell would have its uploads scanned by one it does not start (ADR-0164).
+  if (source.CLAMAV_HOST !== undefined || source.CLAMAV_PORT !== undefined) {
+    throw new Error("The browser test scans with the test scanner: unset CLAMAV_HOST and CLAMAV_PORT");
   }
   return {
     DATABASE_URL: e2eDatabaseUrl(source),

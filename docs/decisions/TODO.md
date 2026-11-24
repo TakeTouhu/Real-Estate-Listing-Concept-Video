@@ -215,7 +215,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       *Amended in RD-4c (ADR-0162): the development pipeline builds the
       worker's view on the emulator; nothing builds it in production. The
       item still closes at part 2.*
-- [ ] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
+- [x] Replace `PassthroughMalwareScanner` with a real scanning engine (ClamAV or
       an approved vendor) behind the `MalwareScanner` port. Still required — the
       guard blocks production use, it does not provide real scanning.
       **Decision recorded (ADR-0054 Decision 5): production malware scanning is
@@ -227,6 +227,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       verdict; nothing builds the scanner yet. RD-5b gives it to the web
       app, the only caller; what a deployment needs is under "Open in
       RD-5a".*
+      *Amended in RD-5b (ADR-0164): done. The web app scans with ClamAV
+      when `CLAMAV_HOST` names a daemon, and a production start allows
+      ClamAV alone for malware scanning, so the test scanner cannot serve
+      production. Setting up clamd for the deployment stays open under
+      "Open in RD-5a".*
 - [ ] Extend the production-safety guard to boot-time validation of the whole
       adapter set, so a misconfigured production deployment fails before serving
       any traffic rather than on first use (Phase 7 hardening). *Done for the
