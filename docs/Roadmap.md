@@ -1202,6 +1202,14 @@ scan that could not be completed is logged by its code alone. No readiness
 probe asks the daemon. The browser test refuses both settings. RD-5 is
 complete.
 
+**RD-5c — the upload panel's Retry** (ADR-0165, no migration): Retry
+tries the same photo instead of asking for a new one, so it no longer
+costs a new one of the Property's 20 places. A photo the server failed
+after storing its bytes is checked again from them; one whose bytes never
+arrived is sent the file again through the same photo's new link. A
+quarantined or rejected photo is offered no Retry. A failed photo, which
+holds no place, is tried again only where the Property has one left.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

@@ -96,16 +96,7 @@ export class AssetService {
         `File exceeds the maximum size of ${this.limits.maxFileSizeBytes} bytes`,
       );
     }
-    const active = await this.deps.assets.countActiveByProperty(
-      input.organizationId,
-      input.propertyId,
-    );
-    if (active >= this.limits.maxAssetsPerProperty) {
-      throw new AppError(
-        "VALIDATION_FAILED",
-        `This property already has the maximum of ${this.limits.maxAssetsPerProperty} photos`,
-      );
-    }
+    await this.assertPlaceLeft(input.organizationId, input.propertyId);
 
     const assetId = this.deps.ids.generate("ast");
     const storageKey = buildAssetStorageKey({
@@ -161,6 +152,8 @@ export class AssetService {
     if (asset.status !== "PENDING_UPLOAD" && asset.status !== "FAILED") {
       throw new AppError("VALIDATION_FAILED", `Asset is not awaiting upload (status ${asset.status})`);
     }
+    // A failed photo holds no place; tried again, it takes one, so only where one is left (ADR-0165).
+    if (asset.status === "FAILED") await this.assertPlaceLeft(organizationId, asset.propertyId);
 
     const data = await this.deps.storage.getObject(asset.storageKey);
     if (!data) {
@@ -380,6 +373,8 @@ export class AssetService {
     if (asset.status !== "PENDING_UPLOAD" && asset.status !== "FAILED") {
       throw new AppError("VALIDATION_FAILED", "Only pending or failed uploads can be retried");
     }
+    // Back to PENDING_UPLOAD, a failed photo takes a place again (ADR-0165).
+    if (asset.status === "FAILED") await this.assertPlaceLeft(organizationId, asset.propertyId);
     const originalKey = buildAssetStorageKey({
       organizationId,
       propertyId: asset.propertyId,
@@ -686,6 +681,21 @@ export class AssetService {
       resourceId: asset.id,
     });
     return updated;
+  }
+
+  /**
+   * Refuses when the Property's photos already fill every place it has. A
+   * photo takes one when its upload is requested, and a `FAILED` photo, which
+   * holds none, takes one again when it is tried again (ADR-0165).
+   */
+  private async assertPlaceLeft(organizationId: string, propertyId: string): Promise<void> {
+    const active = await this.deps.assets.countActiveByProperty(organizationId, propertyId);
+    if (active >= this.limits.maxAssetsPerProperty) {
+      throw new AppError(
+        "VALIDATION_FAILED",
+        `This property already has the maximum of ${this.limits.maxAssetsPerProperty} photos`,
+      );
+    }
   }
 
   private async fail(actorUserId: string, asset: MediaAsset, reason: string): Promise<MediaAsset> {

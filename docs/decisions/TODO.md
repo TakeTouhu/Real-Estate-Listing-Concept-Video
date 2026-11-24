@@ -2026,12 +2026,25 @@ into on 2026-11-17.
       photo `SCANNING`, holding one of the Property's places, and nothing
       frees it. A sweep needs a rule on when a scan is abandoned and a
       loop: the product owner's, and blocked by the rule on schedulers.
-- [ ] **Fix the upload panel's Retry before production.** Retry on a
+- [x] **Fix the upload panel's Retry before production.** Retry on a
       `FAILED` photo resets it to wait for its file, and choosing the file
       again makes a new asset, so the reset row keeps its place; with a
       scanner that can fail, an outage fills a Property.
       Retry should complete the photo again, which scans its stored bytes,
       and not show on `QUARANTINED`.
+      *Amended in RD-5c (ADR-0165): done. Retry completes a `FAILED`
+      photo again, sends a photo whose bytes never arrived the kept file
+      through the same photo's new link, and is not offered on
+      `QUARANTINED` or `REJECTED`; a `FAILED` photo is tried again only
+      where the Property has a place left. An upload abandoned after a
+      failed send still holds its place, the same question as photos left
+      `SCANNING`.*
+- [ ] **Make the per-Property photo limit hold under concurrent
+      requests.** A request for an upload link, and completing or retrying
+      a `FAILED` photo (ADR-0165), each count the Property's photos and
+      then change one; two at the same moment at 19 photos both pass and
+      leave 21. Counting inside the change, or a per-Property lock, would
+      close it.
 
 ## Open in RD-4b — what the staging sink's upload leaves open
 
