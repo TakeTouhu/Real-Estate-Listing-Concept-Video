@@ -7,6 +7,7 @@
     "vitest.integration.config.ts",
     "vitest.media.config.ts",
     "vitest.gcs.config.ts",
+    "vitest.clamav.config.ts",
     "playwright.config.ts",
     "tests/**/*.ts"
   ]

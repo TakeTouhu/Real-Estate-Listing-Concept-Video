@@ -60,6 +60,23 @@ export function isGoogleApiAddress(value: string): boolean {
   return host === "googleapis.com" || host.endsWith(".googleapis.com");
 }
 
+/** The port a ClamAV daemon listens on unless told otherwise, as its own configuration has it (ADR-0163). */
+export const CLAMAV_DEFAULT_PORT = 3310;
+
+/** A DNS name: labels of letters, digits and inner hyphens, 253 characters in all. An IPv4 address is one too. */
+const HOST_NAME =
+  /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
+
+/**
+ * Whether `value` can name a ClamAV daemon's host: a DNS name, an IPv4 address or an IPv6 address without
+ * brackets, and nothing else, so no port, path or user rides along. The one rule the adapter and, later, the
+ * environment share (ADR-0163).
+ */
+export function isClamAvHost(value: string): boolean {
+  if (HOST_NAME.test(value)) return true;
+  return value.includes(":") && !/[[\]/%@\s]/.test(value) && URL.canParse(`tcp://[${value}]`);
+}
+
 /**
  * Why an address is not an http(s) origin, or null when it is: no user, path,
  * query or fragment, so nothing built on it can lead anywhere else; https in

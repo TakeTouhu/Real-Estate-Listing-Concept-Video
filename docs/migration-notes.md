@@ -2900,3 +2900,25 @@ one.
 
 **Rolling back.** To RD-4b's build: safe. Its pipeline refuses to start
 without `SHARED_STORAGE_DIR`, and objects in the emulator stay there.
+
+## RD-5a — the ClamAV scanner
+
+**No migration** (ADR-0163). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing is built from it: the web app still
+uses the test scanner, and a production start is still refused. An
+upload whose scanner throws or answers an unknown verdict now ends
+`FAILED`; the test scanner does neither.
+
+**For the first deployment that uses it.** ADR-0163 Decision 6: clamd on
+a private network or a loopback sidecar, its port reachable from the web
+app alone, its limits never below the 1.5.5 defaults, `AlertBrokenMedia`
+off.
+
+**On a development machine.** Nothing changes unless the ClamAV suite is
+run: start a daemon on `127.0.0.1` and name its port in
+`CLAMAV_TEST_PORT` (`docs/local-setup.md`, section 5).
+
+**Rolling back.** To RD-4c's build: safe. Nothing stores anything new.
+A photo a throwing scanner would have failed would again be left
+`SCANNING`, as before.

@@ -195,11 +195,18 @@ export class AssetService {
         "UPLOADED",
       ),
     );
-    const scan = await this.deps.scanner.scan(data);
-    if (scan.verdict === "INFECTED") {
+    // Only CLEAN goes on: a scanner that throws, or answers anything else, fails the photo, so it is never
+    // left SCANNING and never processed unscanned (ADR-0163).
+    let verdict: string | undefined;
+    try {
+      verdict = (await this.deps.scanner.scan(data)).verdict;
+    } catch {
+      verdict = undefined;
+    }
+    if (verdict === "INFECTED") {
       return { asset: await this.quarantine(actorUserId, current), duplicateOf: [] };
     }
-    if (scan.verdict === "SCAN_FAILED") {
+    if (verdict !== "CLEAN") {
       return {
         asset: await this.fail(actorUserId, current, "Malware scan could not be completed"),
         duplicateOf: [],

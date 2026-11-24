@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   isCloudStorageBucketName,
+  isClamAvHost,
   isGoogleApiAddress,
   loadServerEnv,
   resetServerEnvCache,
@@ -265,6 +266,20 @@ describe("serverEnvSchema", () => {
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);
+  });
+});
+
+describe("isClamAvHost", () => {
+  it("takes a DNS name, an IPv4 address or an unbracketed IPv6 address, and nothing that carries more", () => {
+    const hosts = ["clamav", "clamav.internal", "a-b.c", "127.0.0.1", "10.0.0.7", "::1", "fd00::7", "2001:db8::1"];
+    for (const host of hosts) expect(isClamAvHost(host)).toBe(true);
+    const others = [
+      ...["", " ", "clamav:3310", "tcp://clamav", "clamav/scan", "user@clamav", "clam av", "clamav "],
+      ...["-clamav", "clamav-", "clamav..internal", "[::1]", "[::1]:3310", "fe80::1%eth0", "1:2", ":::"],
+      `${"a".repeat(64)}.internal`,
+      `${"a.".repeat(127)}ab`,
+    ];
+    for (const host of others) expect(isClamAvHost(host)).toBe(false);
   });
 });
 

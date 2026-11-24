@@ -63,9 +63,12 @@ class FakeStorage implements ObjectStorage {
 class FakeScanner implements MalwareScanner {
   /** How many times a scan actually ran — proves a lost guard stopped earlier. */
   scanned = 0;
+  /** Set, the scan throws it instead of answering. */
+  failure: Error | undefined = undefined;
   constructor(public verdict: ScanVerdict = "CLEAN") {}
   scan() {
     this.scanned += 1;
+    if (this.failure !== undefined) return Promise.reject(this.failure);
     return Promise.resolve({ verdict: this.verdict });
   }
 }
@@ -574,6 +577,20 @@ describe("upload security", () => {
     ctx.scanner.verdict = "SCAN_FAILED";
     const { asset: result } = await ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id);
     expect(result.status).toBe("FAILED");
+  });
+
+  it.each([
+    ["throws", (scanner: FakeScanner) => (scanner.failure = new Error("connection lost"))],
+    ["answers no verdict it knows", (scanner: FakeScanner) => (scanner.verdict = "MAYBE" as ScanVerdict)],
+  ])("fails the asset, never leaving it SCANNING or processing it, when the scanner %s", async (_, misbehave) => {
+    const { asset } = await request();
+    await ctx.storage.putObject(asset.storageKey, jpegBytes());
+    misbehave(ctx.scanner);
+    const { asset: result } = await ctx.assets.completeUpload(ctx.ownerId, ctx.orgId, asset.id);
+    expect([result.status, result.failureReason]).toEqual(["FAILED", "Malware scan could not be completed"]);
+    expect(ctx.images.processed).toBe(0);
+    const actions = (await ctx.deps.repos.auditLogs.listByOrganization(ctx.orgId)).map((a) => a.action);
+    expect(actions).toContain("asset.failed");
   });
 
   it("enforces minimum and maximum image dimensions", async () => {

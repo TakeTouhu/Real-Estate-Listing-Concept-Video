@@ -46,6 +46,9 @@ export { SharpImageProcessor, averageHashHex } from "./image-processor";
 export type { SharpImageProcessorOptions } from "./image-processor";
 export { PassthroughMalwareScanner } from "./scanner";
 export type { PassthroughMalwareScannerOptions } from "./scanner";
+/** The ClamAV daemon's scanner (ADR-0163). Nothing in either application constructs it yet. */
+export { CLAMAV_CHUNK_BYTES, CLAMAV_IDLE_LIMIT_MS, createClamAvScanner } from "./clamav-scanner";
+export type { ClamAvFailureCode, ClamAvScannerOptions } from "./clamav-scanner";
 
 /**
  * The dormant streaming managed-output transfer core (Phase 2H-3B-1).

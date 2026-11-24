@@ -49,6 +49,8 @@ export default defineConfig({
       "tests/media/**",
       // Cloud Storage emulator suites; run via vitest.gcs.config.ts.
       "tests/storage/**",
+      // ClamAV suites; run via vitest.clamav.config.ts.
+      "tests/scanner/**",
       // Browser tests; run by Playwright (playwright.config.ts).
       "tests/e2e/**/*.spec.ts",
     ],
