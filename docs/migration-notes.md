@@ -2922,3 +2922,24 @@ run: start a daemon on `127.0.0.1` and name its port in
 **Rolling back.** To RD-4c's build: safe. Nothing stores anything new.
 A photo a throwing scanner would have failed would again be left
 `SCANNING`, as before.
+
+## RD-5b — ClamAV in the web app
+
+**No migration** (ADR-0164). Migration 34 stays the last.
+
+**What changes at deploy.** Two optional settings, `CLAMAV_HOST` and
+`CLAMAV_PORT`. Unset, the web app scans with the test scanner and a
+production start is refused for it, as before. Set, it scans every upload
+with the daemon they name, and a production start allows it; the start is
+still refused for email until RD-6. A host with a port, or a port outside
+1 to 65535 or without a host, is refused as the web app starts.
+
+**For the first deployment that uses it.** ADR-0163 Decision 6, and an
+operator who reads the web app's log for `A malware scan could not be
+completed` and its `code`.
+
+**On a development machine.** Nothing changes unless `CLAMAV_HOST` is set
+(`docs/local-setup.md`). The browser test refuses both settings.
+
+**Rolling back.** To RD-5a's build: safe. The two settings are no longer
+read, and uploads are scanned by the test scanner again.

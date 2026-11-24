@@ -63,6 +63,9 @@ describe("the browser test's environment", () => {
     for (const name of ["GOOGLE_CLOUD_STORAGE_BUCKET", "GOOGLE_CLOUD_STORAGE_ENDPOINT"]) {
       expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, [name]: "set" })).toThrow("keeps objects in its own folder");
     }
+    for (const name of ["CLAMAV_HOST", "CLAMAV_PORT"]) {
+      expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, [name]: "set" })).toThrow("scans with the test scanner");
+    }
     expect(() => e2eEnvironment({ DATABASE_URL: "postgresql://u:p@db.example.com/x" })).toThrow("on this machine");
     expect(() => e2eEnvironment({})).toThrow("needs DATABASE_URL");
   });

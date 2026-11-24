@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer, type IncomingHttpHeaders } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createTcpServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import { outgoingEmail } from "@app/domain";
 import { AppError, serverEnvSchema } from "@app/shared";
 import { NonProductionAdapterError, readDevelopmentEmailOutbox } from "@app/storage";
 import { chooseWebAdapters } from "./adapter-choice";
-import { createWebAdapters } from "./adapters";
+import { createWebAdapters, loggingScanFailures, scanFailureCode } from "./adapters";
 
 /** Which adapters the web app takes, from its environment alone (RD-1, ADR-0150; ADR-0085, ADR-0126). */
 const base = {
@@ -169,6 +169,136 @@ describe("the web app's Cloud Storage (ADR-0159)", () => {
     }
     // The mailer makes its own for each email, and never asks it for storage.
     expect(naming(/createWebAdapters\(/).sort()).toEqual(["lib/adapters.ts", "lib/mailer.ts"]);
+  });
+});
+
+describe("the web app's ClamAV scanner (ADR-0164)", () => {
+  type StandIn = { port: number; connections: () => number; close: () => Promise<void> };
+  /**
+   * A stand-in daemon on this machine that reads one scan to its zero-length chunk, then gives `answer`, and
+   * counts the connections it was given.
+   */
+  async function daemon(answer: string): Promise<StandIn> {
+    let connections = 0;
+    const server = createTcpServer((socket) => {
+      connections += 1;
+      let seen = Buffer.alloc(0);
+      socket.on("data", (chunk: Buffer) => {
+        seen = Buffer.concat([seen, chunk]);
+        if (seen.length > 14 && seen.subarray(-4).equals(Buffer.alloc(4))) socket.end(`${answer}\0`);
+      });
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const { port } = server.address() as AddressInfo;
+    return { port, connections: () => connections, close: () => new Promise((done) => server.close(() => done())) };
+  }
+  const scannerFor = (port: number) =>
+    createWebAdapters(serverEnvSchema.parse({ ...base, CLAMAV_HOST: "127.0.0.1", CLAMAV_PORT: String(port) }));
+
+  it("takes the daemon CLAMAV_HOST names, and the test scanner otherwise", () => {
+    expect(chooseWebAdapters(serverEnvSchema.parse({ ...base, CLAMAV_HOST: "clamav" })).malwareScanner).toBe("clamav");
+    expect(chooseWebAdapters(serverEnvSchema.parse(base)).malwareScanner).toBe("passthrough");
+  });
+
+  it("is built in production, once, connecting to nothing as it is built", async () => {
+    const stand = await daemon("stream: OK");
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const settings = { NODE_ENV: "production", CLAMAV_HOST: "127.0.0.1", CLAMAV_PORT: String(stand.port) };
+      const adapters = createWebAdapters(serverEnvSchema.parse({ ...base, ...settings }));
+      expect(adapters.choice.malwareScanner).toBe("clamav");
+      expect(adapters.malwareScanner()).toBe(adapters.malwareScanner());
+      // A connection would have been taken by now.
+      await new Promise((settled) => setImmediate(settled));
+      await new Promise((settled) => setImmediate(settled));
+      expect(stand.connections()).toBe(0);
+      // The same scanner connects once it scans.
+      expect(await adapters.malwareScanner().scan(new Uint8Array([1]))).toEqual({ verdict: "CLEAN" });
+      expect(stand.connections()).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+      await stand.close();
+    }
+  });
+
+  it("asks the daemon, at the port given", async () => {
+    const cases = [["stream: OK", "CLEAN"], ["stream: Eicar-Signature FOUND", "INFECTED"]] as const;
+    for (const [answer, verdict] of cases) {
+      const stand = await daemon(answer);
+      try {
+        expect(await scannerFor(stand.port).malwareScanner().scan(new Uint8Array([1, 2, 3]))).toEqual({ verdict });
+      } finally {
+        await stand.close();
+      }
+    }
+  });
+
+  it("logs each scan that could not be completed by its code alone", async () => {
+    const lines: Record<string, unknown>[] = [];
+    vi.spyOn(console, "log").mockImplementation((line: string) => lines.push(JSON.parse(line)));
+    try {
+      const stand = await daemon("stream: Eicar-Signature FOUND");
+      await stand.close();
+      // Nothing listens there now: the connection is refused.
+      const result = await scannerFor(stand.port).malwareScanner().scan(new Uint8Array([1]));
+      expect(result).toEqual({ verdict: "SCAN_FAILED", detail: "ECONNREFUSED" });
+      const line = { level: "warn", component: "malware-scan", message: "A malware scan could not be completed" };
+      expect(lines).toEqual([{ ...line, code: "ECONNREFUSED", time: expect.any(String) }]);
+      expect(JSON.stringify(lines)).not.toContain(String(stand.port));
+      // A scan that ends in a verdict logs nothing: the daemon's detection, and the test scanner's, detail and all.
+      const found = await daemon("stream: Eicar-Signature FOUND");
+      try {
+        const verdict = await scannerFor(found.port).malwareScanner().scan(new Uint8Array([1]));
+        expect(verdict).toEqual({ verdict: "INFECTED" });
+      } finally {
+        await found.close();
+      }
+      const passthrough = createWebAdapters(serverEnvSchema.parse(base)).malwareScanner();
+      await passthrough.scan(new Uint8Array([1]));
+      const eicar = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+      expect((await passthrough.scan(new TextEncoder().encode(eicar))).verdict).toBe("INFECTED");
+      expect(lines).toHaveLength(1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("logs another scanner's detail only by the code it filters to, never the detail itself", async () => {
+    const lines: Record<string, unknown>[] = [];
+    vi.spyOn(console, "log").mockImplementation((line: string) => lines.push(JSON.parse(line)));
+    try {
+      const detail = "connect ECONNREFUSED 10.0.0.7:3310";
+      const scanner = loggingScanFailures({ scan: () => Promise.resolve({ verdict: "SCAN_FAILED", detail }) });
+      // The verdict and its detail reach the domain unchanged; only the log is filtered.
+      expect(await scanner.scan(new Uint8Array([1]))).toEqual({ verdict: "SCAN_FAILED", detail });
+      expect(lines).toEqual([expect.objectContaining({ component: "malware-scan", code: "UNEXPECTED" })]);
+      expect(JSON.stringify(lines)).not.toMatch(/10\.0\.0\.7|3310|ECONNREFUSED/);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("leaves the verdict as it was when the log cannot be written", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {
+      throw new Error("the log is closed");
+    });
+    try {
+      const idle = { verdict: "SCAN_FAILED", detail: "CLAMAV_IDLE" } as const;
+      const scanner = loggingScanFailures({ scan: () => Promise.resolve(idle) });
+      expect(await scanner.scan(new Uint8Array([1]))).toEqual({ verdict: "SCAN_FAILED", detail: "CLAMAV_IDLE" });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("logs a code only when it is one plain word of capitals, digits and underscores, 40 at most", () => {
+    for (const code of ["CLAMAV_IDLE", "ECONNREFUSED", "P1001", "A".repeat(40)]) {
+      expect(scanFailureCode(code)).toBe(code);
+    }
+    const others = [undefined, "", "connect ECONNREFUSED 10.0.0.7:3310", "Eicar-Signature", "A".repeat(41)];
+    for (const detail of [...others, "eicar", "10.0.0.7", "HOST:3310", "_X", "CLAMAV IDLE"]) {
+      expect(scanFailureCode(detail)).toBe("UNEXPECTED");
+    }
   });
 });
 

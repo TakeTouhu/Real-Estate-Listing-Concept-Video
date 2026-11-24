@@ -228,11 +228,12 @@ describe("who builds it", () => {
     });
   }
 
-  it("is built by nothing in either application or any package yet (ADR-0163)", () => {
+  it("is built by the web app's adapters alone, and never by the worker (ADR-0164)", () => {
     const files = [...sources(join(REPO_ROOT, "apps")), ...sources(join(REPO_ROOT, "packages"))];
     expect(files.map(({ name }) => name)).toContain("apps/web/src/lib/adapters.ts");
     const naming = files.filter(({ text }) => /createClamAvScanner|clamav-scanner/.test(text));
     expect(naming.map(({ name }) => name).sort()).toEqual([
+      "apps/web/src/lib/adapters.ts",
       "packages/storage/src/clamav-scanner.ts",
       "packages/storage/src/index.ts",
     ]);

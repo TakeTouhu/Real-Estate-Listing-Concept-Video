@@ -63,14 +63,22 @@ export function isGoogleApiAddress(value: string): boolean {
 /** The port a ClamAV daemon listens on unless told otherwise, as its own configuration has it (ADR-0163). */
 export const CLAMAV_DEFAULT_PORT = 3310;
 
+/** The one refusal of a ClamAV port, which repeats no value (ADR-0164). */
+const CLAMAV_PORT_MESSAGE = "CLAMAV_PORT must be a whole number from 1 to 65535";
+
+/** Whether `value` is a TCP port in plain digits, 1 to 65535, with no sign, space or leading zero (ADR-0164). */
+export function isClamAvPort(value: string): boolean {
+  return /^[1-9][0-9]{0,4}$/.test(value) && Number(value) <= 65_535;
+}
+
 /** A DNS name: labels of letters, digits and inner hyphens, 253 characters in all. An IPv4 address is one too. */
 const HOST_NAME =
   /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
 
 /**
  * Whether `value` can name a ClamAV daemon's host: a DNS name, an IPv4 address or an IPv6 address without
- * brackets, and nothing else, so no port, path or user rides along. The one rule the adapter and, later, the
- * environment share (ADR-0163).
+ * brackets, and nothing else, so no port, path or user rides along. The one rule the adapter and the
+ * environment share (ADR-0163, ADR-0164).
  */
 export function isClamAvHost(value: string): boolean {
   if (HOST_NAME.test(value)) return true;
@@ -146,6 +154,20 @@ export const serverEnvSchema = z
     // development never uses Google's own store or its token. Refused in
     // production, and refused without a bucket.
     GOOGLE_CLOUD_STORAGE_ENDPOINT: z.string().url().optional(),
+
+    // The ClamAV daemon that scans each uploaded photo (ADR-0164): a DNS name
+    // or an IP address, with no port (`isClamAvHost`, the adapter's rule too).
+    // Set, the web app asks it in every environment; unset, it scans with the
+    // test scanner, which a production start refuses.
+    CLAMAV_HOST: z
+      .string()
+      .refine(isClamAvHost, "CLAMAV_HOST must be a DNS name or an IP address, with no port")
+      .optional(),
+
+    // The daemon's TCP port, 3310 unless set (ADR-0164): plain digits, kept
+    // as text, so a wrong port is refused beside every other refusal rather
+    // than in their place. Refused without a host, which it is read beside.
+    CLAMAV_PORT: z.string().refine(isClamAvPort, CLAMAV_PORT_MESSAGE).optional(),
 
     // The folder the product's emails are written to instead of being sent,
     // in development and CI only (ADR-0126). Absolute, for the same reason as
@@ -279,6 +301,15 @@ export const serverEnvSchema = z
       if (bucket === undefined) {
         storageIssue("BUCKET", "GOOGLE_CLOUD_STORAGE_BUCKET is required when GOOGLE_CLOUD_STORAGE_ENDPOINT is set");
       }
+    }
+
+    // No ClamAV message repeats a value, which the start check prints (ADR-0164).
+    if (env.CLAMAV_PORT !== undefined && env.CLAMAV_HOST === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["CLAMAV_PORT"],
+        message: "CLAMAV_HOST is required when CLAMAV_PORT is set",
+      });
     }
 
     // Any value: which names write what is Node.js's to change. An empty value names nothing.

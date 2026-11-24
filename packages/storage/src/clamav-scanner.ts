@@ -76,7 +76,8 @@ function verdictOf(answer: string): ScanResult {
  * other answer, and every failed, refused, quiet or closed connection, is `SCAN_FAILED` with a code. A scan never
  * throws, so a photo is never left being scanned.
  *
- * Built with no connection, and nothing here starts anything by itself. Nothing builds it yet (ADR-0163).
+ * Built with no connection, and nothing here starts anything by itself. The web app's adapters build it when
+ * `CLAMAV_HOST` names a daemon (ADR-0164).
  */
 export function createClamAvScanner(options: ClamAvScannerOptions): MalwareScanner {
   // Neither refusal repeats what was given.

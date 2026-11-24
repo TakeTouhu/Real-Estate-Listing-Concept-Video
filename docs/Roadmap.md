@@ -1192,6 +1192,16 @@ leaving it `SCANNING`. CI's `storage` job runs a pinned ClamAV beside the
 emulator, and the suite finds EICAR in a ZIP behind a real JPEG. Nothing
 builds the scanner yet: RD-5b gives it to the web app.
 
+**RD-5b — ClamAV in the web app** (ADR-0164, no migration):
+`CLAMAV_HOST` names the daemon, a DNS name or an IP address with no port,
+and `CLAMAV_PORT` its port, 3310 unless set. With a host, the web app
+scans every upload with ClamAV, in any environment; without one, with the
+test scanner, as before. A production start now allows ClamAV, and only
+it, for malware scanning; it is still refused for email until RD-6. Each
+scan that could not be completed is logged by its code alone. No readiness
+probe asks the daemon. The browser test refuses both settings. RD-5 is
+complete.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

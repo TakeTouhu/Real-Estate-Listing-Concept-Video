@@ -10,7 +10,9 @@ import {
   sniffMimeType,
 } from "@app/domain";
 import { createTestDeps, InMemoryMediaAssetRepository, InMemoryPropertyRepository } from "@app/domain/testing";
+import { serverEnvSchema } from "@app/shared";
 import { LocalObjectStorage, SharpImageProcessor, createClamAvScanner } from "@app/storage";
+import { createWebAdapters } from "../../apps/web/src/lib/adapters";
 import { clamAvTestPort, EICAR, plainPng, storedZip } from "./clamav";
 
 /** Read as the file loads, so a run without the daemon's port fails before any test runs. */
@@ -118,5 +120,24 @@ describe("an upload scanned by the daemon", () => {
     expect((await upload(disguised, PORT)).status).toBe("QUARANTINED");
     const failed = await upload(clean, await closedPort());
     expect([failed.status, failed.failureReason]).toEqual(["FAILED", "Malware scan could not be completed"]);
+  });
+});
+
+describe("the web app's scanner, built from its settings (ADR-0164)", () => {
+  // CI's port is the default, so the web app's own suite proves CLAMAV_PORT is read.
+  it("asks the daemon CLAMAV_HOST names", async () => {
+    const env = serverEnvSchema.parse({
+      SESSION_SECRET: "session-secret-abcdef123456",
+      HEALTHCHECK_API_TOKEN: "healthcheck-token-abcdef123456",
+      STORAGE_SIGNING_SECRET: "storage-signing-secret-abc",
+      NODE_ENV: "test",
+      CLAMAV_HOST: "127.0.0.1",
+      CLAMAV_PORT: String(PORT),
+    });
+    const adapters = createWebAdapters(env);
+    expect(adapters.choice.malwareScanner).toBe("clamav");
+    const disguised = Buffer.concat([await photo("jpeg"), storedZip("eicar.com", EICAR)]);
+    expect(await adapters.malwareScanner().scan(new Uint8Array(await photo("jpeg")))).toEqual({ verdict: "CLEAN" });
+    expect(await adapters.malwareScanner().scan(new Uint8Array(disguised))).toEqual({ verdict: "INFECTED" });
   });
 });

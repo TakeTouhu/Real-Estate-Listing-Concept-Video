@@ -8,6 +8,7 @@ import {
   type PromptModerator,
 } from "@app/domain";
 import { createImageAnalysisProvider } from "@app/ai-providers";
+import { createLogger, type Logger } from "@app/observability";
 import { AppError, GOOGLE_CLOUD_STORAGE_ORIGIN, type ServerEnv } from "@app/shared";
 import { createGoogleCloudStorage } from "@app/storage/google-cloud-storage";
 import {
@@ -15,6 +16,7 @@ import {
   LocalObjectStorage,
   PassthroughMalwareScanner,
   SharpImageProcessor,
+  createClamAvScanner,
   createDevelopmentEmailOutbox,
   createSharedFolderStorage,
 } from "@app/storage";
@@ -37,6 +39,38 @@ export interface WebAdapters {
    * no email is configured.
    */
   readonly email: () => EmailSender | null;
+}
+
+let logger: Logger | undefined;
+const log = (): Logger => (logger ??= createLogger({ base: { component: "malware-scan" } }));
+
+/**
+ * A short code for why a scan did not end in a verdict: its `detail` when that
+ * is one plain word, as the ClamAV adapter's codes are, and `UNEXPECTED`
+ * otherwise, so no message, host or signature's name is logged (ADR-0164).
+ */
+export function scanFailureCode(detail: string | undefined): string {
+  return detail !== undefined && /^[A-Z0-9][A-Z0-9_]{0,39}$/.test(detail) ? detail : "UNEXPECTED";
+}
+
+/**
+ * The scanner, with each scan that ended `SCAN_FAILED` logged by its code: the
+ * photo fails, and its owner sees only that the scan could not be completed.
+ */
+export function loggingScanFailures(scanner: MalwareScanner): MalwareScanner {
+  return {
+    async scan(data) {
+      const result = await scanner.scan(data);
+      if (result.verdict === "SCAN_FAILED") {
+        try {
+          log().warn("A malware scan could not be completed", { code: scanFailureCode(result.detail) });
+        } catch {
+          // The verdict stands whether or not the log could be written.
+        }
+      }
+      return result;
+    },
+  };
 }
 
 function once<T>(build: () => T): () => T {
@@ -85,7 +119,15 @@ export function createWebAdapters(env: ServerEnv): WebAdapters {
         ? createSharedFolderStorage({ root: env.SHARED_STORAGE_DIR, secret, nodeEnv: nodeEnv() }).objectStorage
         : new LocalObjectStorage({ secret, nodeEnv: nodeEnv() });
     }),
-    malwareScanner: once(() => new PassthroughMalwareScanner({ nodeEnv: nodeEnv() })),
+    malwareScanner: once(() => {
+      // The daemon is a production adapter, used wherever it is named; the test scanner refuses production.
+      const host = env.CLAMAV_HOST;
+      return loggingScanFailures(
+        host !== undefined
+          ? createClamAvScanner({ host, port: env.CLAMAV_PORT === undefined ? undefined : Number(env.CLAMAV_PORT) })
+          : new PassthroughMalwareScanner({ nodeEnv: nodeEnv() }),
+      );
+    }),
     images: once(() => new SharpImageProcessor()),
     imageAnalysis: once(() => createImageAnalysisProvider(env)),
     promptModerator: once(() => createOfflinePromptModerator()),

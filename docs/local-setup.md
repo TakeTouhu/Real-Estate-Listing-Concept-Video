@@ -369,6 +369,11 @@ pnpm test:clamav   # vitest.clamav.config.ts
 
 Without that variable the run fails. CI runs them in the `storage` job.
 
+The same daemon can scan the web app's uploads (ADR-0164): set
+`CLAMAV_HOST=127.0.0.1` in `.env.local`, and `CLAMAV_PORT` if it is not
+3310. Unset, the web app uses the test scanner. The browser test refuses
+both settings, as it runs no daemon.
+
 ### Browser tests
 
 The browser test (ADR-0121) drives the web app in Playwright's Chromium. It

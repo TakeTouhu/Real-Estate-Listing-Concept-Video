@@ -14,9 +14,11 @@ export const PRODUCTION_ADAPTERS: ProductionAdapters = {
   // Google's own Cloud Storage (ADR-0159). An emulator, the shared folder and
   // memory refuse production when built (ADR-0008, ADR-0085).
   storage: ["gcs"],
-  // Each has development adapters only, which refuse production when built
-  // (ADR-0008, ADR-0126). RD-5 and RD-6 add production ones.
-  malwareScanner: [],
+  // A ClamAV daemon (ADR-0164). The test scanner refuses production when
+  // built (ADR-0008).
+  malwareScanner: ["clamav"],
+  // Development adapters only, which refuse production when built
+  // (ADR-0126). RD-6 adds a production one.
   email: [],
   // Not refused in production: no decision keeps them out (ADR-0150 Decision 3).
   imageAnalysis: ["deterministic"],
