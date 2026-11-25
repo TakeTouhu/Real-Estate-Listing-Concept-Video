@@ -11,7 +11,7 @@ import {
   totpStep,
 } from "@app/domain";
 import { InMemoryRateLimitStore, createTestDeps, type TestDeps } from "@app/domain/testing";
-import { RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
+import { AppError, RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
 import { readDevelopmentEmailOutbox } from "@app/storage";
 
 /**
@@ -285,6 +285,70 @@ describe("the verification email limit (ADR-0172)", () => {
     cookie.value = sessionCookie(response);
     expect(cookie.value).toBeDefined();
     expect(location(await resend(form({})))).toEqual({ path: "/verify-email", notice: "not-sent", error: null });
+    expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
+  });
+});
+
+describe("the sign-up limit (ADR-0173)", () => {
+  const REFUSED = "Too many sign-ups. Try again in 60 minutes.";
+  const limitWith = (store: ConstructorParameters<typeof WebRateLimits>[0], trusted?: string) => {
+    const settings = {
+      ...RATE_LIMIT_DEFAULTS,
+      RATE_LIMIT_SIGN_UP_PER_IP: "2/3600",
+      SESSION_SECRET: "x".repeat(32),
+      FORWARDED_FOR_TRUSTED_ENTRIES: trusted,
+    };
+    limits.value = new WebRateLimits(store, settings, { warn: () => undefined });
+  };
+  const from = (ip: string, email: string) =>
+    new Request("http://localhost/api/auth/register", {
+      method: "POST",
+      headers: { "x-forwarded-for": ip },
+      body: new URLSearchParams({ name: "New", email, password: PASSWORD }),
+    });
+  const failing = (error: Error) => ({
+    hit: () => Promise.reject(error),
+    giveBack: async () => {},
+    forget: async () => {},
+  });
+
+  it("counts every sign-up per client address, and refuses the next before the form is read", async () => {
+    limitWith(new InMemoryRateLimitStore(), "1");
+    expect(location(await register(from("203.0.113.7", "first@example.com"))).path).toBe("/verify-email");
+    // A sign-up that fails is counted too: nothing gives a hit back.
+    expect(location(await register(from("203.0.113.7", "first@example.com"))).error).toBe(
+      "Email is already registered",
+    );
+    const request = from("203.0.113.7", "third@example.com");
+    const read = vi.spyOn(request, "formData");
+    const refused = await register(request);
+    expect(location(refused)).toEqual({ path: "/login", notice: null, error: REFUSED });
+    expect(read).not.toHaveBeenCalled();
+    expect(refused.headers.get("set-cookie")).toBeNull();
+    expect(await deps.repos.users.findByEmail("third@example.com")).toBeNull();
+    expect(await mailedTokens("third@example.com")).toEqual([]);
+    // Another client address is counted on its own, and the window's end lets the first one through.
+    expect(location(await register(from("198.51.100.1", "fourth@example.com"))).path).toBe("/verify-email");
+    deps.clock.advanceSeconds(3600);
+    expect(location(await register(from("203.0.113.7", "third@example.com"))).path).toBe("/verify-email");
+  });
+
+  it("counts nothing when the request has no client address", async () => {
+    limitWith(new InMemoryRateLimitStore());
+    for (const email of ["a@example.com", "b@example.com", "c@example.com"]) {
+      expect(location(await register(from("203.0.113.7", email))).path).toBe("/verify-email");
+    }
+  });
+
+  it("refuses with its own answer, never the limiter's text, making no account, when the limiter fails", async () => {
+    const internal = new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row");
+    for (const error of [new Error("down"), internal]) {
+      limitWith(failing(error), "1");
+      const refused = await register(from("203.0.113.7", "new@example.com"));
+      expect(location(refused)).toEqual({ path: "/login", notice: null, error: "Registration failed" });
+      expect(refused.headers.get("set-cookie")).toBeNull();
+    }
+    expect(await deps.repos.users.findByEmail("new@example.com")).toBeNull();
     expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RateLimitStore } from "@app/domain";
 import { InMemoryRateLimitStore } from "@app/domain/testing";
-import { RATE_LIMIT_DEFAULTS, rateLimitSubject, rateLimitSubjectKey } from "@app/shared";
+import { AppError, RATE_LIMIT_DEFAULTS, rateLimitSubject, rateLimitSubjectKey } from "@app/shared";
 
 /**
  * The web app's abuse limits (ADR-0171, ADR-0172): the refusal's minutes, the
@@ -21,7 +21,9 @@ vi.mock("./env", () => ({
   getServerEnv: () => ({ ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: SECRET, DATABASE_URL: "postgresql://app@db/app" }),
 }));
 
-const { getRateLimiter, refusalMessage, refusalMinutes, WebRateLimits } = await import("./rate-limit");
+const { getRateLimiter, refusalMessage, refusalMinutes, WebRateLimits, withoutLimiterText } = await import(
+  "./rate-limit"
+);
 
 const NOW = new Date("2026-11-25T09:00:00.000Z");
 const after = (seconds: number) => new Date(NOW.getTime() + seconds * 1000);
@@ -41,6 +43,7 @@ describe("a refusal's text", () => {
     expect(refusalMessage("SIGN_IN", after(900), NOW)).toBe("Too many sign-in attempts. Try again in 15 minutes.");
     expect(refusalMessage("MFA_CODE", after(61), NOW)).toBe("Too many wrong codes. Try again in 2 minutes.");
     expect(refusalMessage("MFA_CODE", after(30), NOW)).toBe("Too many wrong codes. Try again in 1 minute.");
+    expect(refusalMessage("SIGN_UP", after(3600), NOW)).toBe("Too many sign-ups. Try again in 60 minutes.");
   });
 });
 
@@ -103,6 +106,11 @@ describe("a refusal", () => {
     });
     for (let i = 0; i < 3; i += 1) await limits.verificationEmail("person@example.com", NOW);
     expect(await limits.verificationEmail("person@example.com", NOW)).toEqual({ allowed: false, minutes: 60 });
+    for (let i = 0; i < 60; i += 1) expect((await limits.signUp(headers("198.51.100.9"), NOW)).allowed).toBe(true);
+    expect(await limits.signUp(headers("198.51.100.9"), after(60))).toEqual({
+      allowed: false,
+      message: "Too many sign-ups. Try again in 59 minutes.",
+    });
     expect(log.warn.mock.calls).toEqual([
       ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "SIGN_IN", dimension: "client" }],
       ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "MFA_CODE", dimension: "user" }],
@@ -114,9 +122,10 @@ describe("a refusal", () => {
         "An attempt was refused by a rate limit",
         { code: "RATE_LIMITED", action: "VERIFICATION_EMAIL", dimension: "address" },
       ],
+      ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "SIGN_UP", dimension: "client" }],
     ]);
     const logged = JSON.stringify(log.warn.mock.calls);
-    const named = ["203.0.113.7", "198.51.100.1", "example.com", "user-1", subject("client", "v4:203.0.113.7")];
+    const named = ["203.0.113.7", "198.51.100.", "example.com", "user-1", subject("client", "v4:203.0.113.7")];
     for (const secret of named) {
       expect(logged).not.toContain(secret);
     }
@@ -175,6 +184,25 @@ describe("one attempt's keys", () => {
     calls.length = 0;
     expect((await limits.passwordResetEmail(headers("203.0.113.7"), "other@example.com", NOW)).allowed).toBe(false);
     expect(calls).toEqual(["hit client"]);
+  });
+
+  it("count a sign-up by its client address alone, giving nothing back, and not at all without one", async () => {
+    const { calls, limits } = recorded();
+    expect(await limits.signUp(headers("203.0.113.7"), NOW)).toEqual({ allowed: true });
+    expect(calls).toEqual(["hit client"]);
+    calls.length = 0;
+    expect(await limits.signUp(headers(), NOW)).toEqual({ allowed: true });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("a limiter's failure", () => {
+  it("reaches a route as a plain error, never with the limiter's own text", async () => {
+    const internal = new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row");
+    const caught: unknown = await withoutLimiterText(Promise.reject(internal)).catch((error: unknown) => error);
+    expect(caught).not.toBeInstanceOf(AppError);
+    expect(String(caught)).not.toContain("no row");
+    expect(await withoutLimiterText(Promise.resolve("answer"))).toBe("answer");
   });
 });
 

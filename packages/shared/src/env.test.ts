@@ -409,7 +409,7 @@ describe("serverEnvSchema", () => {
       return result.success ? [] : result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
     };
 
-    it("names its five settings in RATE_LIMIT_SETTINGS, in order, each with a default", () => {
+    it("names its settings in RATE_LIMIT_SETTINGS, in order, each with a default", () => {
       const keys = Object.keys(serverEnvSchema.innerType().shape);
       expect(keys.filter((key) => key.startsWith("RATE_LIMIT_"))).toEqual([...RATE_LIMIT_SETTINGS]);
       expect(Object.keys(RATE_LIMIT_DEFAULTS)).toEqual([...RATE_LIMIT_SETTINGS]);
@@ -419,6 +419,7 @@ describe("serverEnvSchema", () => {
         RATE_LIMIT_PASSWORD_RESET_EMAIL: "3/3600",
         RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "20/3600",
         RATE_LIMIT_VERIFICATION_EMAIL: "3/3600",
+        RATE_LIMIT_SIGN_UP_PER_IP: "60/3600",
       });
       expect(Object.isFrozen(RATE_LIMIT_DEFAULTS)).toBe(true);
     });
@@ -570,6 +571,7 @@ describe("loadServerEnv", () => {
       RATE_LIMIT_PASSWORD_RESET_EMAIL: "marker",
       RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "20/3600 marker",
       RATE_LIMIT_VERIFICATION_EMAIL: "marker 3/3600",
+      RATE_LIMIT_SIGN_UP_PER_IP: "60/marker",
       FORWARDED_FOR_TRUSTED_ENTRIES: "marker",
     };
     // The login is valid beside a host, so it has no line of its own, and still must not be repeated.

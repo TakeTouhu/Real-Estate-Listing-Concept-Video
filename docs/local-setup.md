@@ -38,11 +38,11 @@ The readiness probe also reports `degraded` while the database or the object
 storage does not answer (RD-2b, ADR-0152), so it reads `ready` only with
 PostgreSQL running.
 
-`SESSION_SECRET` also keys the abuse limits (ADR-0170). Their five
+`SESSION_SECRET` also keys the abuse limits (ADR-0170). Their
 `RATE_LIMIT_*` settings take their defaults when unset, and
 `FORWARDED_FOR_TRUSTED_ENTRIES` stays unset on a development machine, so
-nothing is counted by client address; `.env.example` lists them. The
-browser test refuses all six from the shell.
+nothing is counted by client address, sign-up included; `.env.example`
+lists them. The browser test refuses each of them from the shell.
 
 Set `DATABASE_URL` to a local PostgreSQL instance (Phase 1). Keep
 `VIDEO_PROVIDER=fake` unless you are deliberately exercising the real provider.

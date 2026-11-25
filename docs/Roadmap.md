@@ -1306,6 +1306,19 @@ hash for an address without an account, as its comment said; sign-up
 still tells which addresses have accounts. RD-7 is complete; the other
 limits wait for RD-8.
 
+**RD-8a — work limits per account, and sign-up per client address**
+(ADR-0173, no migration): RD-8 has started. ADR-0173 decides all of
+RD-8: signed-in work is limited per account only, with no organization
+key, in plain windows that count every request and give nothing back,
+on a limiter client of its own; JSON refusals answer 429. RD-8a builds
+only sign-up's limit: where a client address is configured, the 61st
+sign-up from it within the hour, by default, is refused before its form
+is read, and never shows a limiter's own error text; sign-in and its
+code step no longer show it.
+Planned, not done: RD-8b the signed-in limiter client, the JSON answer
+and uploads; RD-8c invitations; RD-8d analysis; RD-8e downloads; RD-8f
+generation start; RD-8g Unit purchase and the records that close RD-8.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

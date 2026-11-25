@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthService, OrganizationService, totpStep } from "@app/domain";
 import { InMemoryRateLimitStore, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
-import { RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
+import { AppError, RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
 
 /**
  * Route tests for the two-step sign-in, MFA set-up when it is required, and the
@@ -355,6 +355,24 @@ describe("the sign-in limits (ADR-0171)", () => {
       error: "Sign in failed",
     });
     expect(await getCurrentUser()).toBeNull();
+  });
+
+  it("answers its own failure, never the limiter's text, when the limiter fails with an AppError", async () => {
+    const internal = () => Promise.reject(new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row"));
+    for (const store of [{ ...down, hit: internal }, Object.assign(failing("forget"), { forget: internal })]) {
+      limitWith(store, "1");
+      const refused = await login(from("203.0.113.7", { email: "member@example.com", password: PASSWORD }));
+      expect(location(refused)).toEqual({ path: "/login", error: "Sign in failed" });
+      expect(refused.headers.get("set-cookie")).toBeNull();
+    }
+    // The code step too: the hit fails before the code is checked, then the accepted code cannot be forgotten.
+    const { secret } = await enroll();
+    for (const store of [{ ...down, hit: internal }, Object.assign(failing("forget"), { forget: internal })]) {
+      await signIn();
+      limitWith(store);
+      const answer = await enterCode(form({ code: codeFor(secret, 1) }));
+      expect(location(answer)).toEqual({ path: "/login/mfa", error: "Sign in failed" });
+    }
   });
 
   it("refuses a right password when the address cannot be forgotten or the client's hit given back", async () => {
