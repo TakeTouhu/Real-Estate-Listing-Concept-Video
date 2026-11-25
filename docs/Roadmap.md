@@ -1379,6 +1379,22 @@ counts nothing there. Another member of the organization keeps its own
 count.
 Planned, not done: RD-8g Unit purchase and the records that close RD-8.
 
+**RD-8g — Unit purchase approvals are limited per account** (ADR-0173,
+no migration): each approval of an additional Unit package counts once
+per signed-in account, 10 an hour by default, failed and refused ones
+included, taken in the route after the session and the form and before
+the purchase service checks the permission, so a member without
+`billing.manage` is bounded too, and a refused approval buys nothing
+and writes no audit. It returns to the buy page, which says "Too many
+purchase approvals. Nothing new was bought." with the wait. A limiter
+that cannot answer refuses with the buy page's own failure text, buying
+nothing. A body that is not a form now returns to the buy page as
+unreadable instead of failing. Another member of the organization keeps
+its own count. RD-8 is complete: sign-up is limited per client address,
+and invitations, uploads, analysis, video starts, downloads and Unit
+purchase approvals per account; what it leaves open is in `TODO.md`,
+"Open in RD-8".
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

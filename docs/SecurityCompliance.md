@@ -179,8 +179,13 @@ release and **is not activated** (ADR-0054 Decision 2).
   documented, configurable values: sign-in, per typed address and per
   client address, with a growing cooldown; wrong MFA codes, per account;
   password reset emails, per address and per client address; verification
-  emails, per address. Sign-up, uploads, analysis, generation,
-  downloads, invitations and Unit purchase are not limited yet: RD-8.*
+  emails, per address. Since RD-8 (ADR-0173): sign-up, per client
+  address where one is configured; invitations, uploads, analysis, video
+  starts, downloads and Unit purchase approvals, each per signed-in
+  account and counted before its service, so a refusal reserves no Unit
+  and calls no provider. No key is per organization, and replacing MFA
+  recovery codes is not limited; a recovery code typed at sign-in counts
+  as an MFA code (`TODO.md`, "Open in RD-8").*
 - Idempotency for generation and financial commands
 - SSRF protections for any server-side URL retrieval
 - FFmpeg runs in a restricted container with resource/time limits
@@ -295,8 +300,9 @@ Audit metadata must be sanitized and tamper-evident. Do not store full secrets o
 - Real malware scanning in place; `PassthroughMalwareScanner` absent from
   production
 - Rate limiting in place across the sensitive surfaces (*sign-in, MFA
-  codes and the reset and verification emails since RD-7; the rest waits
-  for RD-8*)
+  codes and the reset and verification emails since RD-7; sign-up and the
+  signed-in work since RD-8; what is left is in `TODO.md`, "Open in
+  RD-8"*)
 - Privileged support access time-limited, audited, and without generic
   impersonation
 - Privacy policy, terms, subprocessor list, Mode C consent wording and AI

@@ -287,7 +287,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       the event id). The outbox generalizes to credit settlement and provider
       webhooks in Phases 4–6, so decide it once, at the persistence layer, rather
       than per service.
-- [ ] **Add rate limiting as one cross-cutting milestone.** `CLAUDE.md` requires
+- [x] **Add rate limiting as one cross-cutting milestone.** `CLAUDE.md` requires
       rate-limiting login, uploads, generation and billing; none of them is
       limited today. **Shape settled (ADR-0054 Decision 5):** defense in depth
       across account / organization / IP / endpoint, covering login, password
@@ -343,6 +343,10 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       sending domain stay the product owner's.*
       *Amended in RD-8f (ADR-0173): the start is counted per account
       before any Unit is reserved; its form's size is still not bounded.*
+      *Done in RD-8g (ADR-0169 to ADR-0173): sign-in, MFA codes, the
+      emails, sign-up, invitations, uploads, analysis, generation start,
+      downloads and Unit purchase are limited. What remains is under
+      'Open in RD-8'.*
 - [ ] **Extend the same-origin check to every cookie-based mutation route.**
       `SecurityCompliance.md` asks for CSRF protection where cookie-based
       mutations are used. The session cookie is `SameSite=Lax` (ADR-0006),
@@ -2031,6 +2035,14 @@ into on 2026-11-17.
 - [ ] **Page renders sign and audit a link per photo and the video
       preview per render, unlimited** (`thumbnails.ts:20-36`); a download
       link may be fetched with ranges for its 300 s.
+- [ ] **No organization key exists**; reconsider with the storage quota
+      and measured traffic.
+- [ ] **The start route's form size is not bounded**:
+      `POST /api/video-projects/{id}/generations` reads its form with no
+      byte limit before it counts; bound it before any production route
+      serves a start (GS-10c, ADR-0111 Decision 5).
+- [ ] **Not limited, by name:** `POST /api/mfa/recovery-codes` (ADR-0054
+      "MFA recovery"), invitation cancel, the storyboard compose route.
 
 ## Open in RD-4c — what the development pipeline beside the emulator leaves open
 
@@ -2094,6 +2106,8 @@ into on 2026-11-17.
 - [ ] **Tune the per-address and per-IP values from measurement.** Five
       failures per 15 minutes per IP will catch people behind one carrier
       or office address; the IP key is idle until the setting is set.
+      *Amended in RD-8g: the seven RD-8 settings join it; measure each
+      key's highest count per subject in the first weeks.*
 
 ## Open in RD-7b — what the counters table leaves open
 

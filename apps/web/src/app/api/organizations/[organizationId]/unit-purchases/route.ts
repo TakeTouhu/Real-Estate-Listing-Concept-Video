@@ -11,7 +11,7 @@ import {
   readUnitPurchaseForm,
   refusalMessage,
 } from "@/lib/unit-purchase-form";
-import { getUnitPurchaseService } from "@/lib/unit-purchases";
+import { countUnitPurchase, getUnitPurchaseLogger, getUnitPurchaseService } from "@/lib/unit-purchases";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +20,7 @@ export const dynamic = "force-dynamic";
  * Fields: `quality`, `units`, `priceYenExTax`, `periodEndsAt` and
  * `idempotencyKey`, as the step showed them. Only a holder of `billing.manage`
  * may; the purchase service decides, and audits every refusal of a member.
+ * Each approval is counted per account first, so refused ones are bounded too.
  */
 export async function POST(
   request: Request,
@@ -34,8 +35,20 @@ export async function POST(
   const unitsPage = `/organizations/${encodeURIComponent(organizationId)}/units`;
   const buyPage = `${unitsPage}/buy`;
 
-  const input = readUnitPurchaseForm(organizationId, await request.formData());
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    // A body that is not a form is answered as unusable, and not counted.
+    return redirectWithError(request.url, buyPage, NOT_USABLE);
+  }
+  const input = readUnitPurchaseForm(organizationId, form);
   if (input === null) return redirectWithError(request.url, buyPage, NOT_USABLE);
+
+  // Counted once the session and the form are checked, before the purchase service checks the permission, audits a
+  // refusal or buys anything, and never given back (ADR-0173 Decisions 3, 4 and 9).
+  const refused = await countUnitPurchase(current.user.id, getUnitPurchaseLogger());
+  if (refused !== null) return redirectWithError(request.url, buyPage, refused);
 
   let outcome: UnitPurchaseOutcome;
   try {
