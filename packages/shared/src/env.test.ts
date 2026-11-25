@@ -8,7 +8,10 @@ import {
   isNetworkHost,
   isNetworkPort,
   isSmtpTlsMode,
+  isRateLimitValue,
   loadServerEnv,
+  RATE_LIMIT_DEFAULTS,
+  RATE_LIMIT_SETTINGS,
   resetServerEnvCache,
   serverEnvSchema,
   SMTP_SETTINGS,
@@ -400,6 +403,61 @@ describe("serverEnvSchema", () => {
     });
   });
 
+  describe("the abuse limits (ADR-0170)", () => {
+    const issuesOf = (settings: Record<string, string>): string[] => {
+      const result = serverEnvSchema.safeParse({ ...base, ...settings });
+      return result.success ? [] : result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+    };
+
+    it("names its five settings in RATE_LIMIT_SETTINGS, in order, each with a default", () => {
+      const keys = Object.keys(serverEnvSchema.innerType().shape);
+      expect(keys.filter((key) => key.startsWith("RATE_LIMIT_"))).toEqual([...RATE_LIMIT_SETTINGS]);
+      expect(Object.keys(RATE_LIMIT_DEFAULTS)).toEqual([...RATE_LIMIT_SETTINGS]);
+      expect(RATE_LIMIT_DEFAULTS).toEqual({
+        RATE_LIMIT_SIGN_IN: "5/900",
+        RATE_LIMIT_MFA_CODE: "5/900",
+        RATE_LIMIT_PASSWORD_RESET_EMAIL: "3/3600",
+        RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "20/3600",
+        RATE_LIMIT_VERIFICATION_EMAIL: "3/3600",
+      });
+      expect(Object.isFrozen(RATE_LIMIT_DEFAULTS)).toBe(true);
+    });
+
+    it("takes the defaults when unset, and any count/seconds in range, in every environment", () => {
+      for (const NODE_ENV of ["development", "test", "production"]) {
+        expect(serverEnvSchema.parse({ ...base, NODE_ENV })).toMatchObject(RATE_LIMIT_DEFAULTS);
+        for (const value of ["1/1", "99999/999999", "10/60"]) {
+          const all = Object.fromEntries(RATE_LIMIT_SETTINGS.map((name) => [name, value]));
+          expect(serverEnvSchema.parse({ ...base, NODE_ENV, ...all })).toMatchObject(all);
+        }
+      }
+    });
+
+    it("refuses each setting out of form or range, by a message that repeats no value", () => {
+      const bad = ["", "0/900", "5/0", "5", "off", "5/900/3600", " 5/900", "5 /900", "05/900", "5/0900", "100000/1"];
+      for (const value of [...bad, "1/1000000", "5.0/900", "-5/900", "5/-900", "1e3/900", "0x5/900", "\uff15/900"]) {
+        expect(isRateLimitValue(value)).toBe(false);
+        for (const name of RATE_LIMIT_SETTINGS) {
+          const line = `${name}: ${name} must be count/seconds: 1 to 99999 hits in 1 to 999999 seconds`;
+          expect(issuesOf({ [name]: value })).toEqual([line]);
+        }
+      }
+    });
+
+    it("takes the trusted entries of X-Forwarded-For as text from 1 to 5, and none by default", () => {
+      expect(serverEnvSchema.parse({ ...base, NODE_ENV: "production" }).FORWARDED_FOR_TRUSTED_ENTRIES).toBeUndefined();
+      for (const value of ["1", "2", "3", "4", "5"]) {
+        expect(serverEnvSchema.parse({ ...base, FORWARDED_FOR_TRUSTED_ENTRIES: value })).toMatchObject({
+          FORWARDED_FOR_TRUSTED_ENTRIES: value,
+        });
+      }
+      const line = "FORWARDED_FOR_TRUSTED_ENTRIES: FORWARDED_FOR_TRUSTED_ENTRIES must be a whole number from 1 to 5";
+      for (const value of ["", "0", "6", "10", "01", " 2", "2 ", "2.0", "-1", "two", "\uff12"]) {
+        expect(issuesOf({ FORWARDED_FOR_TRUSTED_ENTRIES: value })).toEqual([line]);
+      }
+    });
+  });
+
   it("refuses NODE_TLS_REJECT_UNAUTHORIZED in production, whatever it holds, and leaves it alone elsewhere", () => {
     const line = "NODE_TLS_REJECT_UNAUTHORIZED: NODE_TLS_REJECT_UNAUTHORIZED must not be set in production: " +
       "Node.js would let a connection skip checking the server's certificate";
@@ -507,6 +565,12 @@ describe("loadServerEnv", () => {
       SMTP_EHLO_NAME: "marker name",
       EMAIL_FROM: "marker <x@example.com>",
       NODE_TLS_REJECT_UNAUTHORIZED: "marker",
+      RATE_LIMIT_SIGN_IN: "marker/900",
+      RATE_LIMIT_MFA_CODE: "5/marker",
+      RATE_LIMIT_PASSWORD_RESET_EMAIL: "marker",
+      RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "20/3600 marker",
+      RATE_LIMIT_VERIFICATION_EMAIL: "marker 3/3600",
+      FORWARDED_FOR_TRUSTED_ENTRIES: "marker",
     };
     // The login is valid beside a host, so it has no line of its own, and still must not be repeated.
     const valid = new Set(["NODE_ENV", "VIDEO_PROVIDER", "SMTP_USER", "SMTP_PASSWORD"]);

@@ -37,12 +37,19 @@ const PORT_NAMES: Readonly<Record<keyof WebAdapterChoice, string>> = {
 /**
  * The settings a production start needs beyond what the environment schema
  * requires everywhere: the database, the key that seals MFA secrets (ADR-0065;
- * the product owner's default for production, 2026-11-16), and the address
- * every emailed link starts with (ADR-0129). The schema keeps each optional: a
+ * the product owner's default for production, 2026-11-16), the address
+ * every emailed link starts with (ADR-0129), and how many entries of
+ * X-Forwarded-For our own infrastructure writes, without which no limit is
+ * kept by client address (ADR-0170). The schema keeps each optional: a
  * build and a test run are given none of them, and the worker has no use for
- * the key or the address.
+ * the key, the address or the entries.
  */
-const PRODUCTION_SETTINGS = ["DATABASE_URL", "MFA_SECRET_KEY", "APP_BASE_URL"] as const;
+const PRODUCTION_SETTINGS = [
+  "DATABASE_URL",
+  "MFA_SECRET_KEY",
+  "APP_BASE_URL",
+  "FORWARDED_FOR_TRUSTED_ENTRIES",
+] as const;
 
 /**
  * Why a production start of the web app is refused, one line each, or none

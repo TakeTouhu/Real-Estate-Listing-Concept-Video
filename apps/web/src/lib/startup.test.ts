@@ -26,6 +26,7 @@ const production = serverEnvSchema.parse({
   DATABASE_URL: "postgresql://user:password@db.internal:5432/app",
   MFA_SECRET_KEY: "11".repeat(32),
   APP_BASE_URL: "https://app.example.com",
+  FORWARDED_FOR_TRUSTED_ENTRIES: "2",
 });
 
 /** The seven SMTP settings, valid. Throwaway values: the password is not a secret. */
@@ -46,6 +47,7 @@ const ready: ServerEnv = serverEnvSchema.parse({
   DATABASE_URL: "postgresql://user:password@db.internal:5432/app",
   MFA_SECRET_KEY: "11".repeat(32),
   APP_BASE_URL: "https://app.example.com",
+  FORWARDED_FOR_TRUSTED_ENTRIES: "2",
   GOOGLE_CLOUD_STORAGE_BUCKET: "vtavision-objects",
   CLAMAV_HOST: "clamav.internal",
   ...SMTP,
@@ -106,6 +108,7 @@ describe("productionStartProblems", () => {
       DATABASE_URL: "postgresql://user:password@db.internal:5432/app",
       MFA_SECRET_KEY: "11".repeat(32),
       APP_BASE_URL: "https://app.example.com",
+      FORWARDED_FOR_TRUSTED_ENTRIES: "2",
       GOOGLE_CLOUD_STORAGE_BUCKET: "vtavision-objects",
     });
     expect(productionStartProblems(google)).toEqual([
@@ -122,6 +125,7 @@ describe("productionStartProblems", () => {
       DATABASE_URL: "postgresql://user:password@db.internal:5432/app",
       MFA_SECRET_KEY: "11".repeat(32),
       APP_BASE_URL: "https://app.example.com",
+      FORWARDED_FOR_TRUSTED_ENTRIES: "2",
       GOOGLE_CLOUD_STORAGE_BUCKET: "vtavision-objects",
       CLAMAV_HOST: "clamav.internal",
       CLAMAV_PORT: "3311",
@@ -132,11 +136,21 @@ describe("productionStartProblems", () => {
   });
 
   it("names each production setting that is not set, and no setting's value", () => {
-    const unset = { DATABASE_URL: undefined, MFA_SECRET_KEY: undefined, APP_BASE_URL: undefined };
-    expect(productionStartProblems({ ...production, ...unset }).slice(-3)).toEqual([
+    const unset = {
+      DATABASE_URL: undefined,
+      MFA_SECRET_KEY: undefined,
+      APP_BASE_URL: undefined,
+      FORWARDED_FOR_TRUSTED_ENTRIES: undefined,
+    };
+    expect(productionStartProblems({ ...production, ...unset }).slice(-4)).toEqual([
       "DATABASE_URL is not set",
       "MFA_SECRET_KEY is not set",
       "APP_BASE_URL is not set",
+      "FORWARDED_FOR_TRUSTED_ENTRIES is not set",
+    ]);
+    // Without the entries alone, a start that is otherwise ready is refused (ADR-0170).
+    expect(productionStartProblems({ ...ready, FORWARDED_FOR_TRUSTED_ENTRIES: undefined })).toEqual([
+      "FORWARDED_FOR_TRUSTED_ENTRIES is not set",
     ]);
     // Lines about adapters a folder chose and a setting that is missing, beside settings that are set.
     const folders = { SHARED_STORAGE_DIR: "/srv/marker-shared", EMAIL_OUTBOX_DIR: "/srv/marker-outbox" };
@@ -340,12 +354,12 @@ describe("checkWebStart", () => {
     expect(refused("development", ready)).toEqual([
       '  - NODE_ENV is "production", but this is not a production build',
     ]);
-    // Neither vouches for the other (ADR-0150 Decision 2): the three adapters and the three
+    // Neither vouches for the other (ADR-0150 Decision 2): the three adapters and the four
     // settings are checked all the same, after the line about NODE_ENV.
     expect(refused("development", production)).toHaveLength(4);
     const [first, ...rest] = refused("production", development);
     expect(first).toBe('  - NODE_ENV is not "production", but this is a production build');
-    expect(rest).toHaveLength(6);
+    expect(rest).toHaveLength(7);
   });
 
   it("ends a production start whose environment is invalid, with the schema's message", () => {

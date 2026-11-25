@@ -1263,6 +1263,20 @@ other keys. It passes the same cases as the in-memory store, loses no
 count when 200 hits arrive at once, and stores times as UTC whatever the
 session's zone. Nothing uses it yet: RD-7d builds it into sign-in.
 
+**RD-7c — rate-limit settings and the client address** (ADR-0170, no
+migration): five settings, one per limit, each `count/seconds` with a
+documented default (the approved values, and the CTO's for MFA codes and
+per-IP reset emails) and no way to turn it off, become six policies;
+sign-in and MFA codes get a cooldown that doubles from the window up to
+an hour, or stays at a window longer than that. A
+request's client address is read from the entry of `X-Forwarded-For`
+that `FORWARDED_FOR_TRUSTED_ENTRIES` names, which a production start now
+requires, RD-11's production-mode test included; IPv6 counts by /64.
+Every subject is an HMAC under a key
+derived from `SESSION_SECRET`. The browser test runs the defaults.
+Nothing is limited yet: RD-7d adds the limiter that hits one attempt's
+keys and wires it into sign-in, RD-7e into the emails.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

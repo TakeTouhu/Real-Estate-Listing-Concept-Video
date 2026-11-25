@@ -1,6 +1,6 @@
 import { isAbsolute } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SMTP_SETTINGS } from "@app/shared";
+import { RATE_LIMIT_SETTINGS, SMTP_SETTINGS } from "@app/shared";
 import {
   E2E_BASE_URL,
   E2E_EMAIL_OUTBOX_DIR,
@@ -72,6 +72,11 @@ describe("the browser test's environment", () => {
       expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, [name]: "set" })).toThrow("reads its mail from the outbox");
     }
     expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, SMTP_TLS: "" })).toThrow("reads its mail from the outbox");
+    // Every limit the schema knows, and the client address, each by itself: it runs the defaults (ADR-0170).
+    for (const name of [...RATE_LIMIT_SETTINGS, "FORWARDED_FOR_TRUSTED_ENTRIES"]) {
+      expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, [name]: "1" })).toThrow("runs the default limits");
+    }
+    expect(Object.keys(env).filter((name) => /^RATE_LIMIT_|^FORWARDED_FOR_/.test(name))).toEqual([]);
     expect(() => e2eEnvironment({ DATABASE_URL: "postgresql://u:p@db.example.com/x" })).toThrow("on this machine");
     expect(() => e2eEnvironment({})).toThrow("needs DATABASE_URL");
   });

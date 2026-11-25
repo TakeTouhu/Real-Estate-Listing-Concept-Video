@@ -5,4 +5,5 @@ export * from "./env";
 export * from "./errors";
 export * from "./mfa-crypto";
 export * from "./money";
+export * from "./rate-limit-subject";
 export * from "./security";

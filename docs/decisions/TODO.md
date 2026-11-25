@@ -1973,6 +1973,8 @@ into on 2026-11-17.
       *Amended in RD-6d (ADR-0168): a production start can now pass, so
       RD-11 can run with the start hook; it needs all seven SMTP settings,
       and a mail stand-in whose certificate the image trusts.*
+      *Amended in RD-7c (ADR-0170): it also needs
+      `FORWARDED_FOR_TRUSTED_ENTRIES`, 1 with no proxy in front.*
 - [ ] **Give the worker the same construction rules.** RD-4 gives the
       worker Cloud Storage. It is to build Google's store only where both
       `NODE_ENV` values say production, and refuse the emulator where
@@ -2009,6 +2011,16 @@ into on 2026-11-17.
       5). Its helpers would need a second server or run. RD-11's
       production-mode test or part 2 is to decide.
 
+## Open in RD-7c — what the rate-limit settings leave open
+
+- [ ] **Measure `FORWARDED_FOR_TRUSTED_ENTRIES` on the deployment, and
+      restrict ingress to the load balancer, before production.** Reaching
+      the service's own URL bypasses the client-address key whatever the
+      value; too low a value puts every client under one key. Part 2.
+- [ ] **Tune the per-address and per-IP values from measurement.** Five
+      failures per 15 minutes per IP will catch people behind one carrier
+      or office address; the IP key is idle until the setting is set.
+
 ## Open in RD-7b — what the counters table leaves open
 
 - [ ] **Measure the table's growth and the wait on one hot key in
@@ -2028,6 +2040,9 @@ into on 2026-11-17.
       written, so after a raise another key's hit may delete a row that
       the new values would still count. Lowering them deletes nothing
       early. Say so where RD-7c documents the settings.
+      *Amended in RD-7c (ADR-0170 Decision 1): said beside the settings, in
+      the ADR and `api-changes-rd-7c.md`. The decay is a constant, so only
+      a window can be raised. Still open.*
 
 ## Open in RD-6d — what SMTP in the web app leaves open
 
