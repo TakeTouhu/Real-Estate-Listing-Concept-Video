@@ -2000,6 +2000,28 @@ into on 2026-11-17.
       5). Its helpers would need a second server or run. RD-11's
       production-mode test or part 2 is to decide.
 
+## Open in RD-6a — what the SMTP email sender leaves open
+
+- [ ] **Decide whether a send has a deadline of its own** (ADR-0166
+      Decision 5): the product owner's. The library's limits end a
+      connection that cannot connect, is not greeted or goes quiet for
+      30 s, but a server that answers each step just inside that holds a
+      sign-up, a reset or an invitation for minutes, and one that trickles
+      bytes holds it without bound. A deadline in the repository's code
+      is put to the product owner first.
+- [ ] **Decide what a password reset answers while its email is sent**
+      (ADR-0166 Decision 5): the product owner's. The send now costs a
+      round trip to the mail server, so the delay of the answer can tell
+      an address that has an account; RD-7's limits narrow that but do
+      not close it.
+- [ ] **Set the library's limits from the chosen service's numbers**
+      (ADR-0166 Decision 5): 10 s to connect, 10 s for the greeting and
+      for DNS, 30 s idle are provisional, part 2's.
+- [ ] **Refuse `NODE_TLS_REJECT_UNAUTHORIZED` in production** (RD-6c):
+      set to `0`, it turns off the certificate check of every connection
+      that does not set its own; the SMTP sender sets its own, but the
+      start check should refuse it as it refuses `NODE_DEBUG`.
+
 ## Open in RD-5a — what the ClamAV scanner leaves open
 
 - [ ] **Set up clamd for the deployment** (ADR-0163 Decision 6): on a
@@ -3267,6 +3289,11 @@ below.
       (SPF, DKIM, DMARC), and where its credential is kept (ADR-0054 Decision
       5) must be settled before launch; the service then implements the one
       method of `EmailSender`.
+      *Amended in RD-6a (ADR-0166): an SMTP sender exists, not yet used,
+      so the chosen service must take submission over SMTP with a login
+      and TLS (port 465, or 587 with STARTTLS); the service, its domain,
+      its sender authentication and where its credential is kept are
+      still open.*
 
 - [ ] **Decide whether a failed replacement gives back the scene regeneration
       right that started it** — does not block GS-1, whose rollback changes no

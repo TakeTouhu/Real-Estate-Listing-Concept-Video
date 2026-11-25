@@ -3,6 +3,7 @@ import {
   isCloudStorageBucketName,
   isClamAvHost,
   isGoogleApiAddress,
+  isNetworkHost,
   loadServerEnv,
   resetServerEnvCache,
   serverEnvSchema,
@@ -310,6 +311,7 @@ describe("isClamAvHost", () => {
       `${"a.".repeat(127)}ab`,
     ];
     for (const host of others) expect(isClamAvHost(host)).toBe(false);
+    for (const value of [...hosts, ...others]) expect(isNetworkHost(value)).toBe(isClamAvHost(value));
   });
 });
 

@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/testing/index.ts",
-    "./google-cloud-storage": "./src/google-cloud-storage/index.ts"
+    "./google-cloud-storage": "./src/google-cloud-storage/index.ts",
+    "./smtp": "./src/smtp/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -19,6 +20,7 @@
     "@app/shared": "workspace:*",
     "@aws-sdk/client-s3": "3.1132.0",
     "gaxios": "7.3.1",
+    "nodemailer": "10.5.0",
     "sharp": "0.33.5"
   },
   "devDependencies": {

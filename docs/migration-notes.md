@@ -2957,3 +2957,18 @@ left `PENDING_UPLOAD` still hold their places; nothing frees them.
 **Rolling back.** To RD-5b's build: safe. Retry again asks for the file
 and makes a new photo, and a failed photo completed again is not checked
 against the limit.
+
+## RD-6a — the SMTP email sender
+
+**No migration** (ADR-0166). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing is built from it: the web app still
+mails through the outbox or not at all, and a production start is still
+refused for email. One dependency is added, `nodemailer` `10.5.0`, in
+`@app/storage` alone.
+
+**On a development machine.** `pnpm install` adds the dependency. The
+adapter's tests make a certificate with `openssl` for each run, which must
+be on the path.
+
+**Rolling back.** To RD-5c's build: safe. Nothing stores anything new.
