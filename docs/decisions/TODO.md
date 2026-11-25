@@ -347,7 +347,7 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       emails, sign-up, invitations, uploads, analysis, generation start,
       downloads and Unit purchase are limited. What remains is under
       'Open in RD-8'.*
-- [ ] **Extend the same-origin check to every cookie-based mutation route.**
+- [x] **Extend the same-origin check to every cookie-based mutation route.**
       `SecurityCompliance.md` asks for CSRF protection where cookie-based
       mutations are used. The session cookie is `SameSite=Lax` (ADR-0006),
       which keeps it off a form posted from another site but not from another
@@ -368,6 +368,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       *Amended in RD-9b (ADR-0174): the signed-in work routes are checked;
       MFA, sign-in, sign-up, sign-out, organization creation and the
       account links remain.*
+      *Done in RD-9c (ADR-0174): every cookie-based change under
+      `apps/web/src/app/api` checks its origin first, and a test of every
+      route file keeps it so; `PUT /api/storage/upload`, authorized by its
+      token alone, is the one exception. What remains is under 'Open in
+      RD-9'.*
 - [ ] **Decide whether analysis should run in the request or on the queue.**
       Phase 3A-3 runs it synchronously, which is fine for the offline
       deterministic adapter but not for a real vision vendor. Settle this before
@@ -2047,6 +2052,9 @@ into on 2026-11-17.
       must reach the image by a host name other than `localhost`, or the
       test cannot see it. Under RD-9e's `form-action 'self'` the symptom
       becomes a CSP refusal.
+- [ ] **A browser that sends no `Origin` on a form post cannot sign
+      in.** No supported-browser statement exists; the refusal log
+      (`NO_ORIGIN`) will show whether it happens.
 
 ## Open in RD-8 — what the work limits leave open
 

@@ -79,8 +79,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const form = (fields: Record<string, string>) =>
-  new Request("http://localhost/api/auth", { method: "POST", body: new URLSearchParams(fields) });
+/** Posted as the reset page's forms post, from `APP_BASE_URL`'s origin (ADR-0174). */
+const SITE = { host: "localhost:3210", origin: BASE };
+const form = (fields: Record<string, string>, headers: Record<string, string> = SITE) =>
+  new Request("http://localhost/api/auth", { method: "POST", headers, body: new URLSearchParams(fields) });
 const location = (response: Response) => {
   expect(response.status).toBe(303);
   const url = new URL(response.headers.get("location")!);
@@ -119,7 +121,11 @@ describe("asking for a link", () => {
       expect(location(await ask(form({ email })))).toEqual(resetPage("sent"));
     }
     expect(location(await ask(form({})))).toEqual(resetPage("sent"));
-    const json = new Request("http://localhost/api/auth", { method: "POST", body: '{"email":"user@example.com"}' });
+    const json = new Request("http://localhost/api/auth", {
+      method: "POST",
+      headers: SITE,
+      body: '{"email":"user@example.com"}',
+    });
     expect(location(await ask(json))).toEqual(resetPage("sent"));
     const mail = await readDevelopmentEmailOutbox(outbox);
     expect(mail.map((message) => message.to)).toEqual(["user@example.com"]);
@@ -175,7 +181,8 @@ describe("choosing a new password", () => {
     for (const fields of refused) {
       expect(location(await reset(form(fields)))).toEqual(resetPage("invalid"));
     }
-    const json = new Request("http://localhost/api/auth", { method: "POST", body: JSON.stringify({ token }) });
+    const body = JSON.stringify({ token });
+    const json = new Request("http://localhost/api/auth", { method: "POST", headers: SITE, body });
     expect(location(await reset(json))).toEqual(resetPage("invalid"));
     expect(await signIn(PASSWORD)).toMatchObject({ path: "/" });
     expect(location(await reset(form({ token, password: NEW_PASSWORD })))).toEqual(resetPage("reset"));
@@ -233,7 +240,7 @@ describe("the reset limits (ADR-0172)", () => {
   const from = (ip: string, email: string) =>
     new Request("http://localhost/api/auth", {
       method: "POST",
-      headers: { "x-forwarded-for": ip },
+      headers: { ...SITE, "x-forwarded-for": ip },
       body: new URLSearchParams({ email }),
     });
   const limited = (response: Response) => {
@@ -292,5 +299,49 @@ describe("the reset limits (ADR-0172)", () => {
     limitWith(store);
     expect(location(await reset(form({ token, password: NEW_PASSWORD })))).toEqual(resetPage("reset"));
     expect(location(await reset(form({ token, password: "another-password-1" })))).toEqual(resetPage("invalid"));
+  });
+});
+
+describe("the origin check (ADR-0174)", () => {
+  it.each([
+    ["no origin", { host: "localhost:3210" }],
+    ["another site", { host: "localhost:3210", origin: "https://evil.example.net" }],
+  ])("refuses a post from %s, signed in or not, reading, counting, mailing or changing nothing", async (_, headers) => {
+    const token = await askedToken();
+    // Signed in before the spies, since signing in looks the address up and counts it.
+    const signedIn = (await signIn(PASSWORD)).cookie;
+    const store = new InMemoryRateLimitStore();
+    const hit = vi.spyOn(store, "hit");
+    limits.value = new WebRateLimits(store, { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) });
+    const services = [
+      vi.spyOn(deps.repos.users, "findByEmail"),
+      vi.spyOn(deps.repos.accountLinks, "useForPasswordReset"),
+    ];
+    const audited = deps.repos.auditLogs.all().length;
+    const routes: [(request: Request) => Promise<Response>, Record<string, string>, string][] = [
+      [ask, { email: "user@example.com" }, "A password reset link must be asked for from this site"],
+      [reset, { token, password: NEW_PASSWORD }, "A new password must be chosen from this site"],
+    ];
+    for (const session of [signedIn, undefined]) {
+      cookie.value = session;
+      for (const [route, fields, message] of routes) {
+        const sent = form(fields, headers);
+        const response = await route(sent);
+        const { error } = (await response.json()) as { error: unknown };
+        expect([response.status, error]).toMatchObject([403, { code: "FORBIDDEN", message }]);
+        expect(sent.bodyUsed).toBe(false);
+      }
+    }
+    expect(hit).not.toHaveBeenCalled();
+    for (const service of services) expect(service).not.toHaveBeenCalled();
+    expect([await mailedTokens(), deps.repos.auditLogs.all().length]).toEqual([[token], audited]);
+    for (const service of services) service.mockRestore();
+    expect(await getSignIn()).toBeNull();
+    cookie.value = signedIn;
+    expect(await getSignIn()).not.toBeNull();
+    cookie.value = undefined;
+    // The password is unchanged and the link still resets it.
+    expect(await signIn(PASSWORD)).toMatchObject({ path: "/" });
+    expect(location(await reset(form({ token, password: NEW_PASSWORD })))).toEqual(resetPage("reset"));
   });
 });

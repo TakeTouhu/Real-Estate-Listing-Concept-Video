@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { formOf, formString } from "@/lib/http";
+import { AppError } from "@app/shared";
+import { appErrorToResponse, formOf, formString } from "@/lib/http";
 import { resetPasswordPage, resetPasswordWith } from "@/lib/password-reset";
+import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +13,9 @@ export const dynamic = "force-dynamic";
  * carries the token.
  */
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/auth/reset-password")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A new password must be chosen from this site"));
+  }
   const form = await formOf(request);
   const notice = await resetPasswordWith(formString(form, "token"), formString(form, "password"));
   return NextResponse.redirect(resetPasswordPage(request.url, notice), { status: 303 });

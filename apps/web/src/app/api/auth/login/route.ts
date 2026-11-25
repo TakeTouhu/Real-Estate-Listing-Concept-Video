@@ -3,12 +3,16 @@ import { signInStep } from "@app/domain";
 import { AppError } from "@app/shared";
 import { SESSION_COOKIE, nextPageFor, sessionCookieOptions } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
-import { formString, redirectWithError } from "@/lib/http";
+import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { getRateLimiter, withoutLimiterText } from "@/lib/rate-limit";
+import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/auth/login")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A sign-in must be started from this site"));
+  }
   const form = await request.formData();
   const email = formString(form, "email");
   const password = formString(form, "password");

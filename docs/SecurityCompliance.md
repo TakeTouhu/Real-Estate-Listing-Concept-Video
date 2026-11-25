@@ -166,6 +166,9 @@ release and **is not activated** (ADR-0054 Decision 2).
 
 - Schema validation and output encoding
 - CSRF protection where cookie-based mutations are used
+  *In place since RD-9c (ADR-0174): every cookie-based change checks its
+  `Origin` against `APP_BASE_URL` first, beside the `SameSite=Lax`
+  session cookie; the token-authorized upload `PUT` is the one exception.*
 - CSP, secure headers, and dependency scanning
 - **Defense-in-depth rate limiting** across account, organization, IP and
   endpoint/action dimensions, covering login, password reset, MFA recovery,

@@ -86,8 +86,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const form = (fields: Record<string, string>) =>
-  new Request("http://localhost/api/auth", { method: "POST", body: new URLSearchParams(fields) });
+/** Posted as the app's pages post, from `APP_BASE_URL`'s origin (ADR-0174). */
+const SITE = { host: "localhost:3210", origin: BASE };
+const form = (fields: Record<string, string>, headers: Record<string, string> = SITE) =>
+  new Request("http://localhost/api/auth", { method: "POST", headers, body: new URLSearchParams(fields) });
 const location = (response: Response) => {
   const url = new URL(response.headers.get("location")!);
   // A redirect carries a notice, its wait or an error and nothing else: never a token, never a fragment.
@@ -121,7 +123,7 @@ describe("signing up", () => {
     expect((await getSignIn())?.step).toBe("EMAIL_VERIFICATION_REQUIRED");
     expect(await getCurrentUser()).toBeNull();
     expect(location(await createOrganization(form({ name: "Studio" }))).path).toBe("/login");
-    expect((await mfaSetup()).status).toBe(401);
+    expect((await mfaSetup(form({}))).status).toBe(401);
     expect(await deps.repos.memberships.listByUser(await userId())).toEqual([]);
   });
 
@@ -303,7 +305,7 @@ describe("the sign-up limit (ADR-0173)", () => {
   const from = (ip: string, email: string) =>
     new Request("http://localhost/api/auth/register", {
       method: "POST",
-      headers: { "x-forwarded-for": ip },
+      headers: { ...SITE, "x-forwarded-for": ip },
       body: new URLSearchParams({ name: "New", email, password: PASSWORD }),
     });
   const failing = (error: Error) => ({
@@ -350,5 +352,51 @@ describe("the sign-up limit (ADR-0173)", () => {
     }
     expect(await deps.repos.users.findByEmail("new@example.com")).toBeNull();
     expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
+  });
+});
+
+describe("the origin check (ADR-0174)", () => {
+  it.each([
+    ["no origin", { host: "localhost:3210" }],
+    ["another site", { host: "localhost:3210", origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading, counting, mailing or writing anything", async (_, headers) => {
+    const signedUp = sessionCookie(await signUp());
+    const [token] = await mailedTokens();
+    const store = new InMemoryRateLimitStore();
+    const hit = vi.spyOn(store, "hit");
+    limits.value = new WebRateLimits(store, { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) });
+    const { organizations } = identity.value as { organizations: OrganizationService };
+    const services = [
+      vi.spyOn(auth, "register"),
+      vi.spyOn(auth, "login"),
+      vi.spyOn(organizations, "createOrganization"),
+    ];
+    const audited = deps.repos.auditLogs.all().length;
+    const routes: [(request: Request) => Promise<Response>, Record<string, string>, string][] = [
+      [register, { name: "Other", email: "other@example.com", password: PASSWORD }, "An account must be created"],
+      [login, { email: "new@example.com", password: PASSWORD }, "A sign-in must be started"],
+      [enterCode, { code: "000000" }, "A sign-in code must be entered"],
+      [verify, { token: token! }, "An email address must be verified"],
+      [resend, {}, "A verification link must be asked for"],
+      [createOrganization, { name: "Studio" }, "An organization must be created"],
+    ];
+    for (const signedIn of [signedUp, undefined]) {
+      cookie.value = signedIn;
+      for (const [route, fields, refusal] of routes) {
+        const sent = form(fields, headers);
+        const response = await route(sent);
+        const { error } = (await response.json()) as { error: unknown };
+        const message = `${refusal} from this site`;
+        expect([response.status, error]).toMatchObject([403, { code: "FORBIDDEN", message }]);
+        expect([sent.bodyUsed, response.headers.get("set-cookie")]).toEqual([false, null]);
+      }
+    }
+    expect(hit).not.toHaveBeenCalled();
+    for (const service of services) expect(service).not.toHaveBeenCalled();
+    expect([await mailedTokens(), deps.repos.auditLogs.all().length]).toEqual([[token], audited]);
+    expect(deps.repos.users.peek(await userId())?.emailVerifiedAt).toBeNull();
+    expect(await deps.repos.memberships.listByUser(await userId())).toEqual([]);
+    cookie.value = signedUp;
+    expect((await getSignIn())?.step).toBe("EMAIL_VERIFICATION_REQUIRED");
   });
 });

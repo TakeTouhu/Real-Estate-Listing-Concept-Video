@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthService, OrganizationService, totpStep } from "@app/domain";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AuthService, MfaService, OrganizationService, totpStep } from "@app/domain";
 import { InMemoryRateLimitStore, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { AppError, RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
 
@@ -36,13 +36,13 @@ vi.mock("@/lib/rate-limit", async (original) => ({
 }));
 const { WebRateLimits } = await import("@/lib/rate-limit");
 
-const { getCurrentUser } = await import("@/lib/auth");
+const { getCurrentUser, getSignIn } = await import("@/lib/auth");
 const { qrCodeDataUrl } = await import("@/lib/mfa");
 const { POST: login } = await import("@/app/api/auth/login/route");
 const { POST: enterCode } = await import("@/app/api/auth/mfa/route");
-const { POST: setup } = await import("@/app/api/mfa/setup/route");
+const { POST: startSetup } = await import("@/app/api/mfa/setup/route");
 const { POST: confirm } = await import("@/app/api/mfa/setup/confirm/route");
-const { POST: newRecoveryCodes } = await import("@/app/api/mfa/recovery-codes/route");
+const { POST: replaceRecoveryCodes } = await import("@/app/api/mfa/recovery-codes/route");
 const { POST: disable } = await import("@/app/api/mfa/disable/route");
 
 let deps: TestDeps;
@@ -64,6 +64,10 @@ beforeEach(async () => {
   await new OrganizationService(deps).createOrganization(owner.id, { name: "Studio" });
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 function decodeBase32(text: string): Buffer {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let bits = "";
@@ -72,10 +76,19 @@ function decodeBase32(text: string): Buffer {
 }
 
 const codeFor = (secret: string, offset = 0) => hotp(decodeBase32(secret), totpStep(deps.clock.now()) + offset);
-const json = (body: unknown) =>
-  new Request("http://localhost/api/mfa", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-const form = (fields: Record<string, string>) =>
-  new Request("http://localhost/api/auth", { method: "POST", body: new URLSearchParams(fields) });
+/** Posted as the app's pages post: with no `APP_BASE_URL` here, the host is compared (ADR-0174). */
+const SITE = { host: "localhost", origin: "http://localhost" };
+const json = (body: unknown, headers: Record<string, string> = SITE) =>
+  new Request("http://localhost/api/mfa", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+const form = (fields: Record<string, string>, headers: Record<string, string> = SITE) =>
+  new Request("http://localhost/api/auth", { method: "POST", headers, body: new URLSearchParams(fields) });
+const setup = () => startSetup(new Request("http://localhost/api/mfa", { method: "POST", headers: SITE }));
+const newRecoveryCodes = () =>
+  replaceRecoveryCodes(new Request("http://localhost/api/mfa", { method: "POST", headers: SITE }));
 const location = (response: Response) => {
   const url = new URL(response.headers.get("location")!);
   return { path: url.pathname, error: url.searchParams.get("error") };
@@ -277,7 +290,8 @@ describe("the MFA routes", () => {
 
     await signIn();
     expect((await confirm(json({}))).status).toBe(422);
-    expect((await confirm(new Request("http://localhost/api/mfa", { method: "POST", body: "{" }))).status).toBe(422);
+    const malformed = new Request("http://localhost/api/mfa", { method: "POST", headers: SITE, body: "{" });
+    expect((await confirm(malformed)).status).toBe(422);
 
     env.value = { ...env.value, MFA_SECRET_KEY: undefined };
     const unconfigured = await setup();
@@ -292,7 +306,7 @@ describe("the sign-in limits (ADR-0171)", () => {
   const from = (ip: string, fields: Record<string, string>) =>
     new Request("http://localhost/api/auth", {
       method: "POST",
-      headers: { "x-forwarded-for": ip },
+      headers: { ...SITE, "x-forwarded-for": ip },
       body: new URLSearchParams(fields),
     });
   const limitWith = (store: ConstructorParameters<typeof WebRateLimits>[0], trusted?: string) => {
@@ -421,5 +435,53 @@ describe("the sign-in limits (ADR-0171)", () => {
     }
     await signIn();
     expect(location(await enterCode(form({ code: "000000" }))).error).toBe("That code is not valid. Attempts left: 4");
+  });
+});
+
+describe("the origin check (ADR-0174)", () => {
+  it.each([
+    ["no origin", { host: "localhost" }],
+    ["another site", { host: "localhost", origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading, counting or changing anything, signed in or not", async (_, headers) => {
+    const { secret } = await enroll();
+    const signedIn = cookie.value;
+    await signIn();
+    const owesCode = cookie.value;
+    const store = new InMemoryRateLimitStore();
+    const hit = vi.spyOn(store, "hit");
+    limits.value = new WebRateLimits(store, { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) });
+    const methods = ["beginSetup", "confirmSetup", "regenerateRecoveryCodes", "disable", "verify"] as const;
+    const services = [vi.spyOn(auth, "login"), ...methods.map((method) => vi.spyOn(MfaService.prototype, method))];
+    const audited = deps.repos.auditLogs.all().length;
+    const MFA = "MFA must be changed from this site";
+    const code = { code: codeFor(secret, 1) };
+    const password = { email: "member@example.com", password: PASSWORD };
+    const routes: [(request: Request) => Promise<Response>, () => Request, string][] = [
+      [login, () => form(password, headers), "A sign-in must be started from this site"],
+      [enterCode, () => form(code, headers), "A sign-in code must be entered from this site"],
+      [startSetup, () => json({}, headers), MFA],
+      [confirm, () => json(code, headers), MFA],
+      [replaceRecoveryCodes, () => json({}, headers), MFA],
+      [disable, () => json(code, headers), MFA],
+    ];
+    for (const token of [signedIn, owesCode, undefined]) {
+      cookie.value = token;
+      for (const [route, request, message] of routes) {
+        const sent = request();
+        const response = await route(sent);
+        const { error } = (await response.json()) as { error: unknown };
+        expect([response.status, error]).toMatchObject([403, { code: "FORBIDDEN", message }]);
+        expect([sent.bodyUsed, response.headers.get("set-cookie")]).toEqual([false, null]);
+        if (message === MFA) expect(response.headers.get("cache-control")).toBe("no-store");
+      }
+    }
+    // Nothing was counted, so a refused sign-in uses none of the address's or the client's attempts.
+    expect(hit).not.toHaveBeenCalled();
+    for (const service of services) expect(service).not.toHaveBeenCalled();
+    expect(deps.repos.auditLogs.all()).toHaveLength(audited);
+    cookie.value = owesCode;
+    expect((await getSignIn())?.step).toBe("CODE_REQUIRED");
+    cookie.value = signedIn;
+    expect((await getCurrentUser())?.user.email).toBe("member@example.com");
   });
 });

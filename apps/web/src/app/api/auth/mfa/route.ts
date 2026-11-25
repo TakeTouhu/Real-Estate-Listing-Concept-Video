@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { SESSION_COOKIE, getSignIn, nextPageFor } from "@/lib/auth";
-import { formString, redirectWithError } from "@/lib/http";
+import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { getIdentityServices } from "@/lib/identity";
 import { getMfaService } from "@/lib/mfa";
 import { getRateLimiter, withoutLimiterText } from "@/lib/rate-limit";
+import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,9 @@ export const dynamic = "force-dynamic";
  * user across sign-ins (ADR-0171).
  */
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/auth/mfa")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A sign-in code must be entered from this site"));
+  }
   const signIn = await getSignIn();
   if (!signIn) return backToPassword(request, "Sign in again");
   if (signIn.step !== "CODE_REQUIRED") {

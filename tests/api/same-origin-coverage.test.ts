@@ -7,32 +7,18 @@ import { describe, expect, it } from "vitest";
  *
  * Each exported `POST`, `PUT`, `PATCH` or `DELETE` of a route file is read
  * from its own `export` to the next one, so a `GET` above it is never read
- * for it, and must call the check before its first `await`. The routes below
- * do not yet: RD-9b took the signed-in work routes off, RD-9c takes each of
- * these off as it checks it, and the test fails for a listed route that is
- * checked, so the list stays exact.
+ * for it, and must call the check before its first `await`: `isSameOriginPost`,
+ * or `mfaRoute`, which checks before anything it awaits. RD-9b and RD-9c
+ * took every route off the list below but one, which never takes the check;
+ * the test fails for a listed handler that is checked, so the list stays exact.
  */
-const UNCHECKED: Readonly<Record<string, string>> = Object.fromEntries([
-  ...[
-    "/api/auth/login",
-    "/api/auth/logout",
-    "/api/auth/mfa",
-    "/api/auth/register",
-    "/api/auth/reset-password",
-    "/api/auth/reset-password/request",
-    "/api/auth/verify-email",
-    "/api/auth/verify-email/resend",
-    "/api/mfa/disable",
-    "/api/mfa/recovery-codes",
-    "/api/mfa/setup",
-    "/api/mfa/setup/confirm",
-    "/api/organizations",
-  ].map((path) => [`POST ${path}`, "RD-9c"]),
+const UNCHECKED: Readonly<Record<string, string>> = {
   // Permanent: its signed upload token alone authorizes it; it reads no session cookie (ADR-0174 Decision 1).
-  ["PUT /api/storage/upload", "token only"],
-]);
+  "PUT /api/storage/upload": "token only",
+};
 
-const APP = join(__dirname, "..", "..", "apps", "web", "src", "app");
+const WEB = join(__dirname, "..", "..", "apps", "web", "src");
+const APP = join(WEB, "app");
 /** An exported name; a keyword is never taken for one, so `export const { POST }` goes uncounted and throws below. */
 const EXPORT = new RegExp(
   String.raw`^export\s+(?:async\s+)?(?:function\s+|(?:const|let|var)\s+)?` +
@@ -70,9 +56,9 @@ function mutatingHandlers(root: string = APP): Handler[] {
   });
 }
 
-/** Whether the handler calls the check, on its own request, before anything it awaits. */
+/** Whether the handler calls the check, or `mfaRoute`, on its own request, before anything it awaits. */
 function checksFirst({ body }: Handler): boolean {
-  const check = body.search(/\bisSameOriginPost\(request\b/);
+  const check = body.search(/\b(?:isSameOriginPost|mfaRoute)\(request\b/);
   const wait = body.search(/\bawait\b/);
   return check > -1 && (wait === -1 || check < wait);
 }
@@ -92,7 +78,7 @@ describe("the origin check's coverage", () => {
 
   it("names, where a check names its route, its own method and path", () => {
     for (const { key, body } of handlers) {
-      for (const [, named] of body.matchAll(/\bisSameOriginPost\(request,\s*"([^"]*)"/g)) {
+      for (const [, named] of body.matchAll(/\b(?:isSameOriginPost|mfaRoute)\(request,\s*"([^"]*)"/g)) {
         expect(`${key}: ${named}`).toBe(`${key}: ${key}`);
       }
     }
@@ -105,5 +91,20 @@ describe("the origin check's coverage", () => {
     const late = "export async function POST(request) { await a(); isSameOriginPost(request); }";
     expect(checksFirst({ key: "POST /x", body: late })).toBe(false);
     expect(checksFirst({ key: "POST /y", body: "export async function POST(request) { await a(); }" })).toBe(false);
+  });
+
+  it("counts mfaRoute on its own request before any await as the check, and mfaRoute checks first", () => {
+    const setup = handlers.find(({ key }) => key === "POST /api/mfa/setup");
+    expect(setup && checksFirst(setup)).toBe(true);
+    const late = 'export async function POST(request) { await a(); return mfaRoute(request, "POST /z", h); }';
+    expect(checksFirst({ key: "POST /z", body: late })).toBe(false);
+    const other = "export async function POST(request) { return mfaRoute(other, h); }";
+    expect(checksFirst({ key: "POST /w", body: other })).toBe(false);
+    // The helper itself checks the request before the sign-in, the handler or anything else it awaits.
+    const helper = code(readFileSync(join(WEB, "lib", "mfa.ts"), "utf8"));
+    const mfaRoute = helper.slice(helper.indexOf("export async function mfaRoute("));
+    const check = mfaRoute.search(/\bisSameOriginPost\(request,/);
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(mfaRoute.search(/\bawait\b/));
   });
 });

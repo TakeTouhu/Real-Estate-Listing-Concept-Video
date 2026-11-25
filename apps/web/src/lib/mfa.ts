@@ -7,6 +7,7 @@ import { getServerEnv } from "./env";
 import { appErrorToResponse } from "./http";
 import { getIdentityServices } from "./identity";
 import { requiredString } from "./request";
+import { isSameOriginPost } from "./same-origin";
 
 /**
  * The MFA service (ADR-0065). Without `MFA_SECRET_KEY` it fails closed: no
@@ -49,14 +50,20 @@ export interface MfaRouteOptions {
 
 /**
  * Run an MFA JSON route for the signed-in user. Its responses carry secrets or
- * recovery codes, so none may be cached.
+ * recovery codes, so none may be cached. The request's origin is checked
+ * first, before the sign-in or the body is read; `route` names the route in
+ * the refusal's log, as `POST /api/mfa/disable` (ADR-0174 Decisions 4 to 6).
+ * Decision 6 names `mfaRoute(request, handler, options)`; `route` is added for Decision 5's log.
  */
 export async function mfaRoute(
+  request: Request,
+  route: string,
   handler: (current: CurrentUser, mfa: MfaService) => Promise<NextResponse>,
   options: MfaRouteOptions = {},
 ): Promise<NextResponse> {
   let response: NextResponse;
   try {
+    if (!isSameOriginPost(request, route)) throw new AppError("FORBIDDEN", "MFA must be changed from this site");
     const signIn = await getSignIn();
     const allowed =
       signIn?.step === "SIGNED_IN" || (options.duringSetup === true && signIn?.step === "SETUP_REQUIRED");
