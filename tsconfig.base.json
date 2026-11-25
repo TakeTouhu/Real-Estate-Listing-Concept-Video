@@ -35,6 +35,7 @@
       ],
       "@app/storage/testing": ["./packages/storage/src/testing/index.ts"],
       "@app/storage/google-cloud-storage": ["./packages/storage/src/google-cloud-storage/index.ts"],
+      "@app/storage/smtp": ["./packages/storage/src/smtp/index.ts"],
       "@/*": ["./apps/web/src/*"]
     }
   }

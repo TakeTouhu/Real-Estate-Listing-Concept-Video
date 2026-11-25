@@ -86,6 +86,29 @@ Without the variable the run fails: the file fails as it loads, and none
 of its tests runs. The host is always `127.0.0.1`. CI runs them in the
 `storage` job beside a pinned ClamAV service container.
 
+## `tests/email/*.smtp.test.ts`
+
+Suites that speak to Mailpit, a mail catcher, over SMTP (ADR-0166): the
+SMTP email sender delivering one email over STARTTLS, with Mailpit's own
+certificate as the only authority trusted, its Japanese subject and body,
+an emoji, lines that are or start with a dot, and a body of the longest
+length on one line, all arriving intact and as seven-bit text in lines
+SMTP allows; and refusing, with nothing arriving, Mailpit's certificate
+when it is not trusted, the same certificate under another name, and
+TLS from the first byte against a server that speaks STARTTLS. They are
+**excluded** from `pnpm test` and run explicitly, with Mailpit on this
+machine and its two ports named:
+
+```bash
+export MAILPIT_TEST_SMTP_PORT=1025 MAILPIT_TEST_API_PORT=8025
+pnpm test:smtp
+```
+
+Without either variable the run fails: the file fails as it loads, and
+none of its tests runs. The host is always `127.0.0.1`, for SMTP and for
+reading back through Mailpit's API. CI runs them in the `storage` job
+beside a pinned Mailpit service container.
+
 ## `tests/e2e/*.spec.ts`
 
 The browser test (ADR-0121): Playwright's Chromium drives the web app, which

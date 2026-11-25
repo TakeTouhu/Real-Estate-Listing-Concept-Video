@@ -2972,3 +2972,18 @@ adapter's tests make a certificate with `openssl` for each run, which must
 be on the path.
 
 **Rolling back.** To RD-5c's build: safe. Nothing stores anything new.
+
+## RD-6b — Mailpit in CI
+
+**No migration.** Migration 34 stays the last.
+
+**What changes at deploy.** Nothing: the product is unchanged. CI's
+`storage` job gains a Mailpit service container and a step running
+`pnpm test:smtp`.
+
+**On a development machine.** Nothing changes unless the SMTP suite is
+run: start Mailpit on `127.0.0.1` and name its ports in
+`MAILPIT_TEST_SMTP_PORT` and `MAILPIT_TEST_API_PORT`
+(`docs/local-setup.md`, section 5).
+
+**Rolling back.** To RD-6a's build: safe. Nothing stores anything new.
