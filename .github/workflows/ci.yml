@@ -318,3 +318,158 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+
+  web-image:
+    # The web app's production image (ADR-0175), built from this commit and run
+    # with no network, a read-only root, no capabilities and no new privileges.
+    # It must refuse a production start without settings and with NEXT_PHASE
+    # naming the build, and serve with stand-in settings that point nowhere.
+    # Nothing is pushed: no registry, login, secret or cache. The base image is
+    # pinned by digest; readiness against live services is RD-11's.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build the web image
+        run: >-
+          docker buildx build --provenance=false --load --platform linux/amd64
+          -f apps/web/Dockerfile
+          --label "org.opencontainers.image.revision=$REVISION"
+          --tag vtavision-web:ci .
+
+      - name: Refuse a production start without settings
+        timeout-minutes: 2
+        run: |
+          set +e
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            vtavision-web:ci > "$RUNNER_TEMP/refused.log" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/refused.log"
+          test "$code" -eq 1
+          grep -q "The web app cannot start in production" "$RUNNER_TEMP/refused.log"
+          grep -q "SESSION_SECRET: Required" "$RUNNER_TEMP/refused.log"
+
+      - name: Refuse it with NEXT_PHASE naming the build
+        timeout-minutes: 2
+        run: |
+          set +e
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            -e NEXT_PHASE=phase-production-build vtavision-web:ci > "$RUNNER_TEMP/phase.log" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/phase.log"
+          test "$code" -eq 1
+          grep -q "SESSION_SECRET: Required" "$RUNNER_TEMP/phase.log"
+
+      - name: Check the image's user, entrypoint and environment
+        run: |
+          test "$(docker image inspect -f '{{.Config.User}}' vtavision-web:ci)" = "1000:1000"
+          test "$(docker image inspect -f '{{json .Config.Entrypoint}}' vtavision-web:ci)" = \
+            '["/usr/bin/env","-u","NEXT_PHASE","node","apps/web/server.js"]'
+          env_json="$(docker image inspect -f '{{json .Config.Env}}' vtavision-web:ci)"
+          if printf '%s' "$env_json" | grep -qi proxy; then
+            echo "The image's environment names a proxy." >&2
+            exit 1
+          fi
+          docker image inspect -f '{{json .Config.Labels}}' vtavision-web:ci
+
+      - name: Serve with stand-in settings
+        timeout-minutes: 5
+        run: |
+          # Sixteen settings a production start needs, each a stand-in: random secrets, a database on
+          # port 1 of loopback, and names under .test, which no resolver answers. Kept in a file only
+          # this user can read, and never printed.
+          umask 077
+          settings="$RUNNER_TEMP/web-image.env"
+          {
+            echo "SESSION_SECRET=$(openssl rand -hex 32)"
+            echo "HEALTHCHECK_API_TOKEN=$(openssl rand -hex 32)"
+            echo "STORAGE_SIGNING_SECRET=$(openssl rand -hex 32)"
+            echo "MFA_SECRET_KEY=$(openssl rand -hex 32)"
+            echo "DATABASE_URL=postgresql://rd10:$(openssl rand -hex 32)@127.0.0.1:1/rd10"
+            echo "APP_BASE_URL=https://app.rd10.test"
+            echo "FORWARDED_FOR_TRUSTED_ENTRIES=1"
+            echo "GOOGLE_CLOUD_STORAGE_BUCKET=rd10-stand-in"
+            echo "CLAMAV_HOST=clamav.rd10.test"
+            echo "SMTP_HOST=mail.rd10.test"
+            echo "SMTP_PORT=465"
+            echo "SMTP_TLS=implicit"
+            echo "SMTP_USER=rd10"
+            echo "SMTP_PASSWORD=$(openssl rand -hex 32)"
+            echo "SMTP_EHLO_NAME=app.rd10.test"
+            echo "EMAIL_FROM=noreply@rd10.test"
+          } > "$settings"
+          docker run -d --name web --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --env-file "$settings" vtavision-web:ci
+          # At most 30 tries, a second apart: the server needs well under one to start.
+          for try in $(seq 1 30); do
+            if docker exec web node -e \
+              "fetch('http://127.0.0.1:3000/api/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+            then
+              break
+            fi
+            if [ "$try" -eq 30 ]; then
+              docker logs web
+              exit 1
+            fi
+            sleep 1
+          done
+          cat > "$RUNNER_TEMP/probe.mjs" <<'EOF'
+          const base = "http://127.0.0.1:3000";
+          const check = (ok, what) => {
+            console.log(`${ok ? "ok" : "FAILED"}: ${what}`);
+            if (!ok) process.exitCode = 1;
+          };
+          const live = await fetch(`${base}/api/health`);
+          check(live.status === 200, `liveness answers ${live.status}`);
+          check(live.headers.has("strict-transport-security"), "liveness sends HSTS");
+          check(!live.headers.has("x-powered-by"), "liveness sends no X-Powered-By");
+          const page = await fetch(`${base}/login`);
+          const policy = page.headers.get("content-security-policy") ?? "";
+          check(page.status === 200, `the sign-in page answers ${page.status}`);
+          check(policy.includes("'nonce-"), "the sign-in page's policy carries a nonce");
+          const anonymous = await fetch(`${base}/api/health/ready`);
+          check(anonymous.status === 401, `readiness without the token answers ${anonymous.status}`);
+          const ready = await fetch(`${base}/api/health/ready`, {
+            headers: { authorization: `Bearer ${process.env.HEALTHCHECK_API_TOKEN}` },
+          });
+          check(ready.status === 503, `readiness with the token answers ${ready.status}`);
+          const logout = await fetch(`${base}/api/auth/logout`, {
+            method: "POST",
+            redirect: "manual",
+            headers: { origin: "https://app.rd10.test" },
+          });
+          // Recorded, not checked: RD-10b makes it a path.
+          console.log(`logout: ${logout.status}, Location: ${logout.headers.get("location")}`);
+          EOF
+          docker exec -i web node --input-type=module - < "$RUNNER_TEMP/probe.mjs"
+          test "$(docker exec web id -u)" = "1000"
+          docker logs web > "$RUNNER_TEMP/web.log" 2>&1
+          cat "$RUNNER_TEMP/web.log"
+          # The database probe's own code: Prisma's OpenSSL 3 engine loaded and asked port 1.
+          grep -q '"probe":"database","code":"P1001"' "$RUNNER_TEMP/web.log"
+          if grep '"probe":"database","code":"UNEXPECTED"' "$RUNNER_TEMP/web.log"; then
+            exit 1
+          fi
+
+      - name: Print what the image holds
+        run: |
+          docker run --rm --network none --read-only --entrypoint dpkg-query vtavision-web:ci \
+            -W -f '${Package}\t${Version}\n'
+          docker run --rm --network none --read-only --entrypoint node vtavision-web:ci --version
+          docker image inspect -f '{{.Size}} bytes' vtavision-web:ci
+
+      - name: Stop the server
+        if: always()
+        # The log holds only stand-ins; printed here too, so a failed probe keeps it.
+        run: |
+          docker logs web || true
+          docker rm -f web || true

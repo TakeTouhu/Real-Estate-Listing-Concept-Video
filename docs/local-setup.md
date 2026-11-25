@@ -440,6 +440,52 @@ start over. Add `--trace on` to record a trace; a trace records every request,
 signed links and the session cookie included, so keep it on your machine and
 never share or upload it. CI runs it in the `e2e` job, which keeps no trace.
 
+## 6. Build and run the web app's image (optional)
+
+The production image (ADR-0175) is built from the repository root, as
+CI's `web-image` job builds it. It needs Docker with BuildKit and access
+to Docker Hub, Debian's package mirror and the npm registry; nothing is
+given to the build, and nothing is pushed.
+
+```bash
+docker buildx build --load --platform linux/amd64 \
+  -f apps/web/Dockerfile -t vtavision-web:local .
+```
+
+The image is built for `linux/amd64`, as CI builds it: the build requires
+Prisma's `debian-openssl-3.0.x` engine, which is amd64's, and refuses to
+go on with another. On an arm64 machine Docker must emulate amd64 for
+it (inferred, not measured here).
+
+The build reads `apps/web/Dockerfile.dockerignore`, not a root
+`.dockerignore`: it leaves every `.env` file, `node_modules`, `.next`
+and the test output out of the context, and the build refuses to go on
+if a `.env` reaches the tree where Prisma reads one, or `apps/web`, whose
+`.env` and `.env.production` `next build` would copy into the image. A
+production start
+of the image without settings must refuse, as in CI:
+
+```bash
+docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges vtavision-web:local   # exit code 1
+```
+
+To see it serve, give it the sixteen settings CI's job gives it, every
+one a stand-in, in a file only you can read (`--env-file`), and keep
+`--network none`: a production server with a bucket asks Google's
+metadata server for a token at its first storage request, readiness's
+included. Ask it from inside, as the job does, and
+never give a local run real credentials:
+
+```bash
+docker exec <container> node -e \
+  "fetch('http://127.0.0.1:3000/api/health').then((r) => console.log(r.status))"
+```
+
+`pnpm build` now also writes `apps/web/.next/standalone`, which the
+image copies; `pnpm --filter @app/web start` (`next start`) only warns
+about it, and nothing runs it.
+
 ## Notes
 
 - `.env.local` and all `.env*` files (except `.env.example`) are git-ignored.

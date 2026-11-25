@@ -127,6 +127,31 @@ page (GS-13b, ADR-0122). Each test signs up its own owner and organization, so
 runs never meet. Its helpers live in `tests/e2e/support/`; their own unit tests
 (`*.test.ts`) run with `pnpm test`. CI runs it in the `e2e` job.
 
+## `tests/container-images.test.ts`
+
+A text guard of every container image's recipe it lists (ADR-0175),
+run with `pnpm test`. It reads a Dockerfile as Docker does, comment lines
+dropped before continued lines are joined, and holds: the first line
+`# check=error=true` and no `# syntax=` or `# escape=`; every outside
+image in `FROM`, `COPY --from=` or a mount's `from=` pinned by tag and
+digest, one digest for all; no `ARG`, `ADD`, `ONBUILD`, `HEALTHCHECK` or
+here-document; no `--chown`, `--chmod`, `chown` or `chmod`; no proxy in
+any instruction, and no setting of the app, banned name or name that
+reads as a secret in `ENV`; a numeric non-root last `USER` in the
+image's own stage; every line of each `<Dockerfile>.dockerignore`,
+none starting with `!`, and no root `.dockerignore`. For the web image:
+standalone output, one `next build`, under `env -u NODE_ENV`;
+`pnpm fetch` and an offline install from the lockfile; the `.env`
+refusal, `apps/web` included; the OpenSSL 3 engine required alone; and
+the runtime stage word for word. It reads the `web-image` job field by
+field: `contents: read`, only `actions/checkout` with
+`persist-credentials: false`, `if:` only on the last step, the build
+word for word with `-f` for each image, and Docker only to build, run,
+exec, read logs, remove and inspect. Anywhere in the workflow: no
+`docker` outside that job, and no push, secret, token, build argument,
+cache, output, schedule or proxy. It builds nothing: CI's `web-image`
+job does.
+
 ## Unit tests
 
 Unit tests live next to their source as `*.test.ts` and run via the root

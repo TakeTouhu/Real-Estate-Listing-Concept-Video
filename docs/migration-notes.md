@@ -3390,3 +3390,37 @@ every browser test fails on one.
 
 **Rolling back.** To RD-9d's build: the page policy goes, and nothing
 was stored or is kept by a browser.
+
+## RD-10a — the web app's container image, built and smoked in CI
+
+**No migration** (ADR-0175). Migration 35 stays the last.
+
+**What changes at deploy.** Nothing is deployed or pushed. `next build`
+now also writes `apps/web/.next/standalone`, the server with only the
+files it loads (`output: "standalone"`). `next start`, which nothing
+runs, now only warns that it does not suit that output (read in
+Next.js's source, not run).
+`apps/web/Dockerfile`, built from the repository root with
+`docker buildx build --platform linux/amd64 -f apps/web/Dockerfile .`,
+makes the production
+image: `node:22-trixie-slim` at one pinned digest, `ca-certificates`
+from Debian, uid 1000, port 3000, `NODE_ENV=production`, and
+`SSL_CERT_FILE` and `SSL_CERT_DIR` naming Debian's store. It carries no
+setting of the app: whoever runs it gives every one, as a production
+start requires (ADR-0151). Its entrypoint strips `NEXT_PHASE`; a
+deployment must keep it, and should run it with a read-only root, as CI
+does. The ignore file keeps every `.env` out of the context; the build
+also refuses one at the three places Prisma reads and in `apps/web`,
+whose `.env` and `.env.production` `next build` copies into the image.
+CI's new `web-image` job builds and runs it on every push and
+pull request, so a pull request shows 12 checks; "every check green"
+is the merge rule.
+
+**On a development machine.** Nothing changes for `pnpm dev`, the tests
+or the browser test. Building the image needs Docker with BuildKit and
+access to Docker Hub, Debian's mirror and the npm registry
+(`docs/local-setup.md`, section 6).
+
+**Rolling back.** To RD-9e's tree: the Dockerfile, the job and the
+guard test go, and `next build` stops writing the standalone tree.
+Nothing was stored, pushed or deployed.

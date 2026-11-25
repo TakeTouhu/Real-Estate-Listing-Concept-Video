@@ -1742,6 +1742,11 @@ blocks activation. The production email service is tracked below, under
       *Amended in RD-9a (ADR-0174): such a server without `APP_BASE_URL`
       refuses every checked change, since the same-origin check never falls
       back to `Host` in production.*
+      *Amended in RD-10a (ADR-0175 Decision 5): the web image starts
+      through `env -u NEXT_PHASE`, so the variable never reaches Next.js
+      and the start check runs; CI starts the image with it and requires
+      exit 1. A deployment that replaces the entrypoint loses that
+      ("Open in RD-10").*
 
 ## Found after RD-2d — two CI jobs that failed now and then
 
@@ -1812,6 +1817,10 @@ into on 2026-11-17.
       that state. Setting both names from the process's own code before
       any client is made was measured to remove the fault too; the image
       stays the place.*
+      *Amended in RD-10a (ADR-0175 Decision 5): the web image sets both,
+      to `/etc/ssl/certs/ca-certificates.crt` and `/etc/ssl/certs`, which
+      its build requires to exist. The worker image runs no database
+      client until part 2 gives it its code ("Open in RD-10").*
 - [ ] **Find the error behind a browser test's lost press.** Seen once
       (#178, the `e2e` job of one of a commit's two runs): after pressing
       `Videos →` the first test did not find the next page's form in 30
@@ -1855,7 +1864,7 @@ into on 2026-11-17.
       address as Prisma does, which ADR-0155 Decision 4 did not write. It
       belongs with the limits of the deployment's own address, in part 2
       of the production readiness plan.
-- [ ] **Keep a `.env` out of where the database client is generated.**
+- [x] **Keep a `.env` out of where the database client is generated.**
       Read in Prisma 5.22.0's source, not measured: if `prisma generate`
       runs where a `.env` exists (the repository's root,
       `packages/database` or `packages/database/prisma`), the client
@@ -1865,6 +1874,9 @@ into on 2026-11-17.
       repository holds `.env.example` only, and the client generated here
       records no path. RD-10, which builds the container image, is to
       build it from a tree with none of those files.
+      *Done in RD-10a (ADR-0175 Decisions 3 and 4): each image's ignore
+      file leaves `.env` and `.env.*` out at any depth, and the web build
+      refuses to go on if any of the three places holds one.*
 
 ## Open in RD-3a — what the Google Cloud Storage adapter leaves open
 
@@ -1966,6 +1978,10 @@ into on 2026-11-17.
       them through a proxy; measured with both. So a deployment that means a
       proxy cannot send storage through it. The image's part and the
       deployment's stay open for the process's other clients.*
+      *Amended in RD-10a (ADR-0175 Decision 3): no image declares a proxy
+      name, as `ENV` or `ARG`; the guard test reads the Dockerfiles and CI
+      reads the built image's environment. The deployment's part stays
+      open.*
 
 ## Open in RD-3c — what the Google Cloud Storage adapter's credential leaves open
 
@@ -2016,6 +2032,9 @@ into on 2026-11-17.
       and a mail stand-in whose certificate the image trusts.*
       *Amended in RD-7c (ADR-0170): it also needs
       `FORWARDED_FOR_TRUSTED_ENTRIES`, 1 with no proxy in front.*
+      *Amended in RD-10a (ADR-0175): the image exists and starts in CI
+      with no network. It carries no test authority, no Google name and
+      no setting; RD-11 passes them when it runs it.*
 - [ ] **Give the worker the same construction rules.** RD-4 gives the
       worker Cloud Storage. It is to build Google's store only where both
       `NODE_ENV` values say production, and refuse the emulator where
@@ -2043,6 +2062,33 @@ into on 2026-11-17.
       where the web app keeps its photos. It refuses both stores together.
       CI's `database` job runs the pipeline's suite on both stores.*
 
+## Open in RD-10 — what the container images leave open
+
+- [ ] **Refresh the base image's digest.** The web image uses
+      `node:22-trixie-slim` at an index digest, which RD-10c's worker
+      image is to share (ADR-0175 Decision 2).
+      Nothing tells anyone that the tag has moved; a person bumps it, at
+      once for a Node.js or OpenSSL security release. Who, and how often
+      otherwise, is not decided.
+- [ ] **A deployment must not replace the web image's entrypoint.** It
+      strips `NEXT_PHASE` (ADR-0175 Decision 5); a platform command
+      that starts `node apps/web/server.js` directly brings back the
+      start the start check does not see (ADR-0154). Part 2.
+- [ ] **Choose an image scanner and an SBOM format with the
+      deployment.** CI prints each image's packages and Node.js version
+      and runs no scanner (ADR-0175 Decision 8).
+- [ ] **Act on the production dependencies' advisories.** `pnpm audit
+      --prod` on 2026-11-25: 22, three critical in `next` 15.5.22, high
+      ones in `sharp` 0.33.5 (fixed from 0.35.5) and `zod` 3.25.76
+      (fixed in 4.6.6, a major version).
+- [ ] **Decide how migrations run in production.** The web image holds
+      no Prisma CLI; RD-11 applies them from the runner. Part 2.
+- [ ] **Set the server's keep-alive against the load balancer's.**
+      `server.js` reads `KEEP_ALIVE_TIMEOUT`; the image sets none.
+      Part 2, with the deployment.
+- [ ] **Give liveness a build revision.** It reports version `0.0.0`
+      in the image; the revision is only an image label.
+
 ## Open in RD-9 — what the origin check and the headers leave open
 
 - [ ] **Redirects built from `request.url` name the server's bind
@@ -2060,9 +2106,12 @@ into on 2026-11-17.
 - [ ] **HSTS without `includeSubDomains` or `preload`** until the
       public domain is chosen; its `max-age` is an operations decision
       then (RD-9d, ADR-0174 Decision 12).
-- [ ] **RD-10's image build must run `next build` with `NODE_ENV` unset
+- [x] **RD-10's image build must run `next build` with `NODE_ENV` unset
       or `production`**, or production sends no HSTS: `next build` only
       defaults it (ADR-0174 Decision 8).
+      *Done in RD-10a (ADR-0175 Decision 4): the image runs `next build`
+      under `env -u NODE_ENV`, the guard test requires it, and CI requires
+      HSTS on the image's liveness answer.*
 - [ ] **The production CSP is not proved in a browser before RD-11**:
       the browser test runs `next dev`, whose policy adds `'unsafe-eval'`
       and `ws: wss:`; RD-11 runs the same violation guard
@@ -2231,6 +2280,10 @@ into on 2026-11-17.
       turning the check off, and a deployment may need one; which a
       production start refuses, or reports, is part 2's, with the
       deployment's layout.
+      *Amended in RD-10a (ADR-0175 Decision 5): the web image sets
+      `SSL_CERT_FILE` and `SSL_CERT_DIR` to Debian's own store, and RD-11
+      is to trust its mail stand-in through `NODE_EXTRA_CA_CERTS`;
+      whatever part 2 refuses must leave both possible.*
 
 ## Open in RD-6a — what the SMTP email sender leaves open
 
