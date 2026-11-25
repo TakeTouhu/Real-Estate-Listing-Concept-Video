@@ -21,6 +21,7 @@ export const RATE_LIMIT_POLICY_NAMES = [
   "verification-email.address",
   "sign-up.client",
   "upload.user",
+  "invitation.user",
 ] as const;
 
 export type RateLimitPolicyName = (typeof RATE_LIMIT_POLICY_NAMES)[number];
@@ -62,5 +63,6 @@ export function rateLimitPolicies(settings: Readonly<Record<RateLimitSetting, st
     "verification-email.address": policyOf("verification-email.address", settings.RATE_LIMIT_VERIFICATION_EMAIL, false),
     "sign-up.client": policyOf("sign-up.client", settings.RATE_LIMIT_SIGN_UP_PER_IP, false),
     "upload.user": policyOf("upload.user", settings.RATE_LIMIT_UPLOAD, false),
+    "invitation.user": policyOf("invitation.user", settings.RATE_LIMIT_INVITATION, false),
   });
 }

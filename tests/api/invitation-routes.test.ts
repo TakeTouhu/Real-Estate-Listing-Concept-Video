@@ -11,8 +11,14 @@ import {
   totpStep,
   type Role,
 } from "@app/domain";
-import { InMemoryUnitsReader, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
-import { hotp } from "@app/shared";
+import {
+  InMemoryRateLimitStore,
+  InMemoryUnitsReader,
+  createTestDeps,
+  markEmailVerified,
+  type TestDeps,
+} from "@app/domain/testing";
+import { AppError, hotp, RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/shared";
 import { readDevelopmentEmailOutbox } from "@app/storage";
 
 /**
@@ -20,9 +26,10 @@ import { readDevelopmentEmailOutbox } from "@app/storage";
  * ADR-0136): a same-origin form post, signed in, reaches the membership
  * service, which decides; the answer is the members page with a fixed code,
  * never the address or the token; the link is mailed on the configured base
- * address. Only the cookie store, the environment, the identity wiring and the
- * subscriptions are stubbed: the session gate, the domain services and the
- * development outbox run for real.
+ * address. Only the cookie store, the environment, the identity wiring, the
+ * subscriptions and the limits' store are stubbed: the session gate, the
+ * domain services, the development outbox and the invitation limit run for
+ * real, the limit on an in-memory store made afresh for each test (ADR-0173).
  */
 const PASSWORD = "password-123456";
 const MFA_KEY = "77".repeat(32);
@@ -33,6 +40,7 @@ const cookie = vi.hoisted(() => ({ value: undefined as string | undefined }));
 const env = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const identity = vi.hoisted(() => ({ value: null as unknown }));
 const subscriptions = vi.hoisted(() => ({ value: null as unknown }));
+const limits = vi.hoisted(() => ({ value: null as unknown }));
 
 // `next` is installed for the web app only, so its module is named by its resolved path.
 const nextHeaders = await vi.hoisted(async () => {
@@ -49,12 +57,19 @@ vi.mock("@app/database", () => ({
   createSubscriptionRepository: () => subscriptions.value,
   getPrismaClient: () => ({}),
 }));
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => limits.value,
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
+const limitsOf = (settings: Partial<Record<RateLimitSetting, string>>, store = new InMemoryRateLimitStore()) =>
+  new WebRateLimits(store, { ...RATE_LIMIT_DEFAULTS, ...settings, SESSION_SECRET: "x".repeat(32) }, { warn: vi.fn() });
 
 const { POST: invite } = await import("@/app/api/organizations/[organizationId]/invitations/route");
 const { POST: cancel } = await import(
   "@/app/api/organizations/[organizationId]/invitations/[invitationId]/cancel/route"
 );
-const { cancelMemberInvitation, inviteMember } = await import("@/lib/members");
+const { cancelMemberInvitation, countInvitation, inviteMember } = await import("@/lib/members");
 
 let deps: TestDeps;
 let auth: AuthService;
@@ -66,6 +81,7 @@ beforeEach(async () => {
   deps = createTestDeps();
   auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   identity.value = { deps, auth, organizations: new OrganizationService(deps) };
+  limits.value = limitsOf({});
   reader = new InMemoryUnitsReader();
   subscriptions.value = reader;
   outbox = mkdtempSync(join(tmpdir(), "vtavision-outbox-invite-"));
@@ -146,15 +162,13 @@ const cancelling = (invitationId: string, organizationId = orgId, headers?: Reco
     params: Promise.resolve({ organizationId, invitationId }),
   });
 
-/** Where a 303 lands: the members page with one code, and nothing else in the address. */
+/** Where a 303 lands: the members page and the whole of its query, a code and, for a refusal, its wait. */
 function landing(response: Response): string {
   expect(response.status).toBe(303);
   const url = new URL(response.headers.get("location")!);
   expect(url.origin).toBe(SITE);
   expect(url.pathname).toBe(`/organizations/${orgId}/members`);
-  const entries = [...url.searchParams.entries()];
-  expect(entries).toHaveLength(1);
-  return entries.map(([key, value]) => `${key}=${value}`).join("");
+  return [...url.searchParams.entries()].map(([key, value]) => `${key}=${value}`).join("&");
 }
 
 const pending = async () =>
@@ -273,6 +287,80 @@ describe("inviting", () => {
     expect(response.status).toBe(303);
     expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
     expect(await pending()).toEqual([]);
+  });
+});
+
+describe("the invitation limit per account (ADR-0173)", () => {
+  const mailed = () => readDevelopmentEmailOutbox(outbox);
+
+  it("refuses an account's 51st invitation of the day, failed ones counted, keeping and mailing nothing", async () => {
+    const warn = vi.fn();
+    limits.value = new WebRateLimits(
+      new InMemoryRateLimitStore(),
+      { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) },
+      { warn },
+    );
+    expect(landing(await inviting({ email: "one@example.com", role: "VIEWER" }))).toBe("notice=invited");
+    for (let i = 1; i < 50; i += 1) {
+      expect(landing(await inviting({ email: "one@example.com", role: "VIEWER" }))).toBe("error=already-invited");
+    }
+    const refused = await inviting({ email: "two@example.com", role: "VIEWER" });
+    expect(landing(refused)).toBe("error=limited&retry=1440");
+    expect(await pending()).toEqual(["one@example.com VIEWER"]);
+    expect((await mailed()).map(({ to }) => to)).toEqual(["one@example.com"]);
+    expect(warn.mock.calls).toEqual([
+      ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "INVITATION", dimension: "user" }],
+    ]);
+  });
+
+  it("counts only after the session and the form's role are checked", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_INVITATION: "1/86400" });
+    expect((await inviting({ email: "a@example.com", role: "VIEWER" }, {})).status).toBe(403);
+    expect(landing(await inviting({ email: "a@example.com", role: "REVIEWER" }))).toBe("error=role");
+    const token = cookie.value;
+    cookie.value = undefined;
+    const signedOut = await inviting({ email: "a@example.com", role: "VIEWER" });
+    expect(new URL(signedOut.headers.get("location")!).pathname).toBe("/login");
+    cookie.value = token;
+    // A typed address is checked after the count, so a typo counts.
+    expect(landing(await inviting({ email: "not-an-address", role: "VIEWER" }))).toBe("error=email");
+    expect(landing(await inviting({ email: "a@example.com", role: "VIEWER" }))).toBe("error=limited&retry=1440");
+    expect(await pending()).toEqual([]);
+    expect(await mailed()).toEqual([]);
+  });
+
+  it("counts each inviting account alone: another member of the organization keeps its own count", async () => {
+    subscribe("premium");
+    limits.value = limitsOf({ RATE_LIMIT_INVITATION: "1/3600" });
+    expect(landing(await inviting({ email: "a@example.com", role: "VIEWER" }))).toBe("notice=invited");
+    expect(landing(await inviting({ email: "b@example.com", role: "VIEWER" }))).toBe("error=limited&retry=60");
+    // The wait is whole minutes, rounded up: 3570 seconds read as 60, 30 as 1.
+    deps.clock.advanceSeconds(30);
+    expect(landing(await inviting({ email: "b@example.com", role: "VIEWER" }))).toBe("error=limited&retry=60");
+    deps.clock.advanceSeconds(3540);
+    expect(landing(await inviting({ email: "b@example.com", role: "VIEWER" }))).toBe("error=limited&retry=1");
+    await signInAs("ADMIN");
+    expect(landing(await inviting({ email: "b@example.com", role: "VIEWER" }))).toBe("notice=invited");
+    expect(await pending()).toEqual(["a@example.com VIEWER", "b@example.com VIEWER"]);
+  });
+
+  it("fails closed as unavailable, never the limiter's text, keeping and mailing nothing", async () => {
+    const broken = new InMemoryRateLimitStore();
+    broken.hit = () => Promise.reject(new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row"));
+    limits.value = limitsOf({}, broken);
+    expect(landing(await inviting({ email: "a@example.com", role: "VIEWER" }))).toBe("error=unavailable");
+    const logged: unknown[] = [];
+    const log = { error: (message: string, fields?: unknown) => logged.push({ message, fields }) };
+    expect(await countInvitation("user-1", log)).toEqual({ error: "unavailable" });
+    limits.value = undefined;
+    expect(landing(await inviting({ email: "a@example.com", role: "VIEWER" }))).toBe("error=unavailable");
+    expect(await countInvitation("user-1", log)).toEqual({ error: "unavailable" });
+    expect(logged).toEqual([
+      { message: "An invitation could not be counted", fields: { code: "INTERNAL_ERROR" } },
+      { message: "An invitation could not be counted", fields: { code: "UNEXPECTED" } },
+    ]);
+    expect(await pending()).toEqual([]);
+    expect(await mailed()).toEqual([]);
   });
 });
 

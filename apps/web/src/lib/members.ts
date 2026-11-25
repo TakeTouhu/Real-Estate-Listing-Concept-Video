@@ -14,6 +14,7 @@ import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
 import { getMailer } from "./mailer";
 import { codeOf } from "./page-codes";
+import { getRateLimiter, refusalText, retryMinutes } from "./rate-limit";
 
 let overview: MembersOverviewService | undefined;
 
@@ -79,7 +80,8 @@ export function getMembershipService(): MembershipService {
  * What the members page says after inviting, cancelling, changing a role or
  * removing a member, by the code a route sends it back with (`?notice=` or
  * `?error=`). The page shows only these: never text the address carries, nor
- * the invited address.
+ * the invited address. `limited` answers an invitation a limit refused, with
+ * the whole minutes of `?retry=` as its wait (ADR-0173 Decision 7).
  */
 export const MEMBERS_NOTICES = {
   invited: `The invitation was sent. Its link works for ${INVITATION_LIFETIME}.`,
@@ -104,6 +106,7 @@ export const MEMBERS_ERRORS = {
   "may-not-cancel": "You cannot cancel this invitation.",
   gone: "That invitation is no longer pending: it was accepted, cancelled, or it expired.",
   unavailable: "Invitations cannot be sent right now. Nothing was saved.",
+  limited: "Too many invitations. Try again later.",
   "invite-failed":
     "Something went wrong. If the invitation is listed below, its email may not have been sent: cancel it and " +
     "invite again.",
@@ -134,14 +137,29 @@ export function membersError(param: string | readonly string[] | undefined): Mem
   return codeOf(MEMBERS_ERRORS, param);
 }
 
-/** What inviting, cancelling, changing a role or removing a member ended with, for the members page. */
-export type MembersOutcome = { readonly notice: MembersNotice } | { readonly error: MembersError };
+/** An error's text; `limited` names the wait a whole number of minutes in `?retry=` gives. */
+export function membersErrorText(error: MembersError, retry?: string | readonly string[]): string {
+  const minutes = retryMinutes(retry);
+  return error === "limited" && minutes !== null ? refusalText("INVITATION", minutes) : MEMBERS_ERRORS[error];
+}
+
+/**
+ * What inviting, cancelling, changing a role or removing a member ended with,
+ * for the members page; a refused invitation also carries its whole minutes
+ * to wait.
+ */
+export type MembersOutcome =
+  | { readonly notice: MembersNotice }
+  | { readonly error: MembersError; readonly retry?: number };
 
 /** The members page with a notice or an error, on the address the request came to. */
 export function membersPage(requestUrl: string, organizationId: string, outcome: MembersOutcome): URL {
   const url = new URL(`/organizations/${encodeURIComponent(organizationId)}/members`, requestUrl);
   if ("notice" in outcome) url.searchParams.set("notice", outcome.notice);
-  else url.searchParams.set("error", outcome.error);
+  else {
+    url.searchParams.set("error", outcome.error);
+    if (outcome.retry !== undefined) url.searchParams.set("retry", String(outcome.retry));
+  }
   return url;
 }
 
@@ -168,6 +186,34 @@ function refusalOf(error: AppError): MembersError | null {
   return error.code === "VALIDATION_FAILED" && typeof reason === "string" && Object.hasOwn(REFUSALS, reason)
     ? REFUSALS[reason as InvitationRefusal]
     : null;
+}
+
+/** The refusal of an invitation form whose role is none a member can hold, before it is counted; else `null`. */
+export function invitationFormRefusal(form: { readonly role: string }): MembersOutcome | null {
+  return isRole(form.role) ? null : { error: "role" };
+}
+
+/**
+ * One invitation, counted by the inviting account before the membership
+ * service is asked, and never given back (ADR-0173 Decisions 1, 3 and 4):
+ * `null` when the limit lets it through, else `limited` with its whole
+ * minutes to wait. A limiter that cannot answer refuses it as `unavailable`,
+ * never with the limiter's text, and is logged by its error code alone
+ * (Decision 9).
+ */
+export async function countInvitation(
+  actorUserId: string,
+  log: Pick<Logger, "error"> = getMembersLogger(),
+): Promise<MembersOutcome | null> {
+  try {
+    const now = getIdentityServices().deps.clock.now();
+    const request = await getRateLimiter().account("INVITATION", actorUserId, now);
+    // The minutes `refusalMinutes` gives, from the whole seconds rounded up.
+    return request.allowed ? null : { error: "limited", retry: Math.ceil(request.seconds / 60) };
+  } catch (error) {
+    log.error("An invitation could not be counted", { code: errorCode(error) });
+    return { error: "unavailable" };
+  }
 }
 
 /**

@@ -3159,3 +3159,28 @@ within 24 hours of its first is refused until those 24 hours end.
 which that build's schema does not know and ignores. Uploads are no
 longer limited, the second client is not opened, and the table's rows
 for uploads are left unread.
+
+## RD-8c — invitations are limited per account
+
+**No migration** (ADR-0173). Migration 35 stays the last: the table's
+CHECK takes the new policy's name.
+
+**What changes at deploy.** Invitations are counted per signed-in
+account, 50 a day by default, failed ones included, on the signed-in
+limiter client. `RATE_LIMIT_INVITATION` is optional and takes its
+default; a value out of form is refused, by the web app and the worker
+alike. The reset and invitation limits that the RD-6d and RD-7e notes
+above waited for are in place, so the condition of the rule that no
+deployment sets `SMTP_HOST` is met; the email service and its sending
+domain stay the product owner's (`TODO.md`).
+
+**On a development machine.** A 51st invitation of one account within
+24 hours of its first is refused until those 24 hours end.
+`DELETE FROM "rate_limit_counters";` clears every count.
+
+**Rolling back.** To RD-8b's build: safe only with `SMTP_HOST` unset,
+since that build does not limit invitations and the rule that no
+deployment sets `SMTP_HOST` applies to it again. The new setting may
+stay set, which that build's schema does not know and ignores.
+Invitations are no longer limited, and the table's rows for them are
+left unread.

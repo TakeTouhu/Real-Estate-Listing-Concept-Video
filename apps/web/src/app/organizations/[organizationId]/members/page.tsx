@@ -9,6 +9,7 @@ import {
   MEMBERS_NOTICES,
   getMembersOverviewService,
   membersError,
+  membersErrorText,
   membersNotice,
 } from "@/lib/members";
 import { ROLE_NAMES } from "@/lib/role-names";
@@ -16,7 +17,7 @@ import { formatJst } from "@/lib/units-view";
 
 export const dynamic = "force-dynamic";
 
-type Query = { notice?: string | string[]; error?: string | string[] };
+type Query = { notice?: string | string[]; error?: string | string[]; retry?: string | string[] };
 
 /**
  * An organization's members, its pending invitations and its seats (AT-5,
@@ -75,7 +76,7 @@ export default async function MembersPage({
       ) : null}
       {failure ? (
         <p className="status-bad" role="alert">
-          {MEMBERS_ERRORS[failure]}
+          {membersErrorText(failure, query.retry)}
         </p>
       ) : null}
       <Seats seats={overview.seats} />
