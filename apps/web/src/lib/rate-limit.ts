@@ -50,10 +50,11 @@ export type RateLimitedAction =
   | "PASSWORD_RESET_EMAIL"
   | "VERIFICATION_EMAIL"
   | "SIGN_UP"
-  | "UPLOAD";
+  | "UPLOAD"
+  | "INVITATION";
 
 /** The signed-in actions, each counted per account on its own plain policy (ADR-0173 Decisions 1 and 3). */
-const ACCOUNT_POLICIES = { UPLOAD: "upload.user" } as const satisfies Partial<
+const ACCOUNT_POLICIES = { UPLOAD: "upload.user", INVITATION: "invitation.user" } as const satisfies Partial<
   Record<RateLimitedAction, RateLimitPolicyName>
 >;
 
@@ -61,7 +62,11 @@ const ACCOUNT_POLICIES = { UPLOAD: "upload.user" } as const satisfies Partial<
 export type AccountAction = keyof typeof ACCOUNT_POLICIES;
 
 /** The actions whose waits above 120 minutes read in hours (ADR-0173 Decision 8); RD-7's keep minutes. */
-const WAITS_IN_HOURS: ReadonlySet<RateLimitedAction> = new Set<RateLimitedAction>(["SIGN_UP", "UPLOAD"]);
+const WAITS_IN_HOURS: ReadonlySet<RateLimitedAction> = new Set<RateLimitedAction>([
+  "SIGN_UP",
+  "UPLOAD",
+  "INVITATION",
+]);
 
 /** An attempt the limits let through, with what its success settles; or the text that refuses it. */
 export type LimitedAttempt =
@@ -89,6 +94,7 @@ const REFUSALS: Readonly<Record<RateLimitedAction, string>> = {
   VERIFICATION_EMAIL: "Too many verification emails.",
   SIGN_UP: "Too many sign-ups.",
   UPLOAD: "Too many uploads.",
+  INVITATION: "Too many invitations.",
 };
 
 /** Whole minutes until `retryAt`, rounded up, at least one. */

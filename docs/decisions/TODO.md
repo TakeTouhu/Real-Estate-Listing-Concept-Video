@@ -338,6 +338,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       (*amended in RD-7e, ADR-0172, of the RD-6d amendment above: the reset
       and verification limits are in place; the invitation limit waits for
       RD-8, so the rule that no deployment sets `SMTP_HOST` stands*)
+      *Amended in RD-8c (ADR-0173): the invitation limit is in place, so
+      the condition this rule named is met; the email service and its
+      sending domain stay the product owner's.*
 - [ ] **Extend the same-origin check to every cookie-based mutation route.**
       `SecurityCompliance.md` asks for CSRF protection where cookie-based
       mutations are used. The session cookie is `SameSite=Lax` (ADR-0006),

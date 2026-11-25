@@ -1330,6 +1330,17 @@ Planned, not done: RD-8c invitations; RD-8d analysis; RD-8e downloads;
 RD-8f generation start; RD-8g Unit purchase and the records that close
 RD-8.
 
+**RD-8c — invitations are limited per account** (ADR-0173, no
+migration): each invitation is counted per inviting account, 50 a day by
+default, failed ones included, after the session and the form's role
+are checked and before the membership service, so a refused one keeps no
+invitation and sends no email. The members page says "Too many
+invitations." with the wait, in hours above 120 minutes; a limiter that
+cannot answer reads as invitations not being sendable right now, with
+nothing saved. Another member of the organization keeps its own count.
+Planned, not done: RD-8d analysis; RD-8e downloads; RD-8f generation
+start; RD-8g Unit purchase and the records that close RD-8.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

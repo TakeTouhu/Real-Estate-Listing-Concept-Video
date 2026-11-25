@@ -71,6 +71,7 @@ describe("a refusal's text", () => {
     }
     expect(retryAfterSeconds(after(-5), NOW)).toBe(1);
     expect(refusalMessage("SIGN_UP", after(7201), NOW)).toBe("Too many sign-ups. Try again in 3 hours.");
+    expect(refusalMessage("INVITATION", after(7201), NOW)).toBe("Too many invitations. Try again in 3 hours.");
     expect(refusalMessage("SIGN_IN", after(7201), NOW)).toBe("Too many sign-in attempts. Try again in 121 minutes.");
   });
 });

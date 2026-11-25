@@ -330,6 +330,15 @@ describe("inviting and cancelling on the members page", () => {
       "That email address already has a pending invitation. Cancel it to invite the address again.",
     ],
     [{ error: "gone" }, "alert", "That invitation is no longer pending: it was accepted, cancelled, or it expired."],
+    [{ error: "limited", retry: "14" }, "alert", "Too many invitations. Try again in 14 minutes."],
+    [{ error: "limited", retry: "1440" }, "alert", "Too many invitations. Try again in 24 hours."],
+    [{ error: "limited" }, "alert", "Too many invitations. Try again later."],
+    [{ error: "limited", retry: "0" }, "alert", "Too many invitations. Try again later."],
+    [
+      { error: "gone", retry: "14" },
+      "alert",
+      "That invitation is no longer pending: it was accepted, cancelled, or it expired.",
+    ],
   ] as const)("says what %o names", async (query, role, sentence) => {
     subscribe("premium");
     await renderMembers("OWNER", query);
