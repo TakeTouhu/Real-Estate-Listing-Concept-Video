@@ -3119,3 +3119,22 @@ the hour ends. `DELETE FROM "rate_limit_counters";` clears every count.
 
 **Rolling back.** To RD-7d's build: safe. The emails are no longer
 limited, and the table's rows for them are left unread.
+
+## RD-8a — sign-up is limited per client address
+
+**No migration** (ADR-0173). Migration 35 stays the last: the table's
+CHECK takes the new policy's name.
+
+**What changes at deploy.** Where `FORWARDED_FOR_TRUSTED_ENTRIES` is set,
+sign-up is counted per client address, 60 an hour by default, failed
+sign-ups included. `RATE_LIMIT_SIGN_UP_PER_IP` is optional and takes its
+default; a value out of form is refused, by the web app and the worker
+alike. Without a client address nothing is counted.
+
+**On a development machine.** Nothing changes: the setting that gives a
+client address stays unset, so sign-up is not counted. The browser test
+refuses the new setting from the shell.
+
+**Rolling back.** To RD-7e's build: safe, even with the new setting
+set, which that build's schema does not know and ignores. Sign-up is no
+longer limited, and the table's rows for it are left unread.

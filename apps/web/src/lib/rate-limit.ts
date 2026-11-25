@@ -37,12 +37,15 @@ export const RATE_LIMIT_DATABASE_CONNECTIONS = 3;
 export const RATE_LIMIT_STATEMENT_MILLISECONDS = 1000;
 
 /** What a limit guards, as its refusal is logged. */
-export type RateLimitedAction = "SIGN_IN" | "MFA_CODE" | "PASSWORD_RESET_EMAIL" | "VERIFICATION_EMAIL";
+export type RateLimitedAction = "SIGN_IN" | "MFA_CODE" | "PASSWORD_RESET_EMAIL" | "VERIFICATION_EMAIL" | "SIGN_UP";
 
 /** An attempt the limits let through, with what its success settles; or the text that refuses it. */
 export type LimitedAttempt =
   | { readonly allowed: true; readonly succeeded: () => Promise<void> }
   | { readonly allowed: false; readonly message: string };
+
+/** A request the limits let through, with nothing to give back, or the text that refuses it (ADR-0173). */
+export type LimitedRequest = { readonly allowed: true } | { readonly allowed: false; readonly message: string };
 
 /** An email the limits let through, or the whole minutes until another may be asked for. */
 export type LimitedEmail = { readonly allowed: true } | { readonly allowed: false; readonly minutes: number };
@@ -55,6 +58,7 @@ const REFUSALS: Readonly<Record<RateLimitedAction, string>> = {
   MFA_CODE: "Too many wrong codes.",
   PASSWORD_RESET_EMAIL: "Too many reset requests.",
   VERIFICATION_EMAIL: "Too many verification emails.",
+  SIGN_UP: "Too many sign-ups.",
 };
 
 /** Whole minutes until `retryAt`, rounded up, at least one. */
@@ -85,7 +89,7 @@ let logger: Logger | undefined;
 const limiterLog = (): Pick<Logger, "warn"> => (logger ??= createLogger({ base: { component: "rate-limit" } }));
 
 /**
- * The web app's abuse limits (ADR-0171): the limiter over a store, the six
+ * The web app's abuse limits (ADR-0171): the limiter over a store, its
  * policies and the key every subject is made with. Every line it logs is a
  * code: never a header, an address, an IP, a subject or a user id.
  */
@@ -188,6 +192,18 @@ export class WebRateLimits {
     return this.email("VERIFICATION_EMAIL", [this.addressKey("verification-email.address", storedAddress)], now);
   }
 
+  /**
+   * One sign-up, counted by its client address before its form is read
+   * (ADR-0173 Decision 2). Without a client address it is not counted at all.
+   * Nothing gives the hit back, whatever the sign-up's outcome.
+   */
+  async signUp(headers: Pick<Headers, "get">, now: Date): Promise<LimitedRequest> {
+    const client = this.clientKey("sign-up.client", headers);
+    if (client === undefined) return { allowed: true };
+    const decision = await this.limiter.hit([client], now);
+    return decision.allowed ? { allowed: true } : { allowed: false, message: this.refuse("SIGN_UP", decision, now) };
+  }
+
   /** Forgets an address's failed sign-ins, as a completed reset does (ADR-0172 Decision 4). */
   forgetSignInAddress(address: string): Promise<void> {
     return this.limiter.forget(this.addressKey("sign-in.address", address));
@@ -199,6 +215,17 @@ export class WebRateLimits {
     this.refuse(action, decision, now);
     return { allowed: false, minutes: refusalMinutes(decision.retryAt, now) };
   }
+}
+
+/**
+ * The limiter's answer, or its failure as a plain `Error`, so a route that
+ * shows an `AppError`'s text answers its own failure instead of the limiter's
+ * (ADR-0173 Decision 9, as ADR-0171 Decision 8 intends).
+ */
+export function withoutLimiterText<T>(answer: Promise<T>): Promise<T> {
+  return answer.catch(() => {
+    throw new Error("The rate limiter could not answer");
+  });
 }
 
 let limits: WebRateLimits | undefined;

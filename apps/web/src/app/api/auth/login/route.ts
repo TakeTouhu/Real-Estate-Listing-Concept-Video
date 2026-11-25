@@ -4,7 +4,7 @@ import { AppError } from "@app/shared";
 import { SESSION_COOKIE, nextPageFor, sessionCookieOptions } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
 import { formString, redirectWithError } from "@/lib/http";
-import { getRateLimiter } from "@/lib/rate-limit";
+import { getRateLimiter, withoutLimiterText } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -15,12 +15,13 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     const { auth, deps } = getIdentityServices();
     // Counted before the password is looked up, whether or not an account uses the address; a limiter that
-    // cannot answer refuses through this route's own answer (ADR-0171 Decision 1, ADR-0169 Decision 7).
-    const attempt = await getRateLimiter().signIn(request.headers, email, deps.clock.now());
+    // cannot answer refuses through this route's own answer, never its own text (ADR-0171 Decisions 1 and 8,
+    // ADR-0173 Decision 9).
+    const attempt = await withoutLimiterText(getRateLimiter().signIn(request.headers, email, deps.clock.now()));
     if (!attempt.allowed) return redirectWithError(request.url, "/login", attempt.message);
     const { user, session, token } = await auth.login(email, password);
     // The password is proven, whatever step comes next.
-    await attempt.succeeded();
+    await withoutLimiterText(attempt.succeeded());
     // With MFA on or required, or the email not verified, the password is only the first step
     // (ADR-0065 Decisions 12 and 15, ADR-0129).
     const next = nextPageFor(await signInStep(deps, user, session));

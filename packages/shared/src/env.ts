@@ -125,9 +125,8 @@ export const SMTP_SETTINGS = [
 ] as const;
 
 /**
- * The abuse limits, one setting each (ADR-0170), in the order the browser test names them when it refuses them:
- * sign-in per typed address and per client address, wrong MFA codes per user, reset emails per address and per
- * client address, verification emails per address. No limit can be turned off.
+ * The abuse limits, one setting each (ADR-0170, ADR-0173), in the order the browser test names them when it refuses
+ * them; `.env.example` says what each counts. No limit can be turned off.
  */
 export const RATE_LIMIT_SETTINGS = [
   "RATE_LIMIT_SIGN_IN",
@@ -135,14 +134,15 @@ export const RATE_LIMIT_SETTINGS = [
   "RATE_LIMIT_PASSWORD_RESET_EMAIL",
   "RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP",
   "RATE_LIMIT_VERIFICATION_EMAIL",
+  "RATE_LIMIT_SIGN_UP_PER_IP",
 ] as const;
 
 /** One of the abuse limits' settings. */
 export type RateLimitSetting = (typeof RATE_LIMIT_SETTINGS)[number];
 
 /**
- * Each limit's default, `count/seconds` (ADR-0170): the values the product owner approved on 2026-11-16 for sign-in
- * and the emails per address, the CTO's for wrong MFA codes and reset emails per client address.
+ * Each limit's default, `count/seconds` (ADR-0170, ADR-0173): the values the product owner approved on 2026-11-16
+ * for sign-in and the emails per address, the CTO's for the others.
  */
 export const RATE_LIMIT_DEFAULTS: Readonly<Record<RateLimitSetting, string>> = Object.freeze({
   RATE_LIMIT_SIGN_IN: "5/900",
@@ -150,6 +150,7 @@ export const RATE_LIMIT_DEFAULTS: Readonly<Record<RateLimitSetting, string>> = O
   RATE_LIMIT_PASSWORD_RESET_EMAIL: "3/3600",
   RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "20/3600",
   RATE_LIMIT_VERIFICATION_EMAIL: "3/3600",
+  RATE_LIMIT_SIGN_UP_PER_IP: "60/3600",
 });
 
 /**
@@ -307,15 +308,14 @@ export const serverEnvSchema = z
       .regex(/^[0-9a-fA-F]{64}$/, "MFA_SECRET_KEY must be 32 bytes as 64 hex characters")
       .optional(),
 
-    // The abuse limits (ADR-0170), each `count/seconds`, its default when
-    // unset: sign-in per typed address and per client address, wrong MFA
-    // codes per user, reset emails per address and per client address,
-    // verification emails per address. Read by nothing yet (RD-7d, RD-7e).
+    // The abuse limits (ADR-0170, ADR-0173), each `count/seconds`, its
+    // default when unset; `.env.example` says what each counts.
     RATE_LIMIT_SIGN_IN: rateLimitSetting("RATE_LIMIT_SIGN_IN"),
     RATE_LIMIT_MFA_CODE: rateLimitSetting("RATE_LIMIT_MFA_CODE"),
     RATE_LIMIT_PASSWORD_RESET_EMAIL: rateLimitSetting("RATE_LIMIT_PASSWORD_RESET_EMAIL"),
     RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: rateLimitSetting("RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP"),
     RATE_LIMIT_VERIFICATION_EMAIL: rateLimitSetting("RATE_LIMIT_VERIFICATION_EMAIL"),
+    RATE_LIMIT_SIGN_UP_PER_IP: rateLimitSetting("RATE_LIMIT_SIGN_UP_PER_IP"),
 
     // How many entries at the right end of X-Forwarded-For our own
     // infrastructure writes; the client is the left-most of them (ADR-0170).

@@ -2029,6 +2029,9 @@ into on 2026-11-17.
       per-IP sign-up limit belongs to RD-8, the answer to the product
       owner. A forgotten count after a sign-in or a reset is a weaker
       signal of the same kind.
+      *Amended in RD-8a (ADR-0173): sign-up is counted per client address
+      before the account is made; with no client address it is not counted
+      at all. The answer itself stays the product owner's.*
 
 ## Open in RD-7d — what limiting sign-in leaves open
 

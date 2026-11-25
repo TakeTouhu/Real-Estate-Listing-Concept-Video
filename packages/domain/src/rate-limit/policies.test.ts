@@ -12,7 +12,7 @@ describe("the policies from the settings (ADR-0170)", () => {
   const plain = (name: string, limit: number, windowSeconds: number): RateLimitPolicy =>
     ({ name, limit, windowSeconds, cooldownBaseSeconds: 0, cooldownMaxSeconds: 0, decaySeconds: 0 });
 
-  it("are the six approved limits by default, checked and frozen", () => {
+  it("are the documented limits by default, checked and frozen", () => {
     const policies = rateLimitPolicies(RATE_LIMIT_DEFAULTS);
     expect(policies).toEqual({
       "sign-in.address": withCooldown("sign-in.address", 5, 900),
@@ -21,6 +21,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       "password-reset-email.address": plain("password-reset-email.address", 3, 3600),
       "password-reset-email.client": plain("password-reset-email.client", 20, 3600),
       "verification-email.address": plain("verification-email.address", 3, 3600),
+      "sign-up.client": plain("sign-up.client", 60, 3600),
     });
     expect(Object.keys(policies)).toEqual([...RATE_LIMIT_POLICY_NAMES]);
     expect(Object.isFrozen(policies)).toBe(true);
@@ -35,6 +36,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       RATE_LIMIT_PASSWORD_RESET_EMAIL: "4/400",
       RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "9/900",
       RATE_LIMIT_VERIFICATION_EMAIL: "2/200",
+      RATE_LIMIT_SIGN_UP_PER_IP: "8/800",
     });
     expect(policies).toEqual({
       "sign-in.address": withCooldown("sign-in.address", 7, 700),
@@ -43,6 +45,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       "password-reset-email.address": plain("password-reset-email.address", 4, 400),
       "password-reset-email.client": plain("password-reset-email.client", 9, 900),
       "verification-email.address": plain("verification-email.address", 2, 200),
+      "sign-up.client": plain("sign-up.client", 8, 800),
     });
   });
 
