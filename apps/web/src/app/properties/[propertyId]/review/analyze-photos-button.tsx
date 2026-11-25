@@ -21,10 +21,11 @@ interface Props {
  * member, so who may analyze, which photos may be, the audit and a second
  * press finding a photo already analyzed all stay with `AnalysisService`
  * (ADR-0009). Nothing is analyzed until the member presses. A refusal that
- * holds for every photo (signed out, or a role that cannot analyze) stops the
- * run and is shown once; any other is shown against its photo. The page is
- * then read again from the database, so analyzed photos move to "Awaiting
- * decision".
+ * holds for every photo (signed out, a role that cannot analyze, or the
+ * account's analysis limit, ADR-0173) stops the run and is shown once; any
+ * other is shown against its photo. The page is then read again from the
+ * database, so analyzed photos move to "Awaiting decision" and the rest stay
+ * offered.
  *
  * The page mounts it for every viewer, in the same place, and it shows nothing
  * while there is nothing to analyze and nothing to say: so a refusal stays on
@@ -54,7 +55,7 @@ export function AnalyzePhotosButton({ organizationId, propertyId, targets }: Pro
         );
         if (response.ok) continue;
         const message = mapAnalysisError(response.status, await envelopeMessage(response));
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401 || response.status === 403 || response.status === 429) {
           failures.push(message);
           break;
         }

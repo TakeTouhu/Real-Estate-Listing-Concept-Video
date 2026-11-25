@@ -24,6 +24,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       "sign-up.client": plain("sign-up.client", 60, 3600),
       "upload.user": plain("upload.user", 1000, 86400),
       "invitation.user": plain("invitation.user", 50, 86400),
+      "analysis.user": plain("analysis.user", 300, 3600),
     });
     expect(Object.keys(policies)).toEqual([...RATE_LIMIT_POLICY_NAMES]);
     expect(Object.isFrozen(policies)).toBe(true);
@@ -41,6 +42,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       RATE_LIMIT_SIGN_UP_PER_IP: "8/800",
       RATE_LIMIT_UPLOAD: "6/600",
       RATE_LIMIT_INVITATION: "5/500",
+      RATE_LIMIT_ANALYSIS: "3/300",
     });
     expect(policies).toEqual({
       "sign-in.address": withCooldown("sign-in.address", 7, 700),
@@ -52,6 +54,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       "sign-up.client": plain("sign-up.client", 8, 800),
       "upload.user": plain("upload.user", 6, 600),
       "invitation.user": plain("invitation.user", 5, 500),
+      "analysis.user": plain("analysis.user", 3, 300),
     });
   });
 

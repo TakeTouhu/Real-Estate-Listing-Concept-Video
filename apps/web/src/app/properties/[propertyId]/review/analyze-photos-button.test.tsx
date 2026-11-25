@@ -121,6 +121,18 @@ describe("the analyze button (GS-13b, ADR-0122)", () => {
     }
   });
 
+  it("stops at the account's analysis limit, shows its wait once, and reads the page again (ADR-0173)", async () => {
+    const limited = { error: { code: "RATE_LIMITED", message: "Too many analysis requests. Try again in 7 minutes." } };
+    fetchMock.mockResolvedValueOnce(respond(200)).mockResolvedValue(respond(429, limited));
+    button();
+    await press();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByRole("alert").map((node) => node.textContent)).toEqual([
+      "Too many analysis requests. Try again in 7 minutes.",
+    ]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("clears the last run's refusals as soon as it is pressed again", async () => {
     let release: (response: Response) => void = () => undefined;
     fetchMock

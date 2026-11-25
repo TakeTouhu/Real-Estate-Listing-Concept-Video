@@ -4,6 +4,8 @@ import { requireAssetInProperty } from "@/lib/asset-route";
 import { getCurrentUser } from "@/lib/auth";
 import { getAnalysisService, toAnalysisDto } from "@/lib/analysis";
 import { appErrorToResponse } from "@/lib/http";
+import { getIdentityServices } from "@/lib/identity";
+import { getRateLimiter, limitJsonRequest } from "@/lib/rate-limit";
 import { requireOrganizationId } from "@/lib/request";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +27,9 @@ export async function POST(
 
   try {
     const organizationId = await requireOrganizationId(request);
+    // Counted by the account after the body is checked, before the photo is looked up or analyzed, and never given
+    // back; analyses and refreshes share one limit (ADR-0173 Decisions 3 and 4).
+    await limitJsonRequest(getRateLimiter, "ANALYSIS", current.user.id, getIdentityServices().deps.clock.now());
     await requireAssetInProperty(current.user.id, organizationId, propertyId, assetId);
     const analysis = await getAnalysisService().analyzeAsset(
       current.user.id,

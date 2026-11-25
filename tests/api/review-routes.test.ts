@@ -15,15 +15,18 @@ import {
   createTestDeps,
   InMemoryAssetAnalysisRepository,
   InMemoryMediaAssetRepository,
+  InMemoryRateLimitStore,
   InMemoryReviewTransaction,
   StandInProperties,
 } from "@app/domain/testing";
+import { RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/shared";
 
 /**
  * Route tests for the review endpoints. Only session resolution is stubbed; the
  * handlers run against a real AnalysisService over in-memory repositories, so
  * authorization, the duplicate rule and tenant isolation are exercised rather
- * than mocked away.
+ * than mocked away. The analysis limit, which counts refreshes, runs for real
+ * on an in-memory store made afresh for each test (ADR-0173).
  */
 const PASSWORD = "password-123456";
 const STORAGE_KEY = "org/o/properties/prp_1/assets/ast_1/normalized.jpg";
@@ -31,6 +34,8 @@ const STORAGE_KEY = "org/o/properties/prp_1/assets/ast_1/normalized.jpg";
 const currentUser = vi.hoisted(() => ({ value: null as { user: { id: string } } | null }));
 const analysisService = vi.hoisted(() => ({ value: null as unknown }));
 const propertyServices = vi.hoisted(() => ({ value: null as unknown }));
+const identity = vi.hoisted(() => ({ value: null as unknown }));
+const limits = vi.hoisted(() => ({ value: null as unknown }));
 
 vi.mock("@/lib/auth", () => ({ getCurrentUser: () => Promise.resolve(currentUser.value) }));
 vi.mock("@/lib/property", () => ({ getPropertyServices: () => propertyServices.value }));
@@ -38,6 +43,18 @@ vi.mock("@/lib/analysis", async () => {
   const actual = await vi.importActual<typeof import("@/lib/analysis")>("@/lib/analysis");
   return { ...actual, getAnalysisService: () => analysisService.value };
 });
+vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => limits.value,
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
+const limitsOf = (settings: Partial<Record<RateLimitSetting, string>>) =>
+  new WebRateLimits(
+    new InMemoryRateLimitStore(),
+    { ...RATE_LIMIT_DEFAULTS, ...settings, SESSION_SECRET: "x".repeat(32) },
+    { warn: vi.fn() },
+  );
 
 const { POST: approve } = await import(
   "@/app/api/properties/[propertyId]/assets/[assetId]/analysis/approve/route"
@@ -160,6 +177,8 @@ async function analyzed(assetId: string, overrides: Partial<MediaAsset> = {}): P
 
 beforeEach(async () => {
   const deps = createTestDeps();
+  identity.value = { deps };
+  limits.value = limitsOf({});
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   const orgs = new OrganizationService(deps);
   const owner = await auth.register({ email: "o@e.com", password: PASSWORD, name: "Owner" });
@@ -397,6 +416,23 @@ const { POST: correct } = await import(
 async function stored(assetId = "ast_1") {
   return ctx.service.getForAsset(ctx.ownerId, ctx.orgId, assetId);
 }
+
+describe("the analysis limit (ADR-0173)", () => {
+  it("counts a refresh, and never a review decision or a correction", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_ANALYSIS: "1/3600" });
+    const refreshes = vi.spyOn(ctx.service, "analyzeAsset");
+    expect((await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params())).status).toBe(200);
+    expect((await approve(req({ organizationId: ctx.orgId }), params())).status).toBe(200);
+    expect((await refresh(req({ organizationId: ctx.orgId }), params())).status).toBe(200);
+    expect((await reject(req({ organizationId: ctx.orgId, reason: "blurry" }), params())).status).toBe(200);
+    const refused = await refresh(req({ organizationId: ctx.orgId }), params());
+    expect([refused.status, ((await jsonOf(refused)).error as Record<string, unknown>).message]).toEqual([
+      429,
+      "Too many analysis requests. Try again in 60 minutes.",
+    ]);
+    expect(refreshes).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("POST /analysis/correction — JSON state translation", () => {
   beforeEach(async () => {

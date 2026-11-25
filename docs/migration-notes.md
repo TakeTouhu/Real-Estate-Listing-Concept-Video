@@ -3184,3 +3184,22 @@ deployment sets `SMTP_HOST` applies to it again. The new setting may
 stay set, which that build's schema does not know and ignores.
 Invitations are no longer limited, and the table's rows for them are
 left unread.
+
+## RD-8d — analyses are limited per account
+
+**No migration** (ADR-0173). Migration 35 stays the last: the table's
+CHECK takes the new policy's name.
+
+**What changes at deploy.** Analyses and refreshes are counted together
+per signed-in account, 300 an hour by default, failed ones included, on
+the signed-in limiter client. `RATE_LIMIT_ANALYSIS` is optional and
+takes its default; a value out of form is refused, by the web app and
+the worker alike.
+
+**On a development machine.** A 301st analysis request of one account
+within an hour of its first is refused until that hour ends.
+`DELETE FROM "rate_limit_counters";` clears every count.
+
+**Rolling back.** To RD-8c's build: safe, even with the new setting set,
+which that build's schema does not know and ignores. Analyses are no
+longer limited, and the table's rows for them are left unread.
