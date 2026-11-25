@@ -98,11 +98,11 @@ export function isClamAvHost(value: string): boolean {
 
 /**
  * Whether `value` is a DNS name and not an IP address: what a certificate or an EHLO greeting names (ADR-0166,
- * ADR-0167). Its last label is never digits alone, as no top-level domain is, so nothing a resolver may read as an
- * address, such as `127.1`, passes.
+ * ADR-0167). Its last label is never a number, in digits or as `0x` and hex, as no top-level domain is: a URL
+ * parser or resolver reads such a name, `127.1` or `0x7f000001`, as an IPv4 address.
  */
 export function isDnsName(value: string): boolean {
-  return isNetworkHost(value) && isIP(value) === 0 && !/(?:^|\.)[0-9]+$/.test(value);
+  return isNetworkHost(value) && isIP(value) === 0 && !/(?:^|\.)(?:[0-9]+|0x[0-9a-f]*)$/i.test(value);
 }
 
 /** How an SMTP connection is encrypted (ADR-0166 Decision 2): TLS from its first byte, or STARTTLS. No plain mode. */

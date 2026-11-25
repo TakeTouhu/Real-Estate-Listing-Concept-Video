@@ -1235,7 +1235,7 @@ name an SMTP server and what the web app gives it, all or none, never
 beside the outbox folder, each refused by a message that repeats no
 value. Production refuses `NODE_TLS_REJECT_UNAUTHORIZED`. The address
 rule moves to `@app/shared`, so the settings and the sender judge an
-address alike. The browser test refuses every SMTP setting. Nothing reads
+address alike. The browser test refuses every SMTP setting. Nothing uses
 the settings yet: RD-6d gives the web app the SMTP sender.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler

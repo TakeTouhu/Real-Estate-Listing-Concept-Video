@@ -48,9 +48,9 @@ is wrong, and repeats no value:
 - **A DNS host.** The sender checks the server's certificate for the
   host's name, and no setting names another, so an IP address is refused
   here rather than when the first email is sent. A DNS name's last label
-  is never digits alone, as no top-level domain is, so a name a resolver
-  may read as an address, such as `127.1`, is refused as a host and as
-  an EHLO name.
+  is never a number, in digits or as `0x` and hex, as no top-level domain
+  is, so a name a URL parser or resolver reads as an IPv4 address, such
+  as `127.1` or `0x7f000001`, is refused as a host and as an EHLO name.
 - **A login everywhere.** The sender never hands an email over unnamed
   (ADR-0166 Decision 3), so the login is required in every environment,
   not only in production.
@@ -85,7 +85,8 @@ is not refused for its address or names.
 It reads its mail from the outbox, so `e2eEnvironment` refuses each SMTP
 setting by name, as it refuses the Cloud Storage and ClamAV ones. It
 refuses the names in `SMTP_SETTINGS`, so a setting added to the schema
-is refused there too.
+is refused there too. Playwright resolves `@app/shared` through the root
+`tsconfig.json`'s paths, as the other browser-test helpers do.
 
 ## Considered and not done
 

@@ -96,8 +96,8 @@ describe("the recipient", () => {
       shared.EMAIL_ADDRESS_MAX_LENGTH,
       shared.EMAIL_LOCAL_PART_MAX_LENGTH,
     ]);
-    const spaced = ["  Owner@Example.TEST ", "\towner@example.test\n", "First.Last+Tag@Mail.Example.CO.JP"];
-    for (const address of [...spaced, "ÅSA@EXAMPLE.TEST", "ｆｕｌｌ@example.test", "a.b.c+d@example.test"]) {
+    const mixed = ["  Owner@Example.TEST ", "\towner@example.test\n", "First.Last+Tag@Mail.Example.CO.JP"];
+    for (const address of [...mixed, "ÅSA@EXAMPLE.TEST", "ｆｕｌｌ@example.test", "a.b.c+d@example.test"]) {
       expect(normalizeEmail(address)).toBe(shared.normalizeEmailAddress(address));
     }
   });

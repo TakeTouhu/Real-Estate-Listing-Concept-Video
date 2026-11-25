@@ -31,7 +31,7 @@ No change.
 | New: `normalizeEmailAddress`, `isPlainEmailAddress` | `@app/shared` `email-address.ts` |
 | `isDeliverableEmailAddress`, `EMAIL_ADDRESS_MAX_LENGTH`, `EMAIL_LOCAL_PART_MAX_LENGTH` defined here, re-exported unchanged by `@app/domain` | `@app/shared` `email-address.ts` |
 | `normalizeEmail` returns `normalizeEmailAddress` | `@app/domain` `identity/util.ts` |
-| `createSmtpEmailSender` judges its sender, certificate name and EHLO name by the shared rules, with the same messages; a certificate or EHLO name whose last label is digits alone, such as `127.1`, is now refused too | `@app/storage/smtp` |
+| `createSmtpEmailSender` judges its sender, certificate name and EHLO name by the shared rules, with the same messages; a certificate or EHLO name whose last label is a number, such as `127.1` or `0x7f000001`, is now refused too | `@app/storage/smtp` |
 | `e2eEnvironment` refuses each SMTP setting | `tests/e2e/support/environment.ts` |
 
 Unchanged: `EmailSender`, `outgoingEmail`, the mailer, the four flows

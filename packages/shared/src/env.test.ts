@@ -339,7 +339,7 @@ describe("serverEnvSchema", () => {
     it("refuses each setting that is not what it names, by a message that repeats no value", () => {
       const refused: [string, string[], string][] = [
         ["SMTP_HOST", ["", "smtp.example.com:587", "smtp://smtp.example.com", "user@smtp.example.com"], BAD_HOST],
-        ["SMTP_HOST", ["smtp example", "127.0.0.1", "127.1", "::1", "[::1]"], BAD_HOST],
+        ["SMTP_HOST", ["smtp example", "127.0.0.1", "127.1", "0x7f000001", "::1", "[::1]"], BAD_HOST],
         [
           "SMTP_PORT",
           ["", "0", "65536", "99999", "abc", "587.5", "0587", " 587", "0x24b", "1e3", "-1", "５８７"],
@@ -350,7 +350,7 @@ describe("serverEnvSchema", () => {
         ["SMTP_PASSWORD", [""], "SMTP_PASSWORD must not be empty"],
         [
           "SMTP_EHLO_NAME",
-          ["", "127.0.0.1", "127.1", "0127.0.0.1", "app name", "app\r\nRCPT TO:<x@y.z>"],
+          ["", "127.0.0.1", "127.1", "0127.0.0.1", "1.0x1", "app name", "app\r\nRCPT TO:<x@y.z>"],
           "SMTP_EHLO_NAME must be a DNS name, not an IP address",
         ],
         [
@@ -446,14 +446,14 @@ describe("the shared port, name and mode rules", () => {
   });
 
   it("takes a DNS name, and no IP address, nothing an address could be read from, port or space", () => {
-    for (const name of ["smtp.example.com", "mail", "a-b.example", "xn--eckwd4c7c.example", "123.example.com"]) {
+    for (const name of ["smtp.example.com", "mail", "xn--eckwd4c7c.example", "123.example.com", "0xa.example"]) {
       expect(isDnsName(name)).toBe(true);
     }
-    const addressLike = ["127.1", "0127.0.0.1", "1.2.3.4.5", "2130706433", "mail.123"];
+    const addressLike = ["127.1", "0127.0.0.1", "1.2.3.4.5", "2130706433", "mail.123", "0x7f000001", "1.0X1", "a.0x"];
     for (const value of ["", "127.0.0.1", "10.0.0.7", "::1", "fd00::7", "[::1]", "smtp.example.com:587", "a b", "-a"]) {
       expect(isDnsName(value)).toBe(false);
     }
-    // Digits alone in the last label: no top-level domain is, and a resolver may read the name as an address.
+    // A number in the last label, in digits or hex: no top-level domain is, and a URL parser reads an address.
     for (const value of addressLike) {
       expect(isDnsName(value)).toBe(false);
     }
