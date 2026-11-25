@@ -2,14 +2,17 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { SESSION_COOKIE, getSignIn, nextPageFor } from "@/lib/auth";
 import { formString, redirectWithError } from "@/lib/http";
+import { getIdentityServices } from "@/lib/identity";
 import { getMfaService } from "@/lib/mfa";
+import { getRateLimiter } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
 /**
  * The second sign-in step: an authenticator code or a recovery code
  * (ADR-0065 Decision 12). A sign-in that has ended, by five wrong codes or
- * otherwise, goes back to the password.
+ * otherwise, goes back to the password. Wrong codes are also limited per
+ * user across sign-ins (ADR-0171).
  */
 export async function POST(request: Request): Promise<NextResponse> {
   const signIn = await getSignIn();
@@ -19,7 +22,12 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   const form = await request.formData();
   try {
-    await getMfaService().verify(signIn.session, formString(form, "code"));
+    const mfa = getMfaService();
+    // Counted per user before the code is checked; a refusal keeps the sign-in and its own five (ADR-0171 Decision 2).
+    const attempt = await getRateLimiter().mfaCode(signIn.user.id, getIdentityServices().deps.clock.now());
+    if (!attempt.allowed) return redirectWithError(request.url, "/login/mfa", attempt.message);
+    await mfa.verify(signIn.session, formString(form, "code"));
+    await attempt.succeeded();
     return NextResponse.redirect(new URL("/", request.url), { status: 303 });
   } catch (error) {
     if (!(error instanceof AppError)) return redirectWithError(request.url, "/login/mfa", "Sign in failed");

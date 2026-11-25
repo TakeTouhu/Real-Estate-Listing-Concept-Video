@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthService, OrganizationService, totpStep } from "@app/domain";
-import { createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
-import { hotp } from "@app/shared";
+import { InMemoryRateLimitStore, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
+import { RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
 
 /**
  * Route tests for the two-step sign-in, MFA set-up when it is required, and the
@@ -16,6 +16,7 @@ const MFA_KEY = "33".repeat(32);
 const cookie = vi.hoisted(() => ({ value: undefined as string | undefined }));
 const env = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const identity = vi.hoisted(() => ({ value: null as unknown }));
+const limits = vi.hoisted(() => ({ value: null as unknown }));
 
 // `next` is installed for the web app only, so its module is named by its resolved path.
 const nextHeaders = await vi.hoisted(async () => {
@@ -28,6 +29,12 @@ vi.mock(nextHeaders, () => ({
 }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
+// The sign-in limits run for real, on an in-memory store made afresh for each test (ADR-0171).
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => limits.value,
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
 
 const { getCurrentUser } = await import("@/lib/auth");
 const { qrCodeDataUrl } = await import("@/lib/mfa");
@@ -43,6 +50,8 @@ let auth: AuthService;
 
 beforeEach(async () => {
   deps = createTestDeps();
+  const settings = { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) };
+  limits.value = new WebRateLimits(new InMemoryRateLimitStore(), settings);
   auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   identity.value = { deps, auth };
   env.value = { NODE_ENV: "test", USER_SESSION_TTL_SECONDS: 3600, MFA_SECRET_KEY: MFA_KEY };
@@ -274,5 +283,125 @@ describe("the MFA routes", () => {
     const unconfigured = await setup();
     expect(unconfigured.status).toBe(500);
     expect(((await unconfigured.json()) as { error: { code: string } }).error.code).toBe("CONFIGURATION_ERROR");
+  });
+});
+
+describe("the sign-in limits (ADR-0171)", () => {
+  const SIGN_IN_REFUSED = "Too many sign-in attempts. Try again in 15 minutes.";
+  const CODES_REFUSED = "Too many wrong codes. Try again in 15 minutes.";
+  const from = (ip: string, fields: Record<string, string>) =>
+    new Request("http://localhost/api/auth", {
+      method: "POST",
+      headers: { "x-forwarded-for": ip },
+      body: new URLSearchParams(fields),
+    });
+  const limitWith = (store: ConstructorParameters<typeof WebRateLimits>[0], trusted?: string) => {
+    const settings = { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32), FORWARDED_FOR_TRUSTED_ENTRIES: trusted };
+    limits.value = new WebRateLimits(store, settings, { warn: () => undefined });
+  };
+  const down = { hit: () => Promise.reject(new Error("down")), giveBack: async () => {}, forget: async () => {} };
+  /** The in-memory store, but one of its calls fails. */
+  const failing = (fails: "forget" | "giveBack") =>
+    Object.assign(Object.create(new InMemoryRateLimitStore()) as InMemoryRateLimitStore, {
+      [fails]: () => Promise.reject(new Error("down")),
+    });
+
+  it("refuses the sixth sign-in for an address after five wrong passwords, account or not", async () => {
+    for (const email of ["member@example.com", "nobody@example.com"]) {
+      for (let i = 0; i < 5; i += 1) {
+        const wrong = await login(form({ email, password: "wrong-password" }));
+        expect(location(wrong).error).toBe("Invalid email or password");
+      }
+      const refused = await login(form({ email: ` ${email.toUpperCase()}`, password: PASSWORD }));
+      expect(location(refused)).toEqual({ path: "/login", error: SIGN_IN_REFUSED });
+      expect(refused.headers.get("set-cookie")).toBeNull();
+    }
+    // The wait ends, and the right password signs in.
+    deps.clock.advanceSeconds(900);
+    expect(location(await login(form({ email: "member@example.com", password: PASSWORD }))).path).toBe("/");
+  });
+
+  it("forgets the address when the password is right, even when a code comes next", async () => {
+    await enroll();
+    for (let round = 0; round < 2; round += 1) {
+      for (let i = 0; i < 4; i += 1) await login(form({ email: "member@example.com", password: "wrong-password" }));
+      expect(location(await login(form({ email: "member@example.com", password: PASSWORD }))).path).toBe("/login/mfa");
+    }
+  });
+
+  it("counts the client address the setting names, and gives its hit back when the password is right", async () => {
+    limitWith(new InMemoryRateLimitStore(), "1");
+    const wrong = (i: number) => from("203.0.113.7", { email: `guess${i}@example.com`, password: "wrong-password" });
+    for (let i = 0; i < 4; i += 1) expect(location(await login(wrong(i))).error).toBe("Invalid email or password");
+    const right = await login(from("203.0.113.7", { email: "member@example.com", password: PASSWORD }));
+    expect(location(right).path).toBe("/");
+    expect(location(await login(wrong(4))).error).toBe("Invalid email or password");
+    expect(location(await login(wrong(5))).error).toBe(SIGN_IN_REFUSED);
+    // Another client address is counted on its own.
+    expect(location(await login(from("198.51.100.1", { email: "a@example.com", password: "x" }))).error).toBe(
+      "Invalid email or password",
+    );
+  });
+
+  it("refuses through each route's own answer when the limiter cannot answer", async () => {
+    const { secret } = await enroll();
+    await signIn();
+    limitWith(down);
+    const refused = await login(form({ email: "member@example.com", password: PASSWORD }));
+    expect(location(refused)).toEqual({ path: "/login", error: "Sign in failed" });
+    expect(refused.headers.get("set-cookie")).toBeNull();
+    expect(location(await enterCode(form({ code: codeFor(secret, 1) })))).toEqual({
+      path: "/login/mfa",
+      error: "Sign in failed",
+    });
+    expect(await getCurrentUser()).toBeNull();
+  });
+
+  it("refuses a right password when the address cannot be forgotten or the client's hit given back", async () => {
+    for (const fails of ["forget", "giveBack"] as const) {
+      limitWith(failing(fails), "1");
+      const refused = await login(from("203.0.113.7", { email: "member@example.com", password: PASSWORD }));
+      expect(location(refused)).toEqual({ path: "/login", error: "Sign in failed" });
+      expect(refused.headers.get("set-cookie")).toBeNull();
+    }
+  });
+
+  it("keeps an accepted code accepted when the user's wrong codes cannot be forgotten", async () => {
+    const { secret } = await enroll();
+    await signIn();
+    limitWith(failing("forget"));
+    // The code was checked and its sign-in passed; only the count stays (ADR-0171 Decision 8).
+    expect(location(await enterCode(form({ code: codeFor(secret, 1) })))).toEqual({
+      path: "/login/mfa",
+      error: "Sign in failed",
+    });
+    expect(await getCurrentUser()).not.toBeNull();
+  });
+
+  it("refuses the sixth wrong code across sign-ins, keeping the sign-in and its own count", async () => {
+    const { secret } = await enroll();
+    await signIn();
+    for (let left = 4; left > 0; left -= 1) await enterCode(form({ code: "000000" }));
+    await signIn();
+    expect(location(await enterCode(form({ code: "000000" }))).error).toBe("That code is not valid. Attempts left: 4");
+    const refused = await enterCode(form({ code: codeFor(secret, 1) }));
+    expect(location(refused)).toEqual({ path: "/login/mfa", error: CODES_REFUSED });
+    expect(refused.headers.get("set-cookie")).toBeNull();
+    deps.clock.advanceSeconds(900);
+    // The refused code was never checked: this sign-in has had one wrong code.
+    expect(location(await enterCode(form({ code: "000000" }))).error).toBe("That code is not valid. Attempts left: 3");
+    expect(location(await enterCode(form({ code: codeFor(secret, 1) }))).path).toBe("/");
+  });
+
+  it("forgets the user's wrong codes when a code is accepted", async () => {
+    const { secret, recoveryCodes } = await enroll();
+    for (const code of [codeFor(secret, 1), recoveryCodes[0]!]) {
+      await signIn();
+      for (let i = 0; i < 4; i += 1) await enterCode(form({ code: "000000" }));
+      await signIn();
+      expect(location(await enterCode(form({ code }))).path).toBe("/");
+    }
+    await signIn();
+    expect(location(await enterCode(form({ code: "000000" }))).error).toBe("That code is not valid. Attempts left: 4");
   });
 });

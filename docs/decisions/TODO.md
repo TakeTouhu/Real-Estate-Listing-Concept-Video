@@ -327,6 +327,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       in development with the test provider) is the first generation route;
       it must be limited, and its form's size bounded, before any production
       route serves a start.
+      *Amended in RD-7d (ADR-0171): sign-in is limited per typed address and
+      per client address, and wrong MFA codes per account, in PostgreSQL
+      (ADR-0169, ADR-0170); the values are settings with documented
+      defaults. Uploads, analysis, generation, downloads, invitations and
+      Unit purchase wait for RD-8.*
 - [ ] **Extend the same-origin check to every cookie-based mutation route.**
       `SecurityCompliance.md` asks for CSRF protection where cookie-based
       mutations are used. The session cookie is `SameSite=Lax` (ADR-0006),
@@ -2011,6 +2016,27 @@ into on 2026-11-17.
       5). Its helpers would need a second server or run. RD-11's
       production-mode test or part 2 is to decide.
 
+## Open in RD-7d — what limiting sign-in leaves open
+
+- [ ] **A stranger can keep a known customer signed out** (product
+      owner's): five wrong passwords per cooldown hold the account; only
+      the wait ends it until RD-7e, whose completed reset will clear it
+      once (ADR-0172). A device-cookie exemption would fix it.
+- [ ] **A flood can hold every sign-in on the limiter's 3 connections**:
+      the others wait up to Prisma's pool wait, then fail closed.
+      Measure on the deployment; a shorter pool wait or more connections
+      would need a decision.
+- [ ] **Disable a factor after 100 failures; email the person when a
+      correct password is followed by wrong codes** (product owner's;
+      NIST SP 800-63B, OWASP).
+- [ ] **How support clears a real person's wait**: no operator command
+      exists; one would be an audited admin action.
+- [ ] **Whether entering a wait is audited.**
+- [ ] **The MFA page's "Attempts left" counts this sign-in only**; the
+      per-account limit may refuse sooner.
+- [ ] **Limit `POST /api/mfa/disable` and send `Retry-After`** with RD-8's
+      first JSON route, if measurement asks for it.
+
 ## Open in RD-7c — what the rate-limit settings leave open
 
 - [ ] **Measure `FORWARDED_FOR_TRUSTED_ENTRIES` on the deployment, and
@@ -2981,7 +3007,10 @@ them is **built**. Each item below records the settled decision and what remains
       five-wrong-codes guard is per sign-in, so until rate limiting exists
       (ADR-0054 Decision 5) a person with the password can sign in again and try
       more codes; rate limiting should ship before MFA is relied on in
-      production. (5) Turning MFA on asks for the signed-in session only, not
+      production. *Done in RD-7d (ADR-0171): wrong codes, authenticator or
+      recovery, are limited per account across sign-ins (5 per 15 minutes,
+      then a growing wait); the per-sign-in five stays.*
+      (5) Turning MFA on asks for the signed-in session only, not
       the password again (ADR-0052 Decision 10 adds no step-up), so someone
       holding another person's session, on an account without MFA, could turn
       it on and lock them out. (6) Without `MFA_SECRET_KEY`

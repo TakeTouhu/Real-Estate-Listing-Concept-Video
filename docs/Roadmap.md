@@ -1277,6 +1277,21 @@ derived from `SESSION_SECRET`. The browser test runs the defaults.
 Nothing is limited yet: RD-7d adds the limiter that hits one attempt's
 keys and wires it into sign-in, RD-7e into the emails.
 
+**RD-7d — sign-in and wrong MFA codes are limited** (ADR-0171, no
+migration): the limiter hits one attempt's keys in order, the client
+address's first, and at the first refusal gives back the earlier hits.
+Sign-in is counted per client address and per typed address, whether or
+not an account uses it, before the password is looked up; a right
+password forgets the address and gives back the client address's hit.
+Wrong MFA codes, authenticator or recovery, are counted per user across
+sign-ins, and an accepted code forgets them; a refusal keeps the
+sign-in. A refusal answers on the form with the wait in minutes, is
+logged by code and is not audited; a limiter that cannot answer refuses,
+though a code it accepted stays accepted.
+The limiter has its own small database client, whose statements the
+database ends after a second. Turning MFA off and confirming its set-up
+are not limited.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

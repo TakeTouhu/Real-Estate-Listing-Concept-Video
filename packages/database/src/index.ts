@@ -1,4 +1,11 @@
-export { getPrismaClient, getReadinessPrismaClient, limitedDatabaseUrl, type PrismaClient } from "./client";
+export {
+  getPrismaClient,
+  getRateLimitPrismaClient,
+  getReadinessPrismaClient,
+  limitedDatabaseUrl,
+  statementLimitedDatabaseUrl,
+  type PrismaClient,
+} from "./client";
 export { createPrismaIdentityRepositories } from "./repositories";
 export { createPrismaPropertyRepositories } from "./property-repositories";
 export { createPrismaAnalysisRepository } from "./analysis-repositories";

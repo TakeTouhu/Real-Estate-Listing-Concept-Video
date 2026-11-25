@@ -7,9 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * Making a client opens no connection.
  */
 afterEach(() => {
-  const holder = globalThis as { appPrismaClient?: unknown; readinessPrismaClient?: unknown };
+  type Name = "appPrismaClient" | "readinessPrismaClient" | "rateLimitPrismaClient";
+  const holder = globalThis as Partial<Record<Name, unknown>>;
   delete holder.appPrismaClient;
   delete holder.readinessPrismaClient;
+  delete holder.rateLimitPrismaClient;
 });
 
 describe("the process's PrismaClient", () => {
@@ -89,5 +91,32 @@ describe("the readiness probe's PrismaClient (ADR-0153)", () => {
     // Node.js's own error for it carries the whole address as `input`.
     expect(Object.entries(thrown as object)).toEqual([["code", "ERR_INVALID_URL"]]);
     expect(String((thrown as Error).stack)).not.toContain("hunter2");
+  });
+});
+
+describe("the abuse limiter's PrismaClient (ADR-0171)", () => {
+  it("is a client of its own, made once from the first address", async () => {
+    const { getPrismaClient, getRateLimitPrismaClient, getReadinessPrismaClient } = await import("./client");
+    const first = getRateLimitPrismaClient("postgresql://app@db.internal/app?connection_limit=3");
+    expect(first === getPrismaClient() || first === getReadinessPrismaClient(undefined, 3)).toBe(false);
+    vi.resetModules();
+    expect((await import("./client")).getRateLimitPrismaClient(undefined)).toBe(first);
+  });
+
+  it("limits its connections and has the database end each statement, keeping the address's options", async () => {
+    const { statementLimitedDatabaseUrl } = await import("./client");
+    expect(statementLimitedDatabaseUrl("postgresql://app@db.internal/app?connection_limit=20", 3, 1000)).toBe(
+      "postgresql://app@db.internal/app?connection_limit=3&options=-c+statement_timeout%3D1000",
+    );
+    expect(statementLimitedDatabaseUrl("postgresql://app@db.internal/app?options=-c%20search_path%3Dx", 2, 500)).toBe(
+      "postgresql://app@db.internal/app?options=-c+search_path%3Dx+-c+statement_timeout%3D500&connection_limit=2",
+    );
+    const bare = "postgresql://app@db.internal/app";
+    for (const [connections, milliseconds] of [[0, 1000], [3, 0], [3, 2.5]] as const) {
+      expect(() => statementLimitedDatabaseUrl(bare, connections, milliseconds)).toThrow(RangeError);
+    }
+    expect(() => statementLimitedDatabaseUrl("postgresql://app:hunter2@db.internal:port/app", 3, 1000)).toThrow(
+      expect.objectContaining({ code: "ERR_INVALID_URL", message: "The database address is not a URL" }),
+    );
   });
 });
