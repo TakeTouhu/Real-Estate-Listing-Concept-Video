@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
  * response. Also open to a sign-in that must set MFA up before anything else.
  */
 export async function POST(request: Request): Promise<NextResponse> {
-  return mfaRoute(async ({ session }, mfa) => {
+  return mfaRoute(request, "POST /api/mfa/setup/confirm", async ({ session }, mfa) => {
     const { recoveryCodes } = await mfa.confirmSetup(session, await readCode(request));
     return NextResponse.json({ recoveryCodes });
   }, { duringSetup: true });

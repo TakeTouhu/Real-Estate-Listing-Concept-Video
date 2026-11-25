@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
+import { AppError } from "@app/shared";
 import { getSignIn, nextPageFor } from "@/lib/auth";
 import { sendLimitedVerificationLinkTo, verifyEmailPage } from "@/lib/email-verification";
+import { appErrorToResponse } from "@/lib/http";
+import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +14,9 @@ export const dynamic = "force-dynamic";
  * Each send is counted by the address first (ADR-0172).
  */
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/auth/verify-email/resend")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A verification link must be asked for from this site"));
+  }
   const signIn = await getSignIn();
   if (!signIn) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
   if (signIn.step !== "EMAIL_VERIFICATION_REQUIRED") {

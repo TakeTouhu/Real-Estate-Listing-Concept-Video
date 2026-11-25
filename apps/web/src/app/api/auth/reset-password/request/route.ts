@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { formOf, formString } from "@/lib/http";
+import { AppError } from "@app/shared";
+import { appErrorToResponse, formOf, formString } from "@/lib/http";
 import { askForLimitedResetLink, resetPasswordPage } from "@/lib/password-reset";
+import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +14,9 @@ export const dynamic = "force-dynamic";
  * address (ADR-0172).
  */
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/auth/reset-password/request")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A password reset link must be asked for from this site"));
+  }
   const form = await formOf(request);
   const wait = await askForLimitedResetLink(request.headers, formString(form, "email"));
   const page = wait === null ? resetPasswordPage(request.url, "sent") : resetPasswordPage(request.url, "limited", wait);

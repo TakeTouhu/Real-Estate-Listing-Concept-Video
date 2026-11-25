@@ -177,6 +177,7 @@ describe("POST /api/organizations/:organizationId/mfa-requirement", () => {
     const again = await login(
       new Request("http://localhost/api/auth/login", {
         method: "POST",
+        headers: SITE,
         body: new URLSearchParams({ email: emails.manager, password: PASSWORD }),
       }),
     );

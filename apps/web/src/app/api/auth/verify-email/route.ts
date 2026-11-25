@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { AppError } from "@app/shared";
 import { getEmailVerificationService, verifyEmailPage } from "@/lib/email-verification";
-import { formString } from "@/lib/http";
+import { appErrorToResponse, formString } from "@/lib/http";
+import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +12,9 @@ export const dynamic = "force-dynamic";
  * link that verifies nothing gets the same answer.
  */
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/auth/verify-email")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "An email address must be verified from this site"));
+  }
   const form = await request.formData();
   const outcome = await getEmailVerificationService().verifyEmail(formString(form, "token"));
   const notice = outcome === "INVALID" ? "invalid" : "verified";

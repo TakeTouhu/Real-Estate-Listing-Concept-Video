@@ -1418,6 +1418,17 @@ now check. Planned, not done: RD-9c the sign-in and account routes and
 MFA; RD-9d the fixed headers and the API policy; RD-9e the page policy
 and the records that close RD-9.
 
+**RD-9c — the sign-in and account routes check their origin**
+(ADR-0174, no migration): sign-in and its code step, sign-up, sign-out,
+the four MFA routes through `mfaRoute`, organization creation, the
+password reset routes and the email verification routes refuse a post
+from another origin, or with none, with `403` before they read the
+session or the body, count a limit or send an email. 44 of the 45
+mutating handlers now check; `PUT /api/storage/upload`, authorized by
+its token alone, is the one exception, and the test of every route file
+keeps it so. Planned, not done: RD-9d the fixed headers and the API
+policy; RD-9e the page policy and the records that close RD-9.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

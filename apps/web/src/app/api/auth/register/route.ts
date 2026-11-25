@@ -3,8 +3,9 @@ import { AppError } from "@app/shared";
 import { SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth";
 import { sendLimitedVerificationLinkTo, verifyEmailPage } from "@/lib/email-verification";
 import { getIdentityServices } from "@/lib/identity";
-import { formString, redirectWithError } from "@/lib/http";
+import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { getRateLimiter } from "@/lib/rate-limit";
+import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,9 @@ const REGISTRATION_FAILED = "Registration failed";
  * itself is counted first, per client address (ADR-0173).
  */
 export async function POST(request: Request): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/auth/register")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "An account must be created from this site"));
+  }
   const services = getIdentityServices();
   // Counted before the form is read or any account looked up, and never given back; a limiter that cannot answer
   // refuses through this route's own answer, never its own text (ADR-0173 Decisions 2 and 9).

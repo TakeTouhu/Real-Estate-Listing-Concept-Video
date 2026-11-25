@@ -3306,3 +3306,26 @@ in the shell.
 
 **Rolling back.** To RD-9a's build: safe. These 11 routes rely on
 `SameSite=Lax` alone again, and nothing was stored.
+
+## RD-9c — the sign-in and account routes check their origin
+
+**No migration** (ADR-0174). Migration 35 stays the last.
+
+**What changes at deploy.** Sign-in, sign-up, sign-out, the MFA code
+step and MFA settings, organization creation, password reset and email
+verification now accept a post only from `APP_BASE_URL`'s origin.
+**`APP_BASE_URL` must be exactly the public origin customers open
+(`https`, the domain, no port), or nobody can sign in:** every sign-in
+answers `403`, and so does sign-up. Check it before the deploy, and
+after it sign in once through the public address. Reaching the service
+at another address or over `http` refuses sign-in there; redirect those
+at the front. Each refusal is logged at `warn` as `ORIGIN_REFUSED`,
+with its reason and route; a `NO_ORIGIN` on sign-in would be a browser
+that sends no `Origin`.
+
+**On a development machine.** Nothing new: open the web app at exactly
+`APP_BASE_URL` where it is set, or sign-in is refused too. Run
+`pnpm test` without `APP_BASE_URL` in the shell.
+
+**Rolling back.** To RD-9b's build: safe. These 13 routes rely on
+`SameSite=Lax` alone again, and nothing was stored.
