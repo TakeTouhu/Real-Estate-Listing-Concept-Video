@@ -111,6 +111,10 @@ export function landingFor(outcome: StartGenerationOutcome): StartLanding {
   return { to: "START", message: REFUSALS[outcome.kind] };
 }
 
+/** The start page's own failure: the start may or may not have happened, and a retry is safe. */
+export const START_NOT_CONFIRMED =
+  "The start could not be confirmed. Review it and try again: a video already started is not started twice.";
+
 /**
  * The words for a start that failed.
  *
@@ -130,6 +134,6 @@ export function failureMessage(error: AppError): string {
     case "VALIDATION_FAILED":
       return "This storyboard cannot be started as it is. Nothing was started. Review it again.";
     default:
-      return "The start could not be confirmed. Review it and try again: a video already started is not started twice.";
+      return START_NOT_CONFIRMED;
   }
 }

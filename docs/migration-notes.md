@@ -3223,3 +3223,25 @@ hour of its first is refused until that hour ends.
 **Rolling back.** To RD-8d's build: safe, even with the new setting set,
 which that build's schema does not know and ignores. Downloads are no
 longer limited, and the table's rows for them are left unread.
+
+## RD-8f — video starts are limited per account
+
+**No migration** (ADR-0173). Migration 35 stays the last: the table's
+CHECK takes the new policy's name.
+
+**What changes at deploy.** In production the start route still answers
+404, before it counts. Where it is built (development with the test
+provider), each start is counted per signed-in account, 30 an hour by
+default, failed and refused ones included, on the signed-in limiter
+client, before the start service. `RATE_LIMIT_GENERATION_START` is
+optional and takes its default; a value out of form is refused at
+startup, by the web app and the worker alike, in production too.
+
+**On a development machine.** A 31st start of one account within an
+hour of its first is refused until that hour ends, with no Unit reserved
+and no job written. `DELETE FROM "rate_limit_counters";` clears every
+count.
+
+**Rolling back.** To RD-8e's build: safe, even with the new setting set,
+which that build's schema does not know and ignores. Starts are no
+longer limited, and the table's rows for them are left unread.

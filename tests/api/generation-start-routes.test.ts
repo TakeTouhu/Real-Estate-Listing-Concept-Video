@@ -5,14 +5,16 @@ import type {
   StartGenerationInput,
   StartGenerationOutcome,
 } from "@app/domain";
-import { AppError, type AppErrorCode } from "@app/shared";
+import { InMemoryRateLimitStore } from "@app/domain/testing";
+import { AppError, RATE_LIMIT_DEFAULTS, type AppErrorCode, type RateLimitSetting } from "@app/shared";
 
 /**
  * The start route (GS-10c, ADR-0111): what it reads from the start page's
  * form, what it hands the start service, and where each answer sends the
  * customer. The service is a recording double: what it decides is proved in
  * its own suites, and against PostgreSQL through the web composition in
- * `tests/integration/generation-start-route.db.test.ts`.
+ * `tests/integration/generation-start-route.db.test.ts`. The start limit runs
+ * for real, on an in-memory store made afresh for each test (ADR-0173).
  */
 const SITE = "https://app.vtavision.test";
 const PROJECT = "vpr_route_1";
@@ -23,6 +25,8 @@ const NOW = new Date("2026-04-20T09:00:00.000Z");
 
 const currentUser = vi.hoisted(() => ({ value: null as { user: { id: string } } | null, reads: 0 }));
 const starting = vi.hoisted(() => ({ value: null as unknown }));
+const reported = vi.hoisted(() => ({ errors: [] as [string, unknown][] }));
+const limits = vi.hoisted(() => ({ value: null as unknown, broken: null as Error | null }));
 
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: () => {
@@ -30,7 +34,27 @@ vi.mock("@/lib/auth", () => ({
     return Promise.resolve(currentUser.value);
   },
 }));
-vi.mock("@/lib/generation-start", () => ({ getGenerationStartService: () => starting.value }));
+vi.mock("@/lib/generation-start", async (actual) => ({
+  ...(await actual<typeof import("@/lib/generation-start")>()),
+  getGenerationStartService: () => starting.value,
+  getGenerationStartLogger: () => ({
+    error: (message: string, fields?: unknown) => void reported.errors.push([message, fields]),
+  }),
+}));
+vi.mock("@/lib/identity", () => ({ getIdentityServices: () => ({ deps: { clock: { now: () => NOW } } }) }));
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => {
+    if (limits.broken) throw limits.broken;
+    return limits.value;
+  },
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
+let warned: [string, unknown][];
+const limitsOf = (settings: Partial<Record<RateLimitSetting, string>>, store = new InMemoryRateLimitStore()) =>
+  new WebRateLimits(store, { ...RATE_LIMIT_DEFAULTS, ...settings, SESSION_SECRET: "x".repeat(32) }, {
+    warn: (message: string, fields?: unknown) => void warned.push([message, fields]),
+  });
 
 const { POST } = await import("@/app/api/video-projects/[projectId]/generations/route");
 
@@ -79,6 +103,10 @@ let answer: () => Promise<StartGenerationOutcome>;
 beforeEach(() => {
   currentUser.value = { user: { id: USER } };
   currentUser.reads = 0;
+  reported.errors = [];
+  warned = [];
+  limits.value = limitsOf({});
+  limits.broken = null;
   starts = [];
   answer = () => Promise.resolve({ kind: "STARTED", job: JOB, reservation: RESERVATION, allocations: [] });
   starting.value = {
@@ -307,5 +335,91 @@ describe("what the route refuses before the start", () => {
       started: null,
     });
     expect(starts).toEqual([]);
+  });
+});
+
+describe("the start limit per account (ADR-0173)", () => {
+  const limitedTo = (count: number) => (limits.value = limitsOf({ RATE_LIMIT_GENERATION_START: `${count}/3600` }));
+  const REFUSED = "Too many video starts. Nothing new was started. Try again in 60 minutes.";
+
+  it("refuses past the limit back to the start page with its wait, asking the start service nothing", async () => {
+    limitedTo(2);
+    expect(landing(await post()).started).toBe("1");
+    // A start the service refuses is counted too.
+    answer = () => Promise.resolve({ kind: "INSUFFICIENT_UNITS", eligibleUnits: 0 });
+    expect(landing(await post()).path).toBe(START_PAGE);
+    const refused = await post();
+    expect(landing(refused)).toEqual({ path: START_PAGE, error: REFUSED, started: null });
+    // A redirect back to a page: no Retry-After rides on it.
+    expect(refused.headers.get("retry-after")).toBeNull();
+    // No third start reached the service, so it reserved no Unit and wrote no job.
+    expect(starts).toHaveLength(2);
+    expect(reported.errors).toEqual([]);
+    // Logged by its codes alone.
+    expect(warned).toEqual([
+      [
+        "An attempt was refused by a rate limit",
+        { code: "RATE_LIMITED", action: "GENERATION_START", dimension: "user" },
+      ],
+    ]);
+  });
+
+  it("rounds a wait that is not whole minutes up, never down", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_GENERATION_START: "1/90" });
+    expect(landing(await post()).started).toBe("1");
+    expect(landing(await post()).error).toBe("Too many video starts. Nothing new was started. Try again in 2 minutes.");
+  });
+
+  it("refuses as not confirmed when the limiter cannot be built, starting nothing", async () => {
+    limits.broken = new AppError("INTERNAL_ERROR", "The limiter's settings are missing");
+    expect(landing(await post())).toEqual({
+      path: START_PAGE,
+      error: "The start could not be confirmed. Review it and try again: a video already started is not started twice.",
+      started: null,
+    });
+    expect(starts).toEqual([]);
+    expect(reported.errors).toEqual([["A start could not be counted", { code: "INTERNAL_ERROR" }]]);
+  });
+
+  it("keeps a count per account: another member of the organization is not held", async () => {
+    limitedTo(1);
+    expect(landing(await post()).started).toBe("1");
+    expect(landing(await post()).error).toBe(REFUSED);
+    currentUser.value = { user: { id: "usr_route_2" } };
+    expect(landing(await post()).started).toBe("1");
+    expect(starts.map((start) => start.actor)).toEqual([USER, "usr_route_2"]);
+  });
+
+  it("counts only where the start is built, after the origin, the session and the form are checked", async () => {
+    limitedTo(1);
+    const service = starting.value;
+    starting.value = null;
+    expect((await post()).status).toBe(404);
+    starting.value = service;
+    expect((await post(fields(), { origin: "https://evil.example.net" })).status).toBe(403);
+    expect((await post(fields(), { origin: SITE }, "application/json")).status).toBe(422);
+    expect((await post({ ...fields(), propertyId: "../a" })).status).toBe(422);
+    expect(landing(await post({ ...fields(), qualityTier: "4K" })).path).toBe(START_PAGE);
+    currentUser.value = null;
+    expect(landing(await post()).path).toBe("/login");
+    currentUser.value = { user: { id: USER } };
+    expect(landing(await post()).started).toBe("1");
+    expect(starts).toHaveLength(1);
+  });
+
+  it.each([
+    ["an application error", new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row"), "INTERNAL_ERROR"],
+    ["any other error", new TypeError("The rate-limit store is gone"), "UNEXPECTED"],
+  ])("fails closed on %s with the page's own text, never the limiter's, starting nothing", async (_, failure, code) => {
+    const broken = new InMemoryRateLimitStore();
+    broken.hit = () => Promise.reject(failure);
+    limits.value = limitsOf({}, broken);
+    expect(landing(await post())).toEqual({
+      path: START_PAGE,
+      error: "The start could not be confirmed. Review it and try again: a video already started is not started twice.",
+      started: null,
+    });
+    expect(starts).toEqual([]);
+    expect(reported.errors).toEqual([["A start could not be counted", { code }]]);
   });
 });

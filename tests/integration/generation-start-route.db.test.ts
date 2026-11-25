@@ -1,6 +1,8 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { InMemoryRateLimitStore } from "@app/domain/testing";
 import { createSubscriptionRepository, getPrismaClient } from "@app/database";
+import { RATE_LIMIT_DEFAULTS } from "@app/shared";
 
 /**
  * The start route through the web app's own composition, against PostgreSQL
@@ -8,8 +10,10 @@ import { createSubscriptionRepository, getPrismaClient } from "@app/database";
  * offers and starts, at the quality the test provider's route serves, from the
  * Units the organization's plan gives, once.
  *
- * Only the session and the environment are stubbed; every service and
- * repository is the one the web app builds.
+ * Only the session, the environment and the limits' store are stubbed; every
+ * service and repository is the one the web app builds. The start limit runs
+ * on an in-memory store made afresh for each test, so no count is left in the
+ * database (ADR-0173).
  */
 const HAS_DB = Boolean(process.env.DATABASE_URL);
 
@@ -32,6 +36,18 @@ vi.mock("@/lib/env", () => ({
 }));
 const signedIn = vi.hoisted(() => ({ id: "" }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: () => Promise.resolve({ user: { id: signedIn.id } }) }));
+const limits = vi.hoisted(() => ({ value: null as unknown }));
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => limits.value,
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
+const limitsOf = (start: string, store = new InMemoryRateLimitStore()) =>
+  new WebRateLimits(
+    store,
+    { ...RATE_LIMIT_DEFAULTS, RATE_LIMIT_GENERATION_START: start, SESSION_SECRET: "x".repeat(32) },
+    { warn: vi.fn() },
+  );
 
 const { POST } = await import("@/app/api/video-projects/[projectId]/generations/route");
 const { getGenerationStartService } = await import("@/lib/generation-start");
@@ -69,6 +85,7 @@ beforeEach(async () => {
   if (!HAS_DB) return;
   await cleanup();
   signedIn.id = OWNER;
+  limits.value = limitsOf(RATE_LIMIT_DEFAULTS.RATE_LIMIT_GENERATION_START);
   for (const id of USERS) await prisma.user.create({ data: { id, email: `${id}@example.com`, name: id } });
   for (const id of [ORG, OTHER_ORG]) {
     await prisma.organization.create({ data: { id, name: id, slug: id.replaceAll("_", "-") } });
@@ -278,5 +295,44 @@ describe.skipIf(!HAS_DB)("the start route through the web app's composition, in 
       started: null,
     });
     expect(await jobs()).toEqual([]);
+  });
+
+  /** That the organization holds no job, reservation, Unit period or started audit: nothing was reserved. */
+  async function nothingReserved(): Promise<void> {
+    expect(await jobs()).toEqual([]);
+    const ofOrg = { generationJob: { videoProject: { organizationId: ORG } } };
+    expect(await prisma.generationReservation.count({ where: ofOrg })).toBe(0);
+    expect(await prisma.generationReservationAllocation.count({ where: { organizationId: ORG } })).toBe(0);
+    expect(await prisma.unitEntitlementPeriod.count({ where: { organizationId: ORG } })).toBe(0);
+    expect(await prisma.auditLog.count({ where: { organizationId: ORG, action: "generation.started" } })).toBe(0);
+  }
+
+  it("refuses a start past the limit before it reserves a Unit or writes a job (ADR-0173)", async () => {
+    limits.value = limitsOf("1/3600");
+    // A start the service refuses is counted too.
+    const form = await confirmation("route-key-limit");
+    const changed = new URLSearchParams(form);
+    changed.set("sceneId", form.getAll("sceneId")[0] ?? "");
+    expect((await post(changed)).error).toMatch(/^The storyboard changed/);
+
+    expect(await post(form)).toEqual({
+      path: `/properties/${PROPERTY}/video-projects/${projectId}/start`,
+      error: "Too many video starts. Nothing new was started. Try again in 60 minutes.",
+      started: null,
+    });
+    await nothingReserved();
+  });
+
+  it("fails closed when the limiter cannot answer, with the page's own text, reserving nothing", async () => {
+    const broken = new InMemoryRateLimitStore();
+    broken.hit = () => Promise.reject(new Error("The rate-limit store is gone"));
+    limits.value = limitsOf(RATE_LIMIT_DEFAULTS.RATE_LIMIT_GENERATION_START, broken);
+
+    expect(await post(await confirmation("route-key-broken"))).toEqual({
+      path: `/properties/${PROPERTY}/video-projects/${projectId}/start`,
+      error: "The start could not be confirmed. Review it and try again: a video already started is not started twice.",
+      started: null,
+    });
+    await nothingReserved();
   });
 });
