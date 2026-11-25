@@ -139,6 +139,7 @@ export const RATE_LIMIT_SETTINGS = [
   "RATE_LIMIT_INVITATION",
   "RATE_LIMIT_ANALYSIS",
   "RATE_LIMIT_DOWNLOAD",
+  "RATE_LIMIT_GENERATION_START",
 ] as const;
 
 /** One of the abuse limits' settings. */
@@ -159,6 +160,7 @@ export const RATE_LIMIT_DEFAULTS: Readonly<Record<RateLimitSetting, string>> = O
   RATE_LIMIT_INVITATION: "50/86400",
   RATE_LIMIT_ANALYSIS: "300/3600",
   RATE_LIMIT_DOWNLOAD: "60/3600",
+  RATE_LIMIT_GENERATION_START: "30/3600",
 });
 
 /**
@@ -328,6 +330,7 @@ export const serverEnvSchema = z
     RATE_LIMIT_INVITATION: rateLimitSetting("RATE_LIMIT_INVITATION"),
     RATE_LIMIT_ANALYSIS: rateLimitSetting("RATE_LIMIT_ANALYSIS"),
     RATE_LIMIT_DOWNLOAD: rateLimitSetting("RATE_LIMIT_DOWNLOAD"),
+    RATE_LIMIT_GENERATION_START: rateLimitSetting("RATE_LIMIT_GENERATION_START"),
 
     // How many entries at the right end of X-Forwarded-For our own
     // infrastructure writes; the client is the left-most of them (ADR-0170).

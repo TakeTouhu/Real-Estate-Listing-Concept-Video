@@ -1366,6 +1366,19 @@ organization keeps its own count.
 Planned, not done: RD-8f generation start; RD-8g Unit purchase and the
 records that close RD-8.
 
+**RD-8f — video starts are limited per account** (ADR-0173, no
+migration): each start of a video counts once per signed-in account, 30
+an hour by default, failed and refused ones included, taken in the route
+after its 404 check, the session and the form, and before the start
+service, so a refused start reserves no Unit and writes no job. It
+returns to the start page, which says "Too many video starts. Nothing
+new was started." with the wait. A limiter that cannot answer refuses
+with the start page's own failure text, reserving nothing. The route
+still answers 404 outside development with the test provider, and
+counts nothing there. Another member of the organization keeps its own
+count.
+Planned, not done: RD-8g Unit purchase and the records that close RD-8.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

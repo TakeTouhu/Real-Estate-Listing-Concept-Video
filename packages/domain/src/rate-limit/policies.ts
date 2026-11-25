@@ -24,6 +24,7 @@ export const RATE_LIMIT_POLICY_NAMES = [
   "invitation.user",
   "analysis.user",
   "download.user",
+  "generation-start.user",
 ] as const;
 
 export type RateLimitPolicyName = (typeof RATE_LIMIT_POLICY_NAMES)[number];
@@ -68,5 +69,6 @@ export function rateLimitPolicies(settings: Readonly<Record<RateLimitSetting, st
     "invitation.user": policyOf("invitation.user", settings.RATE_LIMIT_INVITATION, false),
     "analysis.user": policyOf("analysis.user", settings.RATE_LIMIT_ANALYSIS, false),
     "download.user": policyOf("download.user", settings.RATE_LIMIT_DOWNLOAD, false),
+    "generation-start.user": policyOf("generation-start.user", settings.RATE_LIMIT_GENERATION_START, false),
   });
 }

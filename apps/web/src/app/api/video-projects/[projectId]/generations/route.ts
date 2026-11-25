@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { StartGenerationOutcome } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
-import { getGenerationStartService } from "@/lib/generation-start";
+import { countGenerationStart, getGenerationStartLogger, getGenerationStartService } from "@/lib/generation-start";
 import {
   NOT_USABLE,
   failureMessage,
@@ -24,7 +24,7 @@ export const dynamic = "force-dynamic";
  * start service decides; a start reserves the video's Units and writes its job.
  *
  * Outside development with the test provider there is no start: the route
- * answers as one that does not exist, before anything else is read.
+ * answers as one that does not exist, before anything else is read, or counted.
  */
 export async function POST(
   request: Request,
@@ -53,6 +53,11 @@ export async function POST(
   const pages = startPages(propertyId, projectId);
   const input = readGenerationStartForm(projectId, form);
   if (input === null) return redirectWithError(request.url, pages.start, NOT_USABLE);
+
+  // Counted once the session and the form are checked, before the start reserves a Unit or writes a job, and never
+  // given back (ADR-0173 Decisions 3, 4 and 9).
+  const refused = await countGenerationStart(current.user.id, getGenerationStartLogger());
+  if (refused !== null) return redirectWithError(request.url, pages.start, refused);
 
   let outcome: StartGenerationOutcome;
   try {

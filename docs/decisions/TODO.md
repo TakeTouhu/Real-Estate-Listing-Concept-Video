@@ -341,6 +341,8 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       *Amended in RD-8c (ADR-0173): the invitation limit is in place, so
       the condition this rule named is met; the email service and its
       sending domain stay the product owner's.*
+      *Amended in RD-8f (ADR-0173): the start is counted per account
+      before any Unit is reserved; its form's size is still not bounded.*
 - [ ] **Extend the same-origin check to every cookie-based mutation route.**
       `SecurityCompliance.md` asks for CSRF protection where cookie-based
       mutations are used. The session cookie is `SameSite=Lax` (ADR-0006),
