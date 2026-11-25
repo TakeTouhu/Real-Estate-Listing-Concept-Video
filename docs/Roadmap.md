@@ -1246,6 +1246,16 @@ production environment can pass the start check; passing it does not
 show that an email can be delivered. Each send that fails is logged by
 its code alone. RD-6 is complete.
 
+**RD-7a — the rule of the abuse limits** (ADR-0169, no migration): the
+rule by which every limit will count an attempt before the step it
+guards, in one PostgreSQL row per limit and subject from RD-7b, with no
+broker and no timer. A window starts at its first hit, or when a cooldown
+ends; the hit after the limit is refused, and for sign-in-like
+limits starts a cooldown that doubles up to a cap while cooldowns follow
+each other. Only a success gives a hit back. The rule is a set of cases
+every store must pass; an in-memory store passes them now. Nothing is
+limited yet: RD-7b to RD-7e add the table, the settings and the routes.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

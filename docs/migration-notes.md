@@ -3029,3 +3029,14 @@ The browser test refuses every SMTP setting.
 
 **Rolling back.** To RD-6c's build: safe. The settings are checked but no
 longer used, and a production start is refused for email again.
+
+## RD-7a — the rule of the abuse limits
+
+**No migration** (ADR-0169). Migration 34 stays the last.
+
+**What changes at deploy.** Nothing: no route uses the new code, and
+nothing is limited yet.
+
+**On a development machine.** Nothing changes.
+
+**Rolling back.** To RD-6d's build: safe. Nothing stores anything new.
