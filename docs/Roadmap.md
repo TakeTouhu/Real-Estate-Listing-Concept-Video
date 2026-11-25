@@ -1429,6 +1429,17 @@ its token alone, is the one exception, and the test of every route file
 keeps it so. Planned, not done: RD-9d the fixed headers and the API
 policy; RD-9e the page policy and the records that close RD-9.
 
+**RD-9d — fixed security headers and the API policy** (ADR-0174, no
+migration): `next.config.mjs` sends `nosniff`, a
+`strict-origin-when-cross-origin` referrer policy, `X-Frame-Options:
+DENY`, a `Permissions-Policy` that keeps fullscreen for the video
+player, and COOP and CORP `same-origin` on every answer; every `/api`
+answer gets `default-src 'none'; frame-ancestors 'none'; sandbox`, which
+contains the download route's own policy; a build run under
+`NODE_ENV=production` adds HSTS for the app's own host; `X-Powered-By`
+is gone. No header a handler decides per answer is set there. Planned,
+not done: RD-9e the page policy and the records that close RD-9.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
