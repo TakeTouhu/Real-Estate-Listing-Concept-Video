@@ -61,3 +61,4 @@ export { readBillingCycleRevenueWithin } from "./billing-cycle-revenue-reader";
 // holding that lock would hold it without the transaction that makes it mean
 // anything, and one key formula is worth nothing if it can be taken from
 // somewhere this package cannot see.
+export { createPrismaRateLimitStore, RATE_LIMIT_PRUNE_PER_HIT } from "./rate-limit-store";

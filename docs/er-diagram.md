@@ -828,3 +828,27 @@ No new entity, relationship or column. Migration 34 adds a partial unique
 index, `invitations(organizationId, email)` where `status = 'PENDING'`, so an
 organization holds at most one pending invitation per address (ADR-0135).
 Prisma cannot express it; the schema carries a comment.
+
+## RD-7a
+
+Not applicable: no entity, relationship or column changes, and no migration
+(ADR-0169).
+
+## RD-7b — abuse-limit counters
+
+```mermaid
+erDiagram
+    RateLimitCounter {
+        string policy PK "dotted lowercase words by CHECK"
+        string subject PK "64 lowercase hex by CHECK; an HMAC, never the value"
+        datetime windowStartedAt
+        int count "not negative by CHECK"
+        datetime lockedUntil "nullable; set exactly when lockLevel is above 0"
+        int lockLevel "not negative by CHECK"
+        datetime expiresAt "indexed; not before windowStartedAt by CHECK"
+    }
+```
+
+Migration 35. One row per abuse limit and subject (ADR-0169). It relates to
+no other table: a subject is a keyed hash of what is limited, so the row
+names no user, organization or address.

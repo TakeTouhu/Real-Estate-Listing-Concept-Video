@@ -2009,6 +2009,26 @@ into on 2026-11-17.
       5). Its helpers would need a second server or run. RD-11's
       production-mode test or part 2 is to decide.
 
+## Open in RD-7b — what the counters table leaves open
+
+- [ ] **Measure the table's growth and the wait on one hot key in
+      production.** Expired rows are deleted two per hit (ADR-0169), so
+      rows follow recent traffic; a spray that cools many keys down keeps
+      each for the decay period. A flood on one key queues on its row; a
+      read-only check of a locked key before the hit would remove that
+      queue, but must never refuse an unlocked key at its limit.
+- [ ] **Raw comparisons of timestamp columns assume a UTC session.** The
+      limiter converts its times explicitly; other repositories compare a
+      `TIMESTAMP(3)` column with a parameter directly (for example
+      `reconciliation-repository.ts` and
+      `deliverable-validation-repository.ts`). Cloud SQL defaults to UTC;
+      a different session zone could shift them.
+- [ ] **Raising a limit's window or decay forgets some rows early.** A
+      row's `expiresAt` is worked out from the values in force when it was
+      written, so after a raise another key's hit may delete a row that
+      the new values would still count. Lowering them deletes nothing
+      early. Say so where RD-7c documents the settings.
+
 ## Open in RD-6d — what SMTP in the web app leaves open
 
 - [ ] **Decide who reads bounces and complaints** (ADR-0168): the

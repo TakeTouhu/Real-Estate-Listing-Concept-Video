@@ -451,8 +451,9 @@ describe("nothing about the existing adapters changed shape", () => {
     // (ADR-0087), which is authorized to add migration 32 for the start key,
     // by AT-3a (ADR-0128), which is authorized to add migration 33 for email
     // verification links, and by AT-6a (ADR-0135), which is authorized to add
-    // migration 34 for one pending invitation per address.
-    expect(dirs.at(-1)).toBe("00000000000034_one_pending_invitation");
+    // migration 34 for one pending invitation per address, and by RD-7b
+    // (ADR-0169), which is authorized to add migration 35 for abuse-limit counters.
+    expect(dirs.at(-1)).toBe("00000000000035_rate_limit_counters");
     expect(dirs.filter((d) => d.includes("2h3b1") || d.includes("2h3b2"))).toEqual([]);
 
     const schema = readFileSync(

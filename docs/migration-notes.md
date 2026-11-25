@@ -3040,3 +3040,24 @@ nothing is limited yet.
 **On a development machine.** Nothing changes.
 
 **Rolling back.** To RD-6d's build: safe. Nothing stores anything new.
+
+## RD-7b — the abuse-limit counters
+
+**Migration 35** (`00000000000035_rate_limit_counters`, ADR-0169): one new
+table, `rate_limit_counters`, keyed by `("policy", "subject")`, with an
+index on `"expiresAt"`. Its CHECK, `rate_limit_counters_shape_check`, and
+its fill factor of 80 are added by raw SQL: Prisma cannot express them,
+so the schema drift check does not see them. No existing row is read or
+changed.
+
+**What changes at deploy.** The table is created empty. Nothing reachable
+writes to it: no route builds the store until RD-7d.
+
+**On a development machine.** `pnpm --filter @app/database run
+db:migrate` applies it. The database suite gains
+`tests/integration/rate-limit-store.db.test.ts`.
+
+**Rolling back.** To RD-7a's build: leave the table, which that build
+never reads. To remove it as well, drop it
+(`DROP TABLE "rate_limit_counters";`) and delete migration 35's row from
+`_prisma_migrations`, or a later deploy would not create it again.
