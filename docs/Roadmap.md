@@ -1494,6 +1494,26 @@ every redirect goes through the helper, and CI asks the image through
 another host name and requires `Location: /login`. Planned, not done: RD-10c the
 worker image and the records that close RD-10.
 
+**Unknown request failures logged** (added by the CTO after RD-10b,
+ADR-0177, no migration): a request answered for a reason the app does
+not know, or with a 5xx `AppError`, now leaves one `error` line from
+the component `request`, where a logged catch takes it: its route, the
+`requestId` a JSON answer sends, the error's name and code and its
+cause's name, never its message. `appErrorToResponse`, the six form
+fallbacks, sign-up's and sign-out's catches, the two routes that
+rethrow, the five Property pages and the security page write it; an
+error no catch takes still reaches only Next.js's raw output. The
+limiter's failure, where `withoutLimiterText` wraps it (sign-in, its
+code step and `limitJsonRequest`), is named `RateLimiterUnavailable`
+and keeps its original's code and name. A parsed guard holds every
+catch of a route file, server page and `lib/mfa.ts` to one of four
+shapes: it logs first, reads a body, rethrows all but a code whose
+default status is 4xx (pages only), or is the one listed exception.
+CI signs in against the image's stand-in database and requires the
+line, with nothing typed or secret in the log. No answer changed.
+Planned, not done: RD-10c, then RD-11, which reads the server's log for
+these lines.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

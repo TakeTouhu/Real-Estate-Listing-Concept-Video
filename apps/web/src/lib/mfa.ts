@@ -52,7 +52,8 @@ export interface MfaRouteOptions {
  * Run an MFA JSON route for the signed-in user. Its responses carry secrets or
  * recovery codes, so none may be cached. The request's origin is checked
  * first, before the sign-in or the body is read; `route` names the route in
- * the refusal's log, as `POST /api/mfa/disable` (ADR-0174 Decisions 4 to 6).
+ * the refusal's log, as `POST /api/mfa/disable` (ADR-0174 Decisions 4 to 6),
+ * and in the line of a failure the app does not know (ADR-0177).
  * Decision 6 names `mfaRoute(request, handler, options)`; `route` is added for Decision 5's log.
  */
 export async function mfaRoute(
@@ -70,7 +71,7 @@ export async function mfaRoute(
     if (!signIn || !allowed) throw new AppError("UNAUTHENTICATED", "Sign in again");
     response = await handler({ user: signIn.user, session: signIn.session }, getMfaService());
   } catch (error) {
-    response = appErrorToResponse(error);
+    response = appErrorToResponse(error, route);
   }
   response.headers.set("Cache-Control", "no-store");
   return response;

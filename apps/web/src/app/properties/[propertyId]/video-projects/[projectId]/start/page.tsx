@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import type { StartOffer } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getGenerationStartService } from "@/lib/generation-start";
 import { startPages } from "@/lib/generation-start-form";
 import { getIdentityServices } from "@/lib/identity";
@@ -41,7 +42,10 @@ export default async function StartVideoPage({
   for (const { organization } of organizations) {
     const property = await services.properties
       .get(current.user.id, organization.id, propertyId)
-      .catch(() => null);
+      .catch((error: unknown) => {
+        logRequestFailure(error, "GET /properties/[propertyId]/video-projects/[projectId]/start");
+        return null;
+      });
     if (property === null) continue;
 
     // The start's own read: its permissions first, then its reach.

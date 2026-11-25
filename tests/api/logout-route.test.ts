@@ -79,6 +79,21 @@ describe("POST /api/auth/logout", () => {
     expect(revoked()).toEqual([]);
   });
 
+  it("answers the same when the session cannot be ended, and logs one line for it (ADR-0177)", async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((line: string) => void lines.push(line));
+    vi.spyOn(auth, "logout").mockRejectedValue(new Error("database down at postgresql://u:CANARY@h/db"));
+    const response = await logout(post());
+    expect([response.status, response.headers.get("location")]).toEqual([303, "/login"]);
+    expect(response.headers.get("set-cookie")).toMatch(/^rev_session=;/);
+    const failures = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(failures.map((line) => [line.component, line.route, line.errorName, line.code])).toEqual([
+      ["request", "POST /api/auth/logout", "Error", "UNEXPECTED"],
+    ]);
+    expect(lines.join("\n")).not.toMatch(/CANARY|rev_session|user@example\.com/);
+    expect(lines.join("\n")).not.toContain(String(cookie.value));
+  });
+
   it.each([
     ["no origin", { host: "localhost:3210" }],
     ["another site", { host: "localhost:3210", origin: "https://evil.example.net" }],

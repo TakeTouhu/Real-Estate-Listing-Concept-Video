@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { UnitPurchaseOutcome } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { appErrorToResponse, redirectWithError } from "@/lib/http";
 import { pathWithQuery, seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
@@ -55,6 +56,7 @@ export async function POST(
   try {
     outcome = await getUnitPurchaseService().approve(current.user.id, input);
   } catch (error) {
+    logRequestFailure(error, "POST /api/organizations/[organizationId]/unit-purchases");
     if (!(error instanceof AppError)) throw error;
     return redirectWithError(buyPage, failureMessage(error));
   }

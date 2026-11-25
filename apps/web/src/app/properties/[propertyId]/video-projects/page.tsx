@@ -5,6 +5,7 @@ import {
   TARGET_OUTPUT_RESOLUTIONS,
 } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { getStoryboardService, toVideoProjectDto } from "@/lib/storyboard";
@@ -53,7 +54,8 @@ export default async function VideoProjectsPage({
     let property;
     try {
       property = await services.properties.get(current.user.id, organization.id, propertyId);
-    } catch {
+    } catch (error) {
+      logRequestFailure(error, "GET /properties/[propertyId]/video-projects");
       continue;
     }
     const projects = await getStoryboardService().listProjects(

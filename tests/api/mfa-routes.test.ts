@@ -372,6 +372,24 @@ describe("the sign-in limits (ADR-0171)", () => {
     expect(await getCurrentUser()).toBeNull();
   });
 
+  it("logs one line for each refusal, naming its route and nothing typed, when the limiter cannot answer", async () => {
+    const { secret } = await enroll();
+    await signIn();
+    limitWith(down);
+    const lines: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((line: string) => void lines.push(line));
+    const typed = { email: "typed-canary@example.com", password: "typed-canary-password" };
+    expect(location(await login(form(typed))).error).toBe("Sign in failed");
+    const typedCode = codeFor(secret, 1);
+    expect(location(await enterCode(form({ code: typedCode }))).error).toBe("Sign in failed");
+    const failures = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(failures.map((line) => [line.component, line.route, line.errorName, line.code, line.causeName])).toEqual([
+      ["request", "POST /api/auth/login", "RateLimiterUnavailable", "UNEXPECTED", "Error"],
+      ["request", "POST /api/auth/mfa", "RateLimiterUnavailable", "UNEXPECTED", "Error"],
+    ]);
+    expect(lines.join("\n")).not.toMatch(new RegExp(`typed-canary|${typedCode}`));
+  });
+
   it("answers its own failure, never the limiter's text, when the limiter fails with an AppError", async () => {
     const internal = () => Promise.reject(new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row"));
     for (const store of [{ ...down, hit: internal }, Object.assign(failing("forget"), { forget: internal })]) {

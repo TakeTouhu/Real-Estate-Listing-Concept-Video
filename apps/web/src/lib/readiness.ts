@@ -3,8 +3,12 @@ import { createLogger, type Logger } from "@app/observability";
 import { createVideoProvider } from "@app/video-providers";
 import { getWebAdapters } from "./adapters";
 import { getServerEnv } from "./env";
+import { probeFailureCode } from "./failure-log";
 import { computeReadiness, type Readiness } from "./health";
 import { webStartProblems } from "./startup";
+
+/** Moved to `failure-log.ts`, which the request failure line shares (ADR-0177); still read from here. */
+export { probeFailureCode };
 
 /** A key nothing writes, asked about only to see the storage answer. */
 export const READINESS_STORAGE_KEY = "readiness/probe";
@@ -24,18 +28,6 @@ export const READINESS_DATABASE_LIMIT_SECONDS = 3;
 
 let logger: Logger | undefined;
 const log = (): Logger => (logger ??= createLogger({ base: { component: "readiness" } }));
-
-/**
- * A short code for why a probe did not answer: the error's own code when it
- * is one plain word, as Prisma's and Node.js's are, and never its message,
- * which can name a host, a user or a path.
- */
-export function probeFailureCode(error: unknown): string {
-  if (typeof error !== "object" || error === null) return "UNEXPECTED";
-  const { code, errorCode } = error as { readonly code?: unknown; readonly errorCode?: unknown };
-  const named = [code, errorCode].find((value) => typeof value === "string" && /^[A-Z0-9][A-Z0-9_]{0,39}$/.test(value));
-  return typeof named === "string" ? named : "UNEXPECTED";
-}
 
 /**
  * Readiness of the running web app, from its configured environment, provider,

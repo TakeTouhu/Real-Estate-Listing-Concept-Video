@@ -54,6 +54,6 @@ export async function POST(
       height: asset.height,
     });
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "POST /api/assets/[assetId]/complete");
   }
 }

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { DEFAULT_UPLOAD_LIMITS, type MediaAsset } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { ASSIGNMENT_ERRORS, ASSIGNMENT_NOTICES, assignmentError, assignmentNotice } from "@/lib/property-assignment";
@@ -45,7 +46,8 @@ export default async function PropertyDetailPage({
     let property;
     try {
       property = await services.properties.get(current.user.id, organization.id, propertyId);
-    } catch {
+    } catch (error) {
+      logRequestFailure(error, "GET /properties/[propertyId]");
       continue;
     }
     const assets = await services.assets.list(current.user.id, organization.id, propertyId);

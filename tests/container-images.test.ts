@@ -362,6 +362,56 @@ describe("the web image", () => {
     expect(lines.filter((line) => line.includes("node:http"))).toEqual(['import { request } from "node:http";']);
   });
 
+  it("has its smoke check that an unknown failure leaves one line, with nothing typed or secret", () => {
+    const ci = raw(WORKFLOW);
+    const job = readJob(ci, "web-image");
+    const lines = ci.split(/\r?\n/).slice(job.first, job.last).map((line) => line.trim());
+    const start = lines.indexOf('const signIn = await new Promise((resolve, reject) => {');
+    expect(lines.slice(start, start + 14)).toEqual([
+      'const signIn = await new Promise((resolve, reject) => {',
+      'const headers = {',
+      'host: "app.rd10.test",',
+      'origin: "https://app.rd10.test",',
+      '"x-forwarded-for": "203.0.113.7",',
+      '"content-type": "application/x-www-form-urlencoded",',
+      '};',
+      'const typed = "email=rd10-typed%40rd10.test&password=rd10-typed-canary";',
+      'request(`${base}/api/auth/login`, { method: "POST", headers }, resolve).on("error", reject).end(typed);',
+      '});',
+      'signIn.resume();',
+      'check(signIn.statusCode === 303, `sign-in answers ${signIn.statusCode}`);',
+      'const refused = signIn.headers.location;',
+      "check(refused === \"/login?error=Sign+in+failed\", `sign-in's Location is ${refused}`);",
+    ]);
+    // Read once the server's log is written, never printing a stand-in (ADR-0177).
+    const greps = lines.indexOf(
+      "line=\"$(grep '\"component\":\"request\"' \"$RUNNER_TEMP/web.log\"" +
+        " | grep '\"route\":\"POST /api/auth/login\"')\"",
+    );
+    expect(greps).toBeGreaterThan(lines.indexOf('docker logs web > "$RUNNER_TEMP/web.log" 2>&1'));
+    expect(lines.slice(greps, greps + 18)).toEqual([
+      "line=\"$(grep '\"component\":\"request\"' \"$RUNNER_TEMP/web.log\"" +
+        " | grep '\"route\":\"POST /api/auth/login\"')\"",
+      "test \"$(printf '%s\\n' \"$line\" | grep -c .)\" -eq 1",
+      "printf '%s' \"$line\" | grep -q '\"errorName\":\"RateLimiterUnavailable\"'",
+      "printf '%s' \"$line\" | grep -q '\"causeName\":\"PrismaClientInitializationError\"'",
+      "# Each typed value as sent or as read (rd10-typed%40… and rd10-typed@…), and the client's address.",
+      'for sent in rd10-typed 203.0.113.7; do',
+      'if grep -qF "$sent" "$RUNNER_TEMP/web.log"; then echo "A value sent reached the log" >&2; exit 1; fi',
+      'done',
+      'for name in SESSION_SECRET HEALTHCHECK_API_TOKEN STORAGE_SIGNING_SECRET MFA_SECRET_KEY SMTP_PASSWORD; do',
+      'value="$(sed -n "s/^$name=//p" "$settings")"; test -n "$value"',
+      'if grep -qF "$value" "$RUNNER_TEMP/web.log"; then echo "$name reached the log" >&2; exit 1; fi',
+      'done',
+      "password=\"$(sed -n 's|^DATABASE_URL=postgresql://rd10:\\([0-9a-f]*\\)@.*|\\1|p' \"$settings\")\"",
+      'test -n "$password"',
+      'if grep -qF "$password" "$RUNNER_TEMP/web.log"; then',
+      'echo "The database password reached the log" >&2',
+      'exit 1',
+      'fi',
+    ]);
+  });
+
   it("installs from the lockfile alone, offline after fetching it", () => {
     const installs = ofKind(instructions(file), "RUN").filter((l) =>
       /\b(?:pnpm|npm|yarn)\b (?:i|install|add|fetch)\b/.test(l),

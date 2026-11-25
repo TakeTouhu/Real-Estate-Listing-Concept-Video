@@ -38,6 +38,6 @@ export async function POST(
     );
     return NextResponse.json(toAnalysisDto(analysis));
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "POST /api/properties/[propertyId]/assets/[assetId]/analysis/reject");
   }
 }

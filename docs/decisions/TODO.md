@@ -1680,7 +1680,7 @@ blocks activation. The production email service is tracked below, under
       database has answered the probe's own. Such an address reads `503`,
       with `P1012` or `P1013` in the log. The start check does not refuse
       it. What that leaves open is under "Open in RD-2e".*
-- [ ] **Decide whether a request that fails for a reason the app does not
+- [x] **Decide whether a request that fails for a reason the app does not
       know is logged.** Measured in RD-2c with an address the web app's own
       database client cannot read: a sign-in was answered `Sign in failed`
       and nothing was logged for it but the development server's own lines,
@@ -1703,6 +1703,24 @@ blocks activation. The production email service is tracked below, under
       nowhere, so a database outage on the limiter refuses sign-ins and
       uploads with nothing in the log; the answer's `requestId` is logged
       nowhere either.*
+      *Decided in the unknown-failure PR (ADR-0177): such a request is
+      logged, as is one answered with a 5xx `AppError`. One `error` line,
+      from the component `request`, carries the route, the `requestId` a
+      JSON answer sends, the error's name and code and its cause's name,
+      never its message, where a logged catch takes the error.
+      `appErrorToResponse`, the six form fallbacks, sign-up's and
+      sign-out's catches, the two routes that rethrow, the five Property
+      pages and the security page write it. Where `withoutLimiterText`
+      wraps the limiter (sign-in, its code step and `limitJsonRequest`),
+      its failure is named `RateLimiterUnavailable` and keeps its
+      original's code and name; a database outage reads `causeName:
+      PrismaClientInitializationError` and `code: UNEXPECTED`. A parsed
+      guard holds every catch of a route file, server page and
+      `lib/mfa.ts` to one of four shapes: it logs first, reads a body,
+      rethrows all but a code whose default status is 4xx (pages only),
+      or is the one listed exception. CI's image smoke requires the line
+      for a sign-in against its stand-in database. What it leaves open
+      is under "Open in the unknown-failure PR".*
 - [x] **Have the reading of the rule on timers confirmed.** ADR-0153
       Decision 1 reads CLAUDE.md's rule on timers as not reaching a
       deadline a client keeps for its own question. The reading was the
@@ -2035,6 +2053,12 @@ into on 2026-11-17.
       *Amended in RD-10a (ADR-0175): the image exists and starts in CI
       with no network. It carries no test authority, no Google name and
       no setting; RD-11 passes them when it runs it.*
+      *Amended in the unknown-failure PR (ADR-0177): a failure the app
+      does not know, taken by a logged catch, leaves a
+      `"component":"request"` line in the server's log; one no catch
+      takes reaches only Next.js's raw output. RD-11 reads the log for
+      both and treats each as a finding to explain; it may stop its
+      database once to see one live.*
 - [ ] **Give the worker the same construction rules.** RD-4 gives the
       worker Cloud Storage. It is to build Google's store only where both
       `NODE_ENV` values say production, and refuse the emulator where
@@ -2061,6 +2085,39 @@ into on 2026-11-17.
       keeps its copies, Clean Masters and videos in the emulator's bucket,
       where the web app keeps its photos. It refuses both stores together.
       CI's `database` job runs the pipeline's suite on both stores.*
+
+## Open in the unknown-failure PR — what logging unknown failures leaves open
+
+- [ ] **Errors the app does not catch are printed raw by Next.js.** The
+      55 session lookups under `apps/web/src/app`, the six
+      `request.formData()` calls outside a `try`, the storage routes and
+      readiness's own start reach Next.js, which prints the error with its
+      message and stack, outside `redact` (ADR-0177 Decision 7). An
+      `onRequestError` in `apps/web/src/instrumentation.ts` could add a
+      JSON line but never remove the raw one, and must never take its
+      `path`, which can hold a signed `?token=`, or its `headers`.
+- [ ] **The logger's message, reserved keys and other URLs bypass
+      `redact`.** `createLogger` writes `message` as given and lets a field
+      overwrite `level`, `time` or `message`
+      (`packages/observability/src/logger.ts`); `redact` scrubs only
+      strings that start `http(s)://`, and keeps a URL's user and password
+      when it has no query (`redact.ts`). The new line carries only
+      literals, ids and filtered words, so it does not depend on them.
+- [ ] **The lib helpers log `UNEXPECTED` for every error they do not
+      know.** `apps/web/src/lib/groups.ts` and nine other helpers log a
+      code alone; they could use `failureCode` and `failureName`. Their
+      own catches are outside the guard.
+- [ ] **The worker prints its start failure raw**
+      (`apps/worker/src/main.ts`).
+- [ ] **No stack is logged.** Revisit only if RD-11 shows that a name and
+      a code are not enough.
+- [ ] **A limiter outage reads `code: UNEXPECTED`.** Prisma names `P1001`
+      only when asked to connect, and the limiter's store only queries.
+      Whether the store should connect first is open.
+- [ ] **Sign-up's limiter is not wrapped by `withoutLimiterText`.** Its
+      line names the store's own error, not `RateLimiterUnavailable`
+      (`apps/web/src/app/api/auth/register/route.ts`). Whether it should
+      be wrapped like sign-in's is open.
 
 ## Open in RD-10 — what the container images leave open
 

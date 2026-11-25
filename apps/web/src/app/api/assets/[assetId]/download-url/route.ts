@@ -39,6 +39,6 @@ export async function GET(
     );
     return NextResponse.json({ url: url.url, expiresAt: url.expiresAt.toISOString() });
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "GET /api/assets/[assetId]/download-url");
   }
 }

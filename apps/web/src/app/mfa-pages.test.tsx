@@ -197,9 +197,17 @@ describe("/security", () => {
     expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
     cleanup();
 
+    // Not configured is a 500 the page answers itself, so it logs one line (ADR-0177).
+    const lines: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((line: string) => void lines.push(line));
     env.value = { NODE_ENV: "test" };
     render(await SecurityPage());
+    log.mockRestore();
     expect(screen.getByRole("alert").textContent).toBe("MFA is not available right now.");
+    const read = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(read.map(({ component, route, errorName, code }) => [component, route, errorName, code])).toEqual([
+      ["request", "GET /security", "AppError", "CONFIGURATION_ERROR"],
+    ]);
   });
 
   it("shows MFA on for the sign-in that turned it on", async () => {

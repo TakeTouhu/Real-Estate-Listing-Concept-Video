@@ -3472,3 +3472,37 @@ the tests or the browser test; the route tests now expect a path.
 **Rolling back.** To the Next.js 15.5.28 tree: redirects name the
 server's bind address again, which the browser refuses after a form
 post (`form-action 'self'`). Nothing was stored.
+
+## Unknown request failures logged
+
+**No migration** (ADR-0177). Migration 35 stays the last.
+
+**What changes at deploy.** A failure the app does not know, or a 5xx
+`AppError`, taken by one of the logged catches now writes one `error`
+line to stdout from the component `request`, with `route`, `requestId`,
+`errorName`, `code` and, when present, `causeName`, and never the
+error's message or anything of the request
+(`docs/api-changes-unknown-failures.md`). No answer changes. A log
+filter or alert can select `"component":"request"`, unthrottled during
+an outage, but it sees only those failures: an error no catch takes
+(the session lookups, the body reads outside a `try`, what the home
+and Units pages rethrow) still reaches only Next.js's raw output, and a
+Property page
+writes one line for each organization it tries. Sign-in, its code step
+and the JSON routes that call `limitJsonRequest` name a limiter that
+cannot reach the database `errorName: RateLimiterUnavailable`,
+`causeName: PrismaClientInitializationError` and `code: UNEXPECTED`,
+not `P1001`; sign-up's line names its store's own error, and the lib
+helpers' limiters log a code alone. CI's `web-image` job now requires
+that line for a sign-in against its stand-in database; the checks stay
+12.
+
+**On a development machine.** Nothing to do. A route test whose
+request fails this way prints one such line too (measured); `pnpm dev`
+runs the same code (inferred, not measured).
+
+**Rolling back.** To RD-10b's tree: such failures are answered as
+before and the line is gone; those caught and answered are logged
+nowhere again, and those rethrown (the generation start, the Unit
+purchase, the security page) keep only Next.js's raw line. Nothing was
+stored.

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { PROPERTY_TYPES, type PropertyType } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getPropertyServices } from "@/lib/property";
 import { appErrorToResponse, formOf, formString, redirectWithError } from "@/lib/http";
 import { ASSIGNMENT_ID_MAX_LENGTH } from "@/lib/property-assignment";
@@ -21,7 +22,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     const properties = await getPropertyServices().properties.list(current.user.id, organizationId);
     return NextResponse.json({ properties });
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "GET /api/properties");
   }
 }
 
@@ -70,6 +71,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     });
     return seeOther(`/properties/${property.id}`);
   } catch (error) {
+    logRequestFailure(error, "POST /api/properties");
     const message = error instanceof AppError ? error.message : "Could not create property";
     return redirectWithError("/", message);
   }

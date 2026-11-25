@@ -47,6 +47,6 @@ export async function POST(
       expiresAt: upload.expiresAt.toISOString(),
     });
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "POST /api/assets/[assetId]/retry");
   }
 }
