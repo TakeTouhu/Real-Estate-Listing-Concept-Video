@@ -57,11 +57,16 @@ describe("UP-3 shape", () => {
     expect(matching("apps/worker", /UnitPurchase|unit-purchase/)).toEqual([]);
   });
 
-  it("checks the origin, then the sign-in, then reads the form, then approves", () => {
+  it("checks the origin, then the sign-in, then reads the form, then counts (ADR-0173), then approves", () => {
     const route = read(ROUTE);
-    const order = ["isSameOriginPost(request)", "getCurrentUser()", "request.formData()", ".approve("].map((step) =>
-      route.indexOf(step),
-    );
+    const steps = [
+      "isSameOriginPost(request)",
+      "getCurrentUser()",
+      "request.formData()",
+      "countUnitPurchase(",
+      ".approve(",
+    ];
+    const order = steps.map((step) => route.indexOf(step));
     expect(order.every((position) => position > -1)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });

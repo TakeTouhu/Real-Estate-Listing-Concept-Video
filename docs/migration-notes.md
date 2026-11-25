@@ -3245,3 +3245,25 @@ count.
 **Rolling back.** To RD-8e's build: safe, even with the new setting set,
 which that build's schema does not know and ignores. Starts are no
 longer limited, and the table's rows for them are left unread.
+
+## RD-8g — Unit purchase approvals are limited per account
+
+**No migration** (ADR-0173). Migration 35 stays the last: the table's
+CHECK takes the new policy's name.
+
+**What changes at deploy.** Each approval of an additional Unit package
+is counted per signed-in account, 10 an hour by default, failed and
+refused ones included, on the signed-in limiter client, before the
+purchase service checks `billing.manage`. `RATE_LIMIT_UNIT_PURCHASE` is
+optional and takes its default; a value out of form is refused, by the
+web app and the worker alike. A body that is not a form returns to the
+buy page as unreadable, where it failed before.
+
+**On a development machine.** An 11th approval of one account within an
+hour of its first is refused until that hour ends, with nothing bought
+and no audit written. `DELETE FROM "rate_limit_counters";` clears every
+count.
+
+**Rolling back.** To RD-8f's build: safe, even with the new setting set,
+which that build's schema does not know and ignores. Purchase approvals
+are no longer limited, and the table's rows for them are left unread.

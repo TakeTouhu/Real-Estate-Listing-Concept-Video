@@ -77,6 +77,9 @@ describe("a refusal's text", () => {
     expect(refusalMessage("GENERATION_START", after(7201), NOW)).toBe(
       "Too many video starts. Nothing new was started. Try again in 3 hours.",
     );
+    expect(refusalMessage("UNIT_PURCHASE", after(7201), NOW)).toBe(
+      "Too many purchase approvals. Nothing new was bought. Try again in 3 hours.",
+    );
     expect(refusalMessage("SIGN_IN", after(7201), NOW)).toBe("Too many sign-in attempts. Try again in 121 minutes.");
   });
 });

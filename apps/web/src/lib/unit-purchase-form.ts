@@ -69,6 +69,9 @@ export function refusalMessage(reason: Exclude<UnitPurchaseRefusal, "LACKS_BILLI
   return REFUSALS[reason];
 }
 
+/** The buy page's own failure: the purchase may or may not have happened, so the customer looks first. */
+export const PURCHASE_NOT_CONFIRMED = "The purchase could not be confirmed. Check the Units page before trying again.";
+
 /**
  * The words for a purchase that failed. Only a refusal, a refused permission or
  * an unusable request says nothing was bought; any other failure may have
@@ -79,5 +82,5 @@ export function failureMessage(error: unknown): string {
     return "You cannot buy Units for this organization. Nothing was bought.";
   }
   if (error instanceof AppError && error.code === "VALIDATION_FAILED") return NOT_USABLE;
-  return "The purchase could not be confirmed. Check the Units page before trying again.";
+  return PURCHASE_NOT_CONFIRMED;
 }

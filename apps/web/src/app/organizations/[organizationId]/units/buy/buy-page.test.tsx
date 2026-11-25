@@ -13,19 +13,21 @@ import {
   type Role,
 } from "@app/domain";
 import {
+  InMemoryRateLimitStore,
   InMemoryUnitPurchases,
   InMemoryUnitsReader,
   createTestDeps,
   markEmailVerified,
   type TestDeps,
 } from "@app/domain/testing";
-import { AppError, hotp } from "@app/shared";
+import { AppError, RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
 import type { OrganizationSubscription } from "@app/domain";
 
 /**
  * Buying an additional Unit package (UP-3, ADR-0068): the screen a holder of
  * `billing.manage` sees, its confirmation step, and the route the step posts
- * to, over the in-memory purchase service.
+ * to, over the in-memory purchase service. Its limit runs on an in-memory
+ * store made afresh for each test (ADR-0173).
  */
 const PASSWORD = "password-123456";
 const KEY = "55".repeat(32);
@@ -35,6 +37,7 @@ const cookie = vi.hoisted(() => ({ value: undefined as string | undefined }));
 const env = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const identity = vi.hoisted(() => ({ value: null as unknown }));
 const purchasing = vi.hoisted(() => ({ value: null as unknown }));
+const limits = vi.hoisted(() => ({ value: null as unknown }));
 
 vi.mock("next/headers", () => ({
   cookies: () => Promise.resolve({ get: () => (cookie.value ? { value: cookie.value } : undefined) }),
@@ -46,7 +49,15 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
-vi.mock("@/lib/unit-purchases", () => ({ getUnitPurchaseService: () => purchasing.value }));
+vi.mock("@/lib/unit-purchases", async (actual) => ({
+  ...(await actual<typeof import("@/lib/unit-purchases")>()),
+  getUnitPurchaseService: () => purchasing.value,
+}));
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => limits.value,
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
 
 const { default: BuyUnitsPage } = await import("./page");
 const { POST } = await import("../../../../api/organizations/[organizationId]/unit-purchases/route");
@@ -75,6 +86,11 @@ beforeEach(async () => {
     purchases: store,
   });
   env.value = { NODE_ENV: "test", MFA_SECRET_KEY: KEY };
+  limits.value = new WebRateLimits(
+    new InMemoryRateLimitStore(),
+    { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) },
+    { warn: vi.fn() },
+  );
   ownerId = (await auth.register({ email: "owner@example.com", name: "Owner", password: PASSWORD })).id;
   markEmailVerified(deps, ownerId);
   ({ organization: { id: orgId } } = await new OrganizationService(deps).createOrganization(ownerId, {

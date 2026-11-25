@@ -27,6 +27,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       "analysis.user": plain("analysis.user", 300, 3600),
       "download.user": plain("download.user", 60, 3600),
       "generation-start.user": plain("generation-start.user", 30, 3600),
+      "unit-purchase.user": plain("unit-purchase.user", 10, 3600),
     });
     expect(Object.keys(policies)).toEqual([...RATE_LIMIT_POLICY_NAMES]);
     expect(Object.isFrozen(policies)).toBe(true);
@@ -47,6 +48,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       RATE_LIMIT_ANALYSIS: "3/300",
       RATE_LIMIT_DOWNLOAD: "4/40",
       RATE_LIMIT_GENERATION_START: "2/20",
+      RATE_LIMIT_UNIT_PURCHASE: "6/60",
     });
     expect(policies).toEqual({
       "sign-in.address": withCooldown("sign-in.address", 7, 700),
@@ -61,6 +63,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       "analysis.user": plain("analysis.user", 3, 300),
       "download.user": plain("download.user", 4, 40),
       "generation-start.user": plain("generation-start.user", 2, 20),
+      "unit-purchase.user": plain("unit-purchase.user", 6, 60),
     });
   });
 
