@@ -2,7 +2,7 @@
  * The pages' Content Security Policy (RD-9e, ADR-0174 Decision 10).
  *
  * `middleware.ts` makes a fresh nonce for every page request and sends this
- * policy twice: on the request, where Next.js 15.5.22 reads the nonce from the
+ * policy twice: on the request, where Next.js 15.5.28 reads the nonce from the
  * `script-src` directive and puts it on every script it renders
  * (`app-render.js:108`, `get-script-nonce-from-header.js`), and on the answer,
  * for the browser. Scripts run only when they carry the nonce or are loaded by

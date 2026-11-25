@@ -3424,3 +3424,28 @@ access to Docker Hub, Debian's mirror and the npm registry
 **Rolling back.** To RD-9e's tree: the Dockerfile, the job and the
 guard test go, and `next build` stops writing the standalone tree.
 Nothing was stored, pushed or deployed.
+
+## Next.js 15.5.28 — the security patch, with the image optimizer off
+
+**No migration.** Migration 35 stays the last.
+
+**What changes at deploy.** `next` is 15.5.28, a patch release that
+fixes six of the nine advisories `pnpm audit --prod` found in 15.5.22:
+all three critical, the high one and two moderate.
+`next.config.mjs` sets `images: { unoptimized: true }`: `/_next/image`
+answers `404` instead of fetching and resizing an image, and nothing in
+the app used it. The web image is rebuilt from the updated lockfile; no
+setting, page or header changes. The download route still sends
+`Content-Length`.
+
+**Not 15.5.29.** 15.5.29 drops the `Content-Length` a route handler
+sets, which ADR-0115 Decision 3 relies on; the three advisories fixed
+only there do not apply to this app (`docs/api-changes-next-15-5-28.md`).
+They stay open in `TODO.md` ("Open in RD-10") with `sharp`, `zod`, and
+the `postcss` that `next` pins with its `nanoid` and `source-map-js`.
+
+**On a development machine.** Run `pnpm install` once after pulling:
+the lockfile names `next` 15.5.28 and its `@next/*` packages.
+
+**Rolling back.** To RD-10a's tree: `next` 15.5.22 and the image
+optimizer return, with the nine advisories. Nothing was stored.

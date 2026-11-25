@@ -436,6 +436,9 @@ jobs:
           const policy = page.headers.get("content-security-policy") ?? "";
           check(page.status === 200, `the sign-in page answers ${page.status}`);
           check(policy.includes("'nonce-"), "the sign-in page's policy carries a nonce");
+          // No image optimizer (images.unoptimized): Next.js answers 404 before validating or fetching the query.
+          const image = await fetch(`${base}/_next/image?url=%2Ffavicon.ico&w=64&q=75`);
+          check(image.status === 404, `/_next/image answers ${image.status}`);
           const anonymous = await fetch(`${base}/api/health/ready`);
           check(anonymous.status === 401, `readiness without the token answers ${anonymous.status}`);
           const ready = await fetch(`${base}/api/health/ready`, {

@@ -3,7 +3,7 @@
  * 11), which `next.config.mjs` sends through `headers()`.
  *
  * A header set here is applied before a route handler runs, and the handler's
- * header of the same name is then dropped (Next.js 15.5.22,
+ * header of the same name is then dropped (Next.js 15.5.28,
  * `send-response.js:46-52`). So nothing a handler must decide per answer is
  * named here: no `Cache-Control`, no `Content-Disposition`, and no page policy.
  * The API policy is a superset of the download route's own, so replacing it

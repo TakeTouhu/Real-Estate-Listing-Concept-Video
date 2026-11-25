@@ -8,6 +8,8 @@ const nextConfig = {
   output: "standalone",
   // No `X-Powered-By: Next.js` (ADR-0174 Decision 8).
   poweredByHeader: false,
+  // No image optimizer: the app uses no `next/image`, and `/_next/image` carried two of the three critical advisories.
+  images: { unoptimized: true },
   // Internal workspace packages are consumed as TypeScript source.
   transpilePackages: [
     "@app/shared",

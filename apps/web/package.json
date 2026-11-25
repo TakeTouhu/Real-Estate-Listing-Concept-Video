@@ -16,7 +16,7 @@
     "@app/shared": "workspace:*",
     "@app/storage": "workspace:*",
     "@app/video-providers": "workspace:*",
-    "next": "15.5.22",
+    "next": "15.5.28",
     "qrcode": "1.5.4",
     "react": "19.0.8",
     "react-dom": "19.0.8",

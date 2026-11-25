@@ -49,6 +49,10 @@ describe("next.config.mjs", () => {
     expect(nextConfig.poweredByHeader).toBe(false);
   });
 
+  it("turns the image optimizer off, so `/_next/image` answers 404", () => {
+    expect(nextConfig.images?.unoptimized).toBe(true);
+  });
+
   it.each(ENVIRONMENTS)("sends the fixed headers on every path under NODE_ENV=%s", async (nodeEnv) => {
     const everyAnswer = headersOf(await configuredRules(nodeEnv), "/:path*");
     expect(everyAnswer.get("x-content-type-options")).toBe("nosniff");
