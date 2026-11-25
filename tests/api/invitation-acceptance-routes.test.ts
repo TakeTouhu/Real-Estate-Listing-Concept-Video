@@ -157,7 +157,8 @@ describe("before the sign-in is complete", () => {
   });
 
   it("is secure in production", async () => {
-    env.value = { ...env.value, NODE_ENV: "production" };
+    // Production accepts only the configured origin (ADR-0174).
+    env.value = { ...env.value, NODE_ENV: "production", APP_BASE_URL: SITE };
     const response = await accepting({ token: await invite("invitee") });
     expect(response.cookies.get(WAITING)).toMatchObject({ secure: true });
   });

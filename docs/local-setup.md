@@ -145,7 +145,12 @@ APP_BASE_URL=http://localhost:3000
 ```
 
 `APP_BASE_URL` is the address the links start with; use the one you open the
-web app at. After signing up, open the newest file in the folder, copy the
+web app at, exactly: once it is set, a checked form posted from any other
+origin (`http://127.0.0.1:3000`, another port) is refused with `403`
+(ADR-0174).
+Unset, outside production, the host you opened is accepted.
+
+After signing up, open the newest file in the folder, copy the
 link from its `text` and open it in the browser, then press **Verify email
 address**. The link works once, for 24 hours; the verify page sends a new one.
 `.dev-outbox/` is git-ignored, and the folder is readable by your user alone.
@@ -291,6 +296,10 @@ are what ships.
 ```bash
 pnpm check   # typecheck + lint + test + build — no database required
 ```
+
+Run `pnpm test` without `APP_BASE_URL` in the shell: three route test files
+read the process's environment and post from an origin of their own, which
+the origin check then refuses (ADR-0174).
 
 ### Database integration tests
 

@@ -1395,6 +1395,20 @@ and invitations, uploads, analysis, video starts, downloads and Unit
 purchase approvals per account; what it leaves open is in `TODO.md`,
 "Open in RD-8".
 
+**RD-9a — the origin check compares with `APP_BASE_URL`** (ADR-0174,
+no migration): RD-9 has started. ADR-0174 decides all of RD-9: every
+cookie-based change checks its origin first, `PUT /api/storage/upload`
+alone excepted; fixed security headers and an API policy in
+`next.config.mjs`; a nonce-based page policy in a middleware. RD-9a
+builds the comparison: where `APP_BASE_URL` is set, a change is
+accepted only from exactly its origin, scheme and port included; a
+production server without it refuses every change; elsewhere the host
+rule stays. Each refusal is logged by its reason, and a test of every
+route file names the 24 handlers RD-9b and RD-9c are to check.
+Planned, not done: RD-9b the signed-in work routes; RD-9c the sign-in
+and account routes and MFA; RD-9d the fixed headers and the API policy;
+RD-9e the page policy and the records that close RD-9.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
