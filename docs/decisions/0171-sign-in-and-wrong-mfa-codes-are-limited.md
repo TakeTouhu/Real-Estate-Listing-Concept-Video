@@ -97,10 +97,11 @@ route's own answer to an error, "Sign in failed" for a database's: on
 the sign-in page, or on the code page with the sign-in kept. A session
 made by a right password before a forget or give-back failed gets no
 cookie, and ends unused; its `UserLoggedIn` audit row stays, and so do
-the hits, but the address's when only the give-back failed. A code is accepted before its user's count is forgotten, so
-when that forget fails the sign-in has already passed: the answer
-names the error, the code page sends the person on, and the count
-stays until its window ends.
+the hits, but the address's when only the give-back failed. A code is
+accepted before its user's count is forgotten, so when that forget
+fails the sign-in has already passed: the answer names the error, the
+code page sends the person on, and the count stays until its window
+ends.
 
 ## Considered and not done
 
