@@ -1456,6 +1456,22 @@ routes, RD-9d (#210) the fixed headers and the API policy, and RD-9e
 the page policy; what it leaves open is in `TODO.md`, "Open in RD-9".
 RD-10 adds the container images.
 
+**RD-10a — the web app's container image, built and smoked in CI**
+(ADR-0175, no migration): RD-10 has started. ADR-0175 decides the rules
+every image keeps: one base, `node:22-trixie-slim` pinned by digest; no
+build argument, `HEALTHCHECK`, proxy, secret or setting in the image; a
+numeric non-root user; an ignore file of its own; built in CI and
+pushed nowhere. `apps/web/Dockerfile` builds the standalone server from
+the lockfile with `NODE_ENV` unset, refusing a `.env` and requiring
+Prisma's OpenSSL 3 engine, and runs it as uid 1000 through an
+entrypoint that strips `NEXT_PHASE`. The new `web-image` job runs it
+with no network and a read-only root: it refuses a production start
+without settings and with `NEXT_PHASE`, and with stand-in settings
+serves liveness with HSTS and a page with a nonce; readiness answers
+`503`, its database probe having asked. A text guard holds the rules.
+A pull request shows 12 checks. Planned, not done: RD-10b redirects to
+a path; RD-10c the worker image and the records that close RD-10.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

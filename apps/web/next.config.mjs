@@ -4,6 +4,8 @@ import { fixedHeaderRules } from "./fixed-headers.mjs";
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // `next build` also writes `.next/standalone`: the server and only the files it loads, run by the image (ADR-0175).
+  output: "standalone",
   // No `X-Powered-By: Next.js` (ADR-0174 Decision 8).
   poweredByHeader: false,
   // Internal workspace packages are consumed as TypeScript source.

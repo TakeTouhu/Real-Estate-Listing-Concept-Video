@@ -301,6 +301,9 @@ Audit metadata must be sanitized and tamper-evident. Do not store full secrets o
 
 - Threat model reviewed
 - Dependency and container scans pass
+  *Not part 1's: since RD-10a (ADR-0175), CI builds the web image from
+  a pinned base and runs it with no network, and prints its packages;
+  no container or dependency scan runs, and part 2 chooses one.*
 - Tenant-isolation tests pass
 - Restore test succeeds
 - Secrets are not committed
