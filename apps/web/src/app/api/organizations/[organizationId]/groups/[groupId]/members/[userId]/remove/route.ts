@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { groupsPage, removeGroupMember } from "@/lib/groups";
 import { appErrorToResponse } from "@/lib/http";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -22,8 +23,8 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "A group's member must be removed from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId, groupId, userId } = await context.params;
   const outcome = await removeGroupMember(current.user.id, organizationId, groupId, userId);
-  return NextResponse.redirect(groupsPage(request.url, organizationId, outcome), { status: 303 });
+  return seeOther(groupsPage(organizationId, outcome));
 }

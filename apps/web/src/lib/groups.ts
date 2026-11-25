@@ -12,6 +12,7 @@ import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
 import { MEMBER_ID_MAX_LENGTH } from "./members";
 import { codeOf } from "./page-codes";
+import { pathWithQuery } from "./redirect";
 
 let overview: GroupsOverviewService | undefined;
 
@@ -92,12 +93,10 @@ export function groupsError(param: string | readonly string[] | undefined): Grou
 /** What a change of a group ended with, for the groups page. */
 export type GroupsOutcome = { readonly notice: GroupsNotice } | { readonly error: GroupsError };
 
-/** The groups page with a notice or an error, on the address the request came to. */
-export function groupsPage(requestUrl: string, organizationId: string, outcome: GroupsOutcome): URL {
-  const url = new URL(`/organizations/${encodeURIComponent(organizationId)}/groups`, requestUrl);
-  if ("notice" in outcome) url.searchParams.set("notice", outcome.notice);
-  else url.searchParams.set("error", outcome.error);
-  return url;
+/** The groups page's path, with a notice or an error. */
+export function groupsPage(organizationId: string, outcome: GroupsOutcome): string {
+  const path = `/organizations/${encodeURIComponent(organizationId)}/groups`;
+  return pathWithQuery(path, "notice" in outcome ? { notice: outcome.notice } : { error: outcome.error });
 }
 
 let logger: Logger | undefined;

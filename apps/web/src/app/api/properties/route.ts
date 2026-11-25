@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { getPropertyServices } from "@/lib/property";
 import { appErrorToResponse, formOf, formString, redirectWithError } from "@/lib/http";
 import { ASSIGNMENT_ID_MAX_LENGTH } from "@/lib/property-assignment";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +39,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return appErrorToResponse(new AppError("FORBIDDEN", "A Property must be created from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
 
   const form = await formOf(request);
   const organizationId = formString(form, "organizationId");
@@ -50,10 +51,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   const groupId = formString(form, "groupId");
   if (responsibleUserId.length > ASSIGNMENT_ID_MAX_LENGTH) {
     const message = "The responsible user must be a member of this organization who is not BILLING";
-    return redirectWithError(request.url, "/", message);
+    return redirectWithError("/", message);
   }
   if (groupId.length > ASSIGNMENT_ID_MAX_LENGTH) {
-    return redirectWithError(request.url, "/", "The group must be a group of this organization");
+    return redirectWithError("/", "The group must be a group of this organization");
   }
 
   try {
@@ -67,9 +68,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       ...(responsibleUserId === "" ? {} : { responsibleUserId }),
       ...(groupId === "" ? {} : { groupId }),
     });
-    return NextResponse.redirect(new URL(`/properties/${property.id}`, request.url), { status: 303 });
+    return seeOther(`/properties/${property.id}`);
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Could not create property";
-    return redirectWithError(request.url, "/", message);
+    return redirectWithError("/", message);
   }
 }

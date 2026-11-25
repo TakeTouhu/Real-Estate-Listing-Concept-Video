@@ -4,6 +4,7 @@ import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
 import { getMailer, tokenLink } from "./mailer";
 import { getRateLimiter, refusalText, retryMinutes } from "./rate-limit";
+import { pathWithQuery } from "./redirect";
 
 /** The page that asks for a reset link and that the link opens (ADR-0133). */
 export const RESET_PASSWORD_PATH = "/reset-password";
@@ -45,14 +46,11 @@ export function resetPasswordNoticeText(notice: ResetPasswordNotice, retry?: str
 }
 
 /**
- * The reset page with `notice`, and the minutes a refusal waits, on the
- * address the request came to: a redirect, never an emailed link.
+ * The reset page's path with `notice`, and the minutes a refusal waits: a
+ * redirect's, never an emailed link.
  */
-export function resetPasswordPage(requestUrl: string, notice: ResetPasswordNotice, retry?: number): URL {
-  const url = new URL(RESET_PASSWORD_PATH, requestUrl);
-  url.searchParams.set("notice", notice);
-  if (retry !== undefined) url.searchParams.set("retry", String(retry));
-  return url;
+export function resetPasswordPage(notice: ResetPasswordNotice, retry?: number): string {
+  return pathWithQuery(RESET_PASSWORD_PATH, { notice, retry: retry?.toString() });
 }
 
 /** The address of the reset page for `token`, on the configured base address and never on a request's. */

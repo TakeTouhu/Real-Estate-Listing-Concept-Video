@@ -5,6 +5,7 @@ import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { getIdentityServices } from "@/lib/identity";
 import { getMfaService } from "@/lib/mfa";
 import { getRateLimiter, withoutLimiterText } from "@/lib/rate-limit";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -20,9 +21,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     return appErrorToResponse(new AppError("FORBIDDEN", "A sign-in code must be entered from this site"));
   }
   const signIn = await getSignIn();
-  if (!signIn) return backToPassword(request, "Sign in again");
+  if (!signIn) return backToPassword("Sign in again");
   if (signIn.step !== "CODE_REQUIRED") {
-    return NextResponse.redirect(new URL(nextPageFor(signIn.step), request.url), { status: 303 });
+    return seeOther(nextPageFor(signIn.step));
   }
   const form = await request.formData();
   try {
@@ -31,21 +32,21 @@ export async function POST(request: Request): Promise<NextResponse> {
     // A limiter that cannot answer refuses in this route's own words (ADR-0173 Decision 9).
     const now = getIdentityServices().deps.clock.now();
     const attempt = await withoutLimiterText(getRateLimiter().mfaCode(signIn.user.id, now));
-    if (!attempt.allowed) return redirectWithError(request.url, "/login/mfa", attempt.message);
+    if (!attempt.allowed) return redirectWithError("/login/mfa", attempt.message);
     await mfa.verify(signIn.session, formString(form, "code"));
     await withoutLimiterText(attempt.succeeded());
-    return NextResponse.redirect(new URL("/", request.url), { status: 303 });
+    return seeOther("/");
   } catch (error) {
-    if (!(error instanceof AppError)) return redirectWithError(request.url, "/login/mfa", "Sign in failed");
-    if (error.code === "UNAUTHENTICATED") return backToPassword(request, error.message);
+    if (!(error instanceof AppError)) return redirectWithError("/login/mfa", "Sign in failed");
+    if (error.code === "UNAUTHENTICATED") return backToPassword(error.message);
     const left = error.details?.attemptsLeft;
     const message = typeof left === "number" ? `${error.message}. Attempts left: ${left}` : error.message;
-    return redirectWithError(request.url, "/login/mfa", message);
+    return redirectWithError("/login/mfa", message);
   }
 }
 
-function backToPassword(request: Request, message: string): NextResponse {
-  const response = redirectWithError(request.url, "/login", message);
+function backToPassword(message: string): NextResponse {
+  const response = redirectWithError("/login", message);
   response.cookies.delete(SESSION_COOKIE);
   return response;
 }

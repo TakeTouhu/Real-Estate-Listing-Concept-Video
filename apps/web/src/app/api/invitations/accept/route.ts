@@ -12,6 +12,7 @@ import {
   joinedPage,
   keepsInvitationWaiting,
 } from "@/lib/invitations";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -33,18 +34,18 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   const form = await formOf(request);
   const token = formString(form, "token") || ((await cookies()).get(INVITATION_COOKIE)?.value ?? "");
-  if (!isInvitationToken(token)) return answer(acceptInvitationPage(request.url, "invalid"), null);
+  if (!isInvitationToken(token)) return answer(acceptInvitationPage("invalid"), null);
   const current = await getCurrentUser();
-  if (!current) return answer(new URL("/login", request.url), token);
+  if (!current) return answer("/login", token);
   const outcome = await acceptInvitationAs(current.user.id, token);
-  if ("joined" in outcome) return answer(joinedPage(request.url, outcome.joined), null);
+  if ("joined" in outcome) return answer(joinedPage(outcome.joined), null);
   const waiting = keepsInvitationWaiting(outcome.error) ? token : null;
-  return answer(acceptInvitationPage(request.url, outcome.error), waiting);
+  return answer(acceptInvitationPage(outcome.error), waiting);
 }
 
-/** A 303 to `location`, leaving `waiting` in the browser, or no invitation. */
-function answer(location: URL, waiting: string | null): NextResponse {
-  const response = NextResponse.redirect(location, { status: 303 });
+/** A 303 to the path `location`, leaving `waiting` in the browser, or no invitation. */
+function answer(location: string, waiting: string | null): NextResponse {
+  const response = seeOther(location);
   if (waiting === null) response.cookies.delete(INVITATION_COOKIE);
   else response.cookies.set(INVITATION_COOKIE, waiting, invitationCookieOptions());
   return response;

@@ -3449,3 +3449,26 @@ the lockfile names `next` 15.5.28 and its `@next/*` packages.
 
 **Rolling back.** To RD-10a's tree: `next` 15.5.22 and the image
 optimizer return, with the nine advisories. Nothing was stored.
+
+## RD-10b — route handlers redirect to a path
+
+**No migration** (ADR-0175 Decision 7). Migration 35 stays the last.
+
+**What changes at deploy.** Every redirect a route handler sends keeps
+its status, `303`, and now names a path (`Location: /login`) instead of
+an address built from `request.url`, which named the server's bind
+address (`http://0.0.0.0:3000/login` on the image). Browsers resolve it
+against the address they asked, so a proxy or load balancer in front of
+the app needs no `Host` or `X-Forwarded-Host` rewriting for redirects,
+and no setting is added. A client that reads `Location` itself must
+resolve it against the request's address (RFC 9110, section 10.2.2);
+the app's own pages and forms need nothing (`docs/api-changes-rd-10b.md`).
+CI's `web-image` job now requires the path and the session cookie
+deleted; the checks stay 12.
+
+**On a development machine.** Nothing changes in running `pnpm dev`,
+the tests or the browser test; the route tests now expect a path.
+
+**Rolling back.** To the Next.js 15.5.28 tree: redirects name the
+server's bind address again, which the browser refuses after a form
+post (`form-action 'self'`). Nothing was stored.

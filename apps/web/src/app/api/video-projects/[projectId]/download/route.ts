@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { isId, readPropertyId, startPages } from "@/lib/generation-start-form";
 import { appErrorToResponse } from "@/lib/http";
+import { pathWithQuery, seeOther, seeOtherToSignedLink } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 import { countDownload, getVideoDownloadLogger, getVideoDownloadService, requestDownload } from "@/lib/video-download";
 
@@ -30,7 +31,7 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "A video must be downloaded from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { projectId } = await context.params;
 
   let form: FormData;
@@ -59,14 +60,10 @@ export async function POST(
     // the address it posted to: the token never rides on an address the server
     // rebuilt from its own view of the request. The link is good for minutes,
     // so nothing keeps the answer that carries it.
-    const location = /^\/(?![/\\])/.test(landing.url) ? landing.url : new URL(landing.url).href;
-    return new NextResponse(null, {
-      status: 303,
-      headers: { Location: location, "Cache-Control": "private, no-store" },
-    });
+    const response = seeOtherToSignedLink(landing.url);
+    response.headers.set("Cache-Control", "private, no-store");
+    return response;
   }
-  const page = new URL(startPages(propertyId, projectId).project, request.url);
-  page.searchParams.set("download", landing.notice);
-  if (landing.retry !== undefined) page.searchParams.set("retry", String(landing.retry));
-  return NextResponse.redirect(page, { status: 303 });
+  const page = startPages(propertyId, projectId).project;
+  return seeOther(pathWithQuery(page, { download: landing.notice, retry: landing.retry?.toString() }));
 }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthService, MfaService, OrganizationService, totpStep } from "@app/domain";
 import { InMemoryRateLimitStore, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { AppError, RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for the two-step sign-in, MFA set-up when it is required, and the
@@ -90,7 +91,7 @@ const setup = () => startSetup(new Request("http://localhost/api/mfa", { method:
 const newRecoveryCodes = () =>
   replaceRecoveryCodes(new Request("http://localhost/api/mfa", { method: "POST", headers: SITE }));
 const location = (response: Response) => {
-  const url = new URL(response.headers.get("location")!);
+  const url = pathOf(response);
   return { path: url.pathname, error: url.searchParams.get("error") };
 };
 

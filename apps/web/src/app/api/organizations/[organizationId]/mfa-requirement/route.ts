@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
 import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -20,17 +21,17 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "The MFA requirement must be changed from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId } = await context.params;
   const required = formString(await request.formData(), "required");
   if (required !== "true" && required !== "false") {
-    return redirectWithError(request.url, "/", "Choose whether to require MFA");
+    return redirectWithError("/", "Choose whether to require MFA");
   }
   try {
     await getIdentityServices().organizations.setMfaRequirement(current.user.id, organizationId, required === "true");
   } catch (error) {
     const message = error instanceof AppError ? error.message : "Could not change the MFA requirement";
-    return redirectWithError(request.url, "/", message);
+    return redirectWithError("/", message);
   }
-  return NextResponse.redirect(new URL("/", request.url), { status: 303 });
+  return seeOther("/");
 }

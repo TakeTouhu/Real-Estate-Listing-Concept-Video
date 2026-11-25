@@ -7,6 +7,7 @@ import {
   membershipTestOptions,
   type TestDeps,
 } from "@app/domain/testing";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for opening and accepting an invitation (AT-7b, ADR-0138): a
@@ -115,8 +116,7 @@ const accepting = (fields: Record<string, string> = {}, headers?: Record<string,
 /** Where a 303 lands on this site: its path and query. */
 function landing(response: Response): string {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   return `${url.pathname}${url.search}`;
 }
 

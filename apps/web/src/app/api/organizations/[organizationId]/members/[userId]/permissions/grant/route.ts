@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse, formOf, formString } from "@/lib/http";
 import { grantMemberPermission, memberPermissionsPage } from "@/lib/member-permissions";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -22,9 +23,9 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "A member's permissions must be changed from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId, userId } = await context.params;
   const form = await formOf(request);
   const outcome = await grantMemberPermission(current.user.id, organizationId, userId, formString(form, "permission"));
-  return NextResponse.redirect(memberPermissionsPage(request.url, organizationId, userId, outcome), { status: 303 });
+  return seeOther(memberPermissionsPage(organizationId, userId, outcome));
 }

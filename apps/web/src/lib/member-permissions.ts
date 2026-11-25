@@ -10,6 +10,7 @@ import { getIdentityServices } from "./identity";
 import { MEMBER_ID_MAX_LENGTH, membersPage } from "./members";
 import { codeOf } from "./page-codes";
 import { NOT_GIVEN_HERE } from "./permission-names";
+import { pathWithQuery } from "./redirect";
 
 let service: MemberPermissionsService | undefined;
 
@@ -73,23 +74,18 @@ export type MemberPermissionsOutcome =
   | { readonly gone: true };
 
 /**
- * The member's permissions page with a notice or an error, on the address the
- * request came to; for a member who is gone, the members page saying so.
+ * The member's permissions page's path, with a notice or an error; for a
+ * member who is gone, the members page's, saying so.
  */
 export function memberPermissionsPage(
-  requestUrl: string,
   organizationId: string,
   memberUserId: string,
   outcome: MemberPermissionsOutcome,
-): URL {
-  if ("gone" in outcome) return membersPage(requestUrl, organizationId, { error: "not-a-member" });
-  const url = new URL(
-    `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(memberUserId)}/permissions`,
-    requestUrl,
-  );
-  if ("notice" in outcome) url.searchParams.set("notice", outcome.notice);
-  else url.searchParams.set("error", outcome.error);
-  return url;
+): string {
+  if ("gone" in outcome) return membersPage(organizationId, { error: "not-a-member" });
+  const member = `/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(memberUserId)}`;
+  const path = `${member}/permissions`;
+  return pathWithQuery(path, "notice" in outcome ? { notice: outcome.notice } : { error: outcome.error });
 }
 
 let logger: Logger | undefined;

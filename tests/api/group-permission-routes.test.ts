@@ -12,6 +12,7 @@ import {
 } from "@app/domain";
 import { InMemoryUnitsReader, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { hotp } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for giving a group a permission and taking one back from the
@@ -149,8 +150,7 @@ const takingBack = (groupId: string, permission: string, organizationId = orgId)
 /** Where a 303 lands: the groups page with one code, and nothing else in the address. */
 function landing(response: Response, organizationId = orgId): string {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   expect(url.pathname).toBe(`/organizations/${organizationId}/groups`);
   const entries = [...url.searchParams.entries()];
   expect(entries).toHaveLength(1);
@@ -359,7 +359,7 @@ describe("either form post", () => {
     for (const change of ["grant", "revoke"] as const) {
       const response = await posting(change, team, { permission: "audit.view" });
       expect(response.status).toBe(303);
-      expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+      expect(response.headers.get("location")).toBe("/login");
     }
     expect(await permissionsOf(team)).toEqual([]);
   });

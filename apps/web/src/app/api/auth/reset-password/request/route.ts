@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { appErrorToResponse, formOf, formString } from "@/lib/http";
 import { askForLimitedResetLink, resetPasswordPage } from "@/lib/password-reset";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,6 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   const form = await formOf(request);
   const wait = await askForLimitedResetLink(request.headers, formString(form, "email"));
-  const page = wait === null ? resetPasswordPage(request.url, "sent") : resetPasswordPage(request.url, "limited", wait);
-  return NextResponse.redirect(page, { status: 303 });
+  const page = wait === null ? resetPasswordPage("sent") : resetPasswordPage("limited", wait);
+  return seeOther(page);
 }

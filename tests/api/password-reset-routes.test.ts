@@ -6,6 +6,7 @@ import { AuthService, MfaService, createMfaSecretCipher, systemMfaRandom, totpSt
 import { InMemoryRateLimitStore, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
 import { readDevelopmentEmailOutbox } from "@app/storage";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for password reset (AT-4c, ADR-0133): asking for a link answers
@@ -85,7 +86,7 @@ const form = (fields: Record<string, string>, headers: Record<string, string> = 
   new Request("http://localhost/api/auth", { method: "POST", headers, body: new URLSearchParams(fields) });
 const location = (response: Response) => {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
+  const url = pathOf(response);
   // A redirect carries a notice, its wait or an error and nothing else: never a token, never an address.
   expect([...url.searchParams.keys()].filter((key) => !["notice", "retry", "error"].includes(key))).toEqual([]);
   expect(url.hash).toBe("");
@@ -245,7 +246,7 @@ describe("the reset limits (ADR-0172)", () => {
     });
   const limited = (response: Response) => {
     expect(location(response)).toEqual(resetPage("limited"));
-    return new URL(response.headers.get("location")!).searchParams.get("retry");
+    return pathOf(response).searchParams.get("retry");
   };
   const limitWith = (store: ConstructorParameters<typeof WebRateLimits>[0], trusted?: string) => {
     const settings = { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32), FORWARDED_FOR_TRUSTED_ENTRIES: trusted };

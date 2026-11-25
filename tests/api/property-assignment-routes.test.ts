@@ -18,6 +18,7 @@ import {
   type TestDeps,
 } from "@app/domain/testing";
 import { AppError, hotp } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for changing a Property's responsible user and group from the
@@ -164,8 +165,7 @@ const assigning = (
 /** Where a 303 lands: the Property page with one code, and nothing else in the address. */
 function landing(response: Response, target = propertyId): string {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   expect(url.pathname).toBe(`/properties/${encodeURIComponent(target)}`);
   const entries = [...url.searchParams.entries()];
   expect(entries).toHaveLength(1);
@@ -335,7 +335,7 @@ describe("changing a Property's assignment", () => {
   it("sends a signed-out visitor to sign in, changing nothing", async () => {
     cookie.value = undefined;
     const response = await assigning({ groupId: west });
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await stored()).toEqual(AT_START());
   });
 });

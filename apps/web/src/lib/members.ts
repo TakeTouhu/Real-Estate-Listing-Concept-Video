@@ -15,6 +15,7 @@ import { getIdentityServices } from "./identity";
 import { getMailer } from "./mailer";
 import { codeOf } from "./page-codes";
 import { getRateLimiter, refusalText, retryMinutes } from "./rate-limit";
+import { pathWithQuery } from "./redirect";
 
 let overview: MembersOverviewService | undefined;
 
@@ -152,15 +153,11 @@ export type MembersOutcome =
   | { readonly notice: MembersNotice }
   | { readonly error: MembersError; readonly retry?: number };
 
-/** The members page with a notice or an error, on the address the request came to. */
-export function membersPage(requestUrl: string, organizationId: string, outcome: MembersOutcome): URL {
-  const url = new URL(`/organizations/${encodeURIComponent(organizationId)}/members`, requestUrl);
-  if ("notice" in outcome) url.searchParams.set("notice", outcome.notice);
-  else {
-    url.searchParams.set("error", outcome.error);
-    if (outcome.retry !== undefined) url.searchParams.set("retry", String(outcome.retry));
-  }
-  return url;
+/** The members page's path, with a notice or an error. */
+export function membersPage(organizationId: string, outcome: MembersOutcome): string {
+  const path = `/organizations/${encodeURIComponent(organizationId)}/members`;
+  if ("notice" in outcome) return pathWithQuery(path, { notice: outcome.notice });
+  return pathWithQuery(path, { error: outcome.error, retry: outcome.retry?.toString() });
 }
 
 let logger: Logger | undefined;

@@ -9,6 +9,7 @@ import {
   type TestDeps,
 } from "@app/domain/testing";
 import { AppError, RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * The purchase approval limit per account (ADR-0173): the route over the
@@ -125,8 +126,7 @@ function approve(sent = fields(), headers: Record<string, string> = { origin: SI
 /** Where a 303 sends the customer, with every query field it carries. */
 function landing(response: Response): { path: string; query: [string, string][] } {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location") ?? "");
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   return { path: url.pathname, query: [...url.searchParams] };
 }
 

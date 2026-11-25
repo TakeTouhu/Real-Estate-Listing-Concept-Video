@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { appErrorToResponse } from "@/lib/http";
 import { INVITATION_COOKIE } from "@/lib/invitations";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!isSameOriginPost(request)) {
     return appErrorToResponse(new AppError("FORBIDDEN", "An invitation must be put aside from this site"));
   }
-  const response = NextResponse.redirect(new URL("/", request.url), { status: 303 });
+  const response = seeOther("/");
   response.cookies.delete(INVITATION_COOKIE);
   return response;
 }

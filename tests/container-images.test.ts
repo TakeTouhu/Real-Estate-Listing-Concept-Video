@@ -342,6 +342,26 @@ describe("the web image", () => {
     ]);
   });
 
+  it("has its smoke check that a redirect is a path, asked through another host name (RD-10b)", () => {
+    const ci = raw(WORKFLOW);
+    const job = readJob(ci, "web-image");
+    const lines = ci.split(/\r?\n/).slice(job.first, job.last).map((line) => line.trim());
+    const start = lines.indexOf("const logout = await new Promise((resolve, reject) => {");
+    expect(lines.slice(start, start + 9)).toEqual([
+      "const logout = await new Promise((resolve, reject) => {",
+      'const headers = { host: "app.rd10.test", origin: "https://app.rd10.test" };',
+      'request(`${base}/api/auth/logout`, { method: "POST", headers }, resolve).on("error", reject).end();',
+      "});",
+      "logout.resume();",
+      "check(logout.statusCode === 303, `sign-out answers ${logout.statusCode}`);",
+      'check(logout.headers.location === "/login", `sign-out\'s Location is ${logout.headers.location}`);',
+      'const cookie = String(logout.headers["set-cookie"] ?? "");',
+      'check(/^rev_session=;/.test(cookie), "sign-out deletes the session cookie");',
+    ]);
+    expect(lines.filter((line) => /\blogout\b/.test(line))).toHaveLength(6);
+    expect(lines.filter((line) => line.includes("node:http"))).toEqual(['import { request } from "node:http";']);
+  });
+
   it("installs from the lockfile alone, offline after fetching it", () => {
     const installs = ofKind(instructions(file), "RUN").filter((l) =>
       /\b(?:pnpm|npm|yarn)\b (?:i|install|add|fetch)\b/.test(l),

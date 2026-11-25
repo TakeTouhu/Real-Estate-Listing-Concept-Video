@@ -10,6 +10,7 @@ import {
 } from "@app/domain";
 import { InMemoryRateLimitStore, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for an organization's "require MFA of every member" (MFA-4,
@@ -109,7 +110,7 @@ const posting = (fields: Record<string, string>, organizationId = orgId, headers
 const post = (fields: Record<string, string>, organizationId = orgId, request = posting(fields, organizationId)) =>
   setRequirement(request, { params: Promise.resolve({ organizationId }) });
 const location = (response: Response) => {
-  const url = new URL(response.headers.get("location")!);
+  const url = pathOf(response);
   return { path: url.pathname, error: url.searchParams.get("error") };
 };
 const required = async () => (await deps.repos.organizations.findById(orgId))?.mfaRequired;

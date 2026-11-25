@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InMemoryRateLimitStore } from "@app/domain/testing";
 import { AppError, RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * The download route (GS-12c-3, ADR-0120): what it reads from the project
@@ -112,12 +113,10 @@ function post(
   return POST(request, { params: Promise.resolve({ projectId }) });
 }
 
-/** Where a 303 sends the member, resolved as the browser resolves it against the address it posted to. */
+/** Where a 303 sends the member: a path, resolved as the browser resolves it against the address it posted to. */
 function location(response: Response): URL {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location") ?? "", `${SITE}/api/video-projects/${PROJECT}/download`);
-  expect(url.origin).toBe(SITE);
-  return url;
+  return pathOf(response);
 }
 
 const PROJECT_PAGE = `/properties/${PROPERTY}/video-projects/${PROJECT}`;

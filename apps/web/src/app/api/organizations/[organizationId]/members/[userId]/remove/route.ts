@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse, formOf, formString } from "@/lib/http";
 import { membersPage, removeOrganizationMember } from "@/lib/members";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -22,11 +23,11 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "A member must be removed from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId, userId } = await context.params;
   const form = await formOf(request);
   const outcome = await removeOrganizationMember(current.user.id, organizationId, userId, {
     from: formString(form, "from"),
   });
-  return NextResponse.redirect(membersPage(request.url, organizationId, outcome), { status: 303 });
+  return seeOther(membersPage(organizationId, outcome));
 }

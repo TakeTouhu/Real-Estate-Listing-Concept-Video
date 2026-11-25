@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { createGroup, groupsPage } from "@/lib/groups";
 import { appErrorToResponse, formOf, formString } from "@/lib/http";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -20,9 +21,9 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "A group must be created from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId } = await context.params;
   const form = await formOf(request);
   const outcome = await createGroup(current.user.id, organizationId, { name: formString(form, "name") });
-  return NextResponse.redirect(groupsPage(request.url, organizationId, outcome), { status: 303 });
+  return seeOther(groupsPage(organizationId, outcome));
 }

@@ -19,6 +19,7 @@ import {
   type TestDeps,
 } from "@app/domain/testing";
 import { AppError, hotp } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for creating a group from the groups page (AT-9a, ADR-0141),
@@ -176,8 +177,7 @@ const newGroup = async (name: string, organizationId = orgId, by = ownerId) =>
 /** Where a 303 lands: the groups page with one code, and nothing else in the address. */
 function landing(response: Response, organizationId = orgId): string {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   expect(url.pathname).toBe(`/organizations/${organizationId}/groups`);
   const entries = [...url.searchParams.entries()];
   expect(entries).toHaveLength(1);
@@ -310,7 +310,7 @@ describe("creating a group", () => {
     cookie.value = undefined;
     const response = await creating({ name: "East" });
     expect(response.status).toBe(303);
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await names()).toEqual([]);
   });
 });
@@ -472,7 +472,7 @@ describe("renaming a group", () => {
     const east = await newGroup("East");
     cookie.value = undefined;
     const response = await renaming(east, { name: "North", from: "East" });
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await names()).toEqual(["East"]);
   });
 });
@@ -603,7 +603,7 @@ describe("deleting a group", () => {
     const east = await newGroup("East");
     cookie.value = undefined;
     const response = await deleting(east);
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await names()).toEqual(["East"]);
   });
 });
@@ -774,7 +774,7 @@ describe("adding a group's member", () => {
     const east = await newGroup("East");
     cookie.value = undefined;
     const response = await adding(east, ownerId);
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await inGroup(east)).toEqual([]);
   });
 });
@@ -930,7 +930,7 @@ describe("removing a group's member", () => {
     const east = await eastWith(ownerId);
     cookie.value = undefined;
     const response = await removing(east, ownerId);
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await inGroup(east)).toEqual([ownerId]);
   });
 });

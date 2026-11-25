@@ -64,11 +64,10 @@ afterEach(() => {
 const logged = () => ({ error: vi.fn() });
 
 describe("the links and pages", () => {
-  it("builds the emailed link on the base address, and a redirect on the request's", () => {
+  it("builds the emailed link on the base address, and a redirect to a path", () => {
     expect(resetUrl(BASE, "a+b/c")).toBe(`${BASE}/reset-password?token=a%2Bb%2Fc`);
-    expect(resetPasswordPage("https://app.example/api/auth/reset-password?x=1", "sent").toString()).toBe(
-      "https://app.example/reset-password?notice=sent",
-    );
+    expect(resetPasswordPage("sent")).toBe("/reset-password?notice=sent");
+    expect(resetPasswordPage("limited", 2)).toBe("/reset-password?notice=limited&retry=2");
   });
 
   it("names only its own notices", () => {
