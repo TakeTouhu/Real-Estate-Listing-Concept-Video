@@ -5,6 +5,7 @@ import { getAnalysisService, toAnalysisDto } from "@/lib/analysis";
 import { requireAssetInProperty } from "@/lib/asset-route";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse } from "@/lib/http";
+import { isSameOriginPost } from "@/lib/same-origin";
 import { readJsonBody } from "@/lib/request";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +48,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ propertyId: string; assetId: string }> },
 ): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/properties/[propertyId]/assets/[assetId]/analysis/correction")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A photo's analysis must be corrected from this site"));
+  }
   const current = await getCurrentUser();
   if (!current) return appErrorToResponse(new AppError("UNAUTHENTICATED", "Sign in required"));
   const { propertyId, assetId } = await context.params;

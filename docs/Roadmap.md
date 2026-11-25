@@ -1409,6 +1409,15 @@ Planned, not done: RD-9b the signed-in work routes; RD-9c the sign-in
 and account routes and MFA; RD-9d the fixed headers and the API policy;
 RD-9e the page policy and the records that close RD-9.
 
+**RD-9b — the signed-in work routes check their origin** (ADR-0174, no
+migration): the upload, analysis and review, video-project and
+storyboard routes and the organization's MFA requirement refuse a post
+from another origin, or with none, with `403` before they read the
+session, count a limit or read the body; 31 of the 45 mutating handlers
+now check. Planned, not done: RD-9c the sign-in and account routes and
+MFA; RD-9d the fixed headers and the API policy; RD-9e the page policy
+and the records that close RD-9.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

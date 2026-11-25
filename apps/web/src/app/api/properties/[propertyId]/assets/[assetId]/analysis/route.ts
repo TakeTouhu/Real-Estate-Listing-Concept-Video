@@ -4,6 +4,7 @@ import { requireAssetInProperty } from "@/lib/asset-route";
 import { getCurrentUser } from "@/lib/auth";
 import { getAnalysisService, toAnalysisDto } from "@/lib/analysis";
 import { appErrorToResponse } from "@/lib/http";
+import { isSameOriginPost } from "@/lib/same-origin";
 import { getIdentityServices } from "@/lib/identity";
 import { getRateLimiter, limitJsonRequest } from "@/lib/rate-limit";
 import { requireOrganizationId, requireOrganizationIdFromQuery } from "@/lib/request";
@@ -20,6 +21,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ propertyId: string; assetId: string }> },
 ): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/properties/[propertyId]/assets/[assetId]/analysis")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A photo must be analyzed from this site"));
+  }
   const current = await getCurrentUser();
   if (!current) return appErrorToResponse(new AppError("UNAUTHENTICATED", "Sign in required"));
   const { propertyId, assetId } = await context.params;

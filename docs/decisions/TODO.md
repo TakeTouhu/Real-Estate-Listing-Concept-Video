@@ -365,6 +365,9 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       `APP_BASE_URL`'s origin where it is set, and refuses in production
       where it is not; a test of every route file names the routes still
       unchecked.*
+      *Amended in RD-9b (ADR-0174): the signed-in work routes are checked;
+      MFA, sign-in, sign-up, sign-out, organization creation and the
+      account links remain.*
 - [ ] **Decide whether analysis should run in the request or on the queue.**
       Phase 3A-3 runs it synchronously, which is fine for the offline
       deterministic adapter but not for a real vision vendor. Settle this before

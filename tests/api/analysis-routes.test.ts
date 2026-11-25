@@ -165,9 +165,12 @@ async function jsonOf(res: Response): Promise<Record<string, unknown>> {
 const params = (assetId = "ast_1", propertyId = "prp_1") => ({
   params: Promise.resolve({ propertyId, assetId }),
 });
-const postReq = (organizationId: unknown) =>
+/** Posted as the app's pages post: with no `APP_BASE_URL` here, the host is compared (ADR-0174). */
+const SITE = { host: "t", origin: "http://t" };
+const postReq = (organizationId: unknown, headers: Record<string, string> = SITE) =>
   new Request("http://t/api/analysis", {
     method: "POST",
+    headers,
     body: JSON.stringify({ organizationId }),
   });
 const getReq = (organizationId: string) =>
@@ -282,7 +285,7 @@ describe("POST /analysis", () => {
   it("returns 422 when organizationId is missing or malformed", async () => {
     expect((await startAnalysis(postReq(undefined), params())).status).toBe(422);
     expect((await startAnalysis(postReq(""), params())).status).toBe(422);
-    const bad = new Request("http://t/a", { method: "POST", body: "{not json" });
+    const bad = new Request("http://t/a", { method: "POST", headers: SITE, body: "{not json" });
     expect((await startAnalysis(bad, params())).status).toBe(422);
   });
 });
@@ -434,7 +437,8 @@ describe("the analysis routes' limit per account (ADR-0173)", () => {
     limits.value = limitsOf({ RATE_LIMIT_ANALYSIS: "1/3600" });
     for (const call of [startAnalysis, refreshAnalysis]) {
       expect((await call(postReq(undefined), params())).status).toBe(422);
-      expect((await call(new Request("http://t/a", { method: "POST", body: "{" }), params())).status).toBe(422);
+      const unreadable = new Request("http://t/a", { method: "POST", headers: SITE, body: "{" });
+      expect((await call(unreadable, params())).status).toBe(422);
     }
     currentUser.value = null;
     expect((await startAnalysis(postReq(ctx.orgId), params())).status).toBe(401);
@@ -460,6 +464,34 @@ describe("the analysis routes' limit per account (ADR-0173)", () => {
         });
       }
     }
+    expect(calls).not.toHaveBeenCalled();
+    expect(ctx.provider.calls).toBe(0);
+  });
+});
+
+describe("the origin check (ADR-0174)", () => {
+  it.each([
+    ["no origin", { host: "t" }],
+    ["another site", { host: "t", origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading, counting or analyzing anything, signed in or not", async (_, headers) => {
+    const store = new InMemoryRateLimitStore();
+    const hits = vi.spyOn(store, "hit");
+    limits.value = limitsOf({}, store);
+    const calls = vi.spyOn(analysisService.value as AnalysisService, "analyzeAsset");
+    const routes = [
+      [startAnalysis, "A photo must be analyzed from this site"],
+      [refreshAnalysis, "A photo's analysis must be refreshed from this site"],
+    ] as const;
+    for (const user of [{ user: { id: ctx.ownerId } }, null]) {
+      currentUser.value = user;
+      for (const [call, message] of routes) {
+        const request = postReq(ctx.orgId, headers);
+        const res = await call(request, params());
+        expect([res.status, (await jsonOf(res)).error]).toMatchObject([403, { code: "FORBIDDEN", message }]);
+        expect(request.bodyUsed).toBe(false);
+      }
+    }
+    expect(hits).not.toHaveBeenCalled();
     expect(calls).not.toHaveBeenCalled();
     expect(ctx.provider.calls).toBe(0);
   });

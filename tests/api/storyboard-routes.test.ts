@@ -240,10 +240,13 @@ async function setup(): Promise<Context> {
   };
 }
 
-function req(body: unknown, raw?: string): Request {
+/** Posted as the app's pages post: with no `APP_BASE_URL` here, the host is compared (ADR-0174). */
+const SITE = { host: "localhost", origin: "http://localhost" };
+
+function req(body: unknown, raw?: string, headers: Record<string, string> = SITE): Request {
   return new Request("http://localhost/api/properties/prp_1/video-projects", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: raw ?? JSON.stringify(body),
   });
 }
@@ -430,10 +433,10 @@ describe("response hygiene", () => {
 
 // --- Phase 3C-5b: compose, read, and list ------------------------------------
 
-function jsonReq(body: unknown, raw?: string): Request {
+function jsonReq(body: unknown, raw?: string, headers: Record<string, string> = SITE): Request {
   return new Request("http://localhost/api/video-projects/vpr_1/storyboard", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: raw ?? JSON.stringify(body),
   });
 }
@@ -692,5 +695,41 @@ describe("project list endpoint", () => {
     expect(raw).not.toContain("compositionFingerprint");
     expect(raw).not.toContain("createdBy");
     expect(raw).not.toContain("compiledPrompt");
+  });
+});
+
+describe("the origin check (ADR-0174)", () => {
+  it.each([
+    ["no origin", { host: "localhost" }],
+    ["another site", { host: "localhost", origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading or writing anything, signed in or not", async (_, headers) => {
+    const id = await newProject();
+    const service = storyboardService.value as StoryboardService;
+    const calls = [vi.spyOn(service, "createProject"), vi.spyOn(service, "compose")];
+    const before = [ctx.projects.size, ctx.scenes.size];
+    const routes = [
+      [
+        () => req(validBody(), undefined, headers),
+        (r: Request) => createProject(r, params()),
+        "A video project must be created from this site",
+      ],
+      [
+        () => jsonReq(bounds(), undefined, headers),
+        (r: Request) => composeStoryboard(r, projectParams(id)),
+        "A storyboard must be composed from this site",
+      ],
+    ] as const;
+    for (const user of [{ user: { id: ctx.ownerId } }, null]) {
+      currentUser.value = user;
+      for (const [request, call, message] of routes) {
+        const sent = request();
+        const res = await call(sent);
+        const { error } = (await res.json()) as { error: unknown };
+        expect([res.status, error]).toMatchObject([403, { code: "FORBIDDEN", message }]);
+        expect(sent.bodyUsed).toBe(false);
+      }
+    }
+    for (const call of calls) expect(call).not.toHaveBeenCalled();
+    expect([ctx.projects.size, ctx.scenes.size]).toEqual(before);
   });
 });

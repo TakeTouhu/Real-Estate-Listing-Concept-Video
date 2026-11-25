@@ -297,7 +297,7 @@ are what ships.
 pnpm check   # typecheck + lint + test + build — no database required
 ```
 
-Run `pnpm test` without `APP_BASE_URL` in the shell: three route test files
+Run `pnpm test` without `APP_BASE_URL` in the shell: eight route test files
 read the process's environment and post from an origin of their own, which
 the origin check then refuses (ADR-0174).
 

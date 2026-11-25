@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { TARGET_OUTPUT_RESOLUTIONS } from "@app/domain";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse } from "@/lib/http";
+import { isSameOriginPost } from "@/lib/same-origin";
 import { getStoryboardService, toVideoProjectDto } from "@/lib/storyboard";
 import {
   optionalString,
@@ -34,6 +35,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ propertyId: string }> },
 ): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/properties/[propertyId]/video-projects")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A video project must be created from this site"));
+  }
   const current = await getCurrentUser();
   if (!current) return appErrorToResponse(new AppError("UNAUTHENTICATED", "Sign in required"));
   const { propertyId } = await context.params;

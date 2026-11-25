@@ -8,13 +8,12 @@ import { describe, expect, it } from "vitest";
  * Each exported `POST`, `PUT`, `PATCH` or `DELETE` of a route file is read
  * from its own `export` to the next one, so a `GET` above it is never read
  * for it, and must call the check before its first `await`. The routes below
- * do not yet: RD-9b and RD-9c take each off this list as they check it, and
- * the test fails for a listed route that is checked, so the list stays exact.
+ * do not yet: RD-9b took the signed-in work routes off, RD-9c takes each of
+ * these off as it checks it, and the test fails for a listed route that is
+ * checked, so the list stays exact.
  */
 const UNCHECKED: Readonly<Record<string, string>> = Object.fromEntries([
   ...[
-    "/api/assets/[assetId]/complete",
-    "/api/assets/[assetId]/retry",
     "/api/auth/login",
     "/api/auth/logout",
     "/api/auth/mfa",
@@ -28,16 +27,7 @@ const UNCHECKED: Readonly<Record<string, string>> = Object.fromEntries([
     "/api/mfa/setup",
     "/api/mfa/setup/confirm",
     "/api/organizations",
-    "/api/organizations/[organizationId]/mfa-requirement",
-    "/api/properties/[propertyId]/assets/[assetId]/analysis",
-    "/api/properties/[propertyId]/assets/[assetId]/analysis/approve",
-    "/api/properties/[propertyId]/assets/[assetId]/analysis/correction",
-    "/api/properties/[propertyId]/assets/[assetId]/analysis/refresh",
-    "/api/properties/[propertyId]/assets/[assetId]/analysis/reject",
-    "/api/properties/[propertyId]/assets/upload-url",
-    "/api/properties/[propertyId]/video-projects",
-    "/api/video-projects/[projectId]/storyboard",
-  ].map((path) => [`POST ${path}`, "RD-9b or RD-9c"]),
+  ].map((path) => [`POST ${path}`, "RD-9c"]),
   // Permanent: its signed upload token alone authorizes it; it reads no session cookie (ADR-0174 Decision 1).
   ["PUT /api/storage/upload", "token only"],
 ]);
