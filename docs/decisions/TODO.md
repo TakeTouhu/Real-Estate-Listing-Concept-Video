@@ -332,6 +332,12 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       (ADR-0169, ADR-0170); the values are settings with documented
       defaults. Uploads, analysis, generation, downloads, invitations and
       Unit purchase wait for RD-8.*
+      *Amended in RD-7e (ADR-0172): reset links and verification emails are
+      limited per address, and reset requests per client address. Still
+      open until RD-8.*
+      (*amended in RD-7e, ADR-0172, of the RD-6d amendment above: the reset
+      and verification limits are in place; the invitation limit waits for
+      RD-8, so the rule that no deployment sets `SMTP_HOST` stands*)
 - [ ] **Extend the same-origin check to every cookie-based mutation route.**
       `SecurityCompliance.md` asks for CSRF protection where cookie-based
       mutations are used. The session cookie is `SameSite=Lax` (ADR-0006),
@@ -2016,12 +2022,22 @@ into on 2026-11-17.
       5). Its helpers would need a second server or run. RD-11's
       production-mode test or part 2 is to decide.
 
+## Open in RD-7e — what limiting the emails leaves open
+
+- [ ] **Sign-up says "Email is already registered"** (ADR-0130), which
+      tells which addresses have accounts, and it is not limited; a
+      per-IP sign-up limit belongs to RD-8, the answer to the product
+      owner. A forgotten count after a sign-in or a reset is a weaker
+      signal of the same kind.
+
 ## Open in RD-7d — what limiting sign-in leaves open
 
 - [ ] **A stranger can keep a known customer signed out** (product
       owner's): five wrong passwords per cooldown hold the account; only
       the wait ends it until RD-7e, whose completed reset will clear it
       once (ADR-0172). A device-cookie exemption would fix it.
+      *Amended in RD-7e (ADR-0172): a completed reset now clears it;
+      five more wrong passwords hold it again.*
 - [ ] **A flood can hold every sign-in on the limiter's 3 connections**:
       the others wait up to Prisma's pool wait, then fail closed.
       Measure on the deployment; a shorter pool wait or more connections
@@ -2120,6 +2136,9 @@ into on 2026-11-17.
       address with an account, against one lookup for any other: a
       difference of up to seconds, which one request shows and a rate
       limit does not remove. Still open.*
+      *Amended in RD-7e (ADR-0172): a fourth request for one address within
+      the hour is refused before any lookup, the same for every address; one
+      request's delay still tells an address with an account. Still open.*
 - [ ] **Set the library's limits from the chosen service's numbers**
       (ADR-0166 Decision 5): 10 s to connect, 10 s for the greeting and
       for DNS, 30 s idle are provisional, part 2's.

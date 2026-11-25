@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { ACCOUNT_LINK_TOKEN_MAX_LENGTH } from "@app/domain";
 import { getSignIn, nextPageFor } from "@/lib/auth";
-import { VERIFY_EMAIL_NOTICES, verifyEmailNotice } from "@/lib/email-verification";
+import { VERIFY_EMAIL_NOTICES, verifyEmailNotice, verifyEmailNoticeText } from "@/lib/email-verification";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 // page's own forms post `Origin: null`.
 export const metadata: Metadata = { referrer: "strict-origin" };
 
-type Params = { token?: string | string[]; notice?: string | string[] };
+type Params = { token?: string | string[]; notice?: string | string[]; retry?: string | string[] };
 
 /**
  * Email verification (ADR-0129). Opened from an emailed link, it asks for one
@@ -42,7 +42,7 @@ export default async function VerifyEmailPage({ searchParams }: { searchParams: 
       <h1>Verify your email address</h1>
       {notice ? (
         <p className={notice === "sent" ? "status-ok" : "status-bad"} role={notice === "sent" ? "status" : "alert"}>
-          {VERIFY_EMAIL_NOTICES[notice]}
+          {verifyEmailNoticeText(notice, params.retry)}
         </p>
       ) : null}
       <p>

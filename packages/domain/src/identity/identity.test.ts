@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { AuthService } from "./auth-service";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { verifyPassword } from "@app/shared";
+import { AuthService, PLACEHOLDER_PASSWORD_HASH } from "./auth-service";
 import { OrganizationService } from "./organization-service";
 import { MembershipService } from "./membership-service";
 import { createTestDeps, markEmailVerified, membershipTestOptions, type TestDeps } from "../testing/in-memory";
@@ -63,6 +64,20 @@ describe("AuthService", () => {
     await expect(ctx.auth.login("nobody@example.com", PASSWORD)).rejects.toMatchObject({
       code: "UNAUTHENTICATED",
     });
+  });
+
+  it("checks a password against a placeholder hash when the address has no account with one (ADR-0172)", async () => {
+    const disabled = await ctx.auth.register({ email: "gone@example.com", name: "G", password: PASSWORD });
+    ctx.deps.repos.users.put({ ...ctx.deps.repos.users.peek(disabled.id)!, status: "DISABLED" });
+    const verify = vi.spyOn(ctx.deps.passwords, "verify");
+    for (const email of ["nobody@example.com", "gone@example.com"]) {
+      await expect(ctx.auth.login(email, PASSWORD)).rejects.toMatchObject({ code: "UNAUTHENTICATED" });
+    }
+    const placeholder = PLACEHOLDER_PASSWORD_HASH;
+    expect(verify.mock.calls.map(([, hash]) => hash)).toEqual([placeholder, "fake:password-123456"]);
+    // A real scrypt hash, so its check costs what an account's does; no password matches it here.
+    expect(placeholder).toMatch(/^scrypt\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{86}$/);
+    expect(await verifyPassword(PASSWORD, placeholder)).toBe(false);
   });
 
   it("resolves a valid session and rejects an expired one", async () => {

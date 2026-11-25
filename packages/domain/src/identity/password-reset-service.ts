@@ -109,8 +109,17 @@ export class PasswordResetService {
    * leaves the link unused.
    */
   async resetPassword(token: string, password: string): Promise<ResetPasswordOutcome> {
+    return (await this.resetPasswordReturningAddress(token, password)) === null ? "INVALID" : "RESET";
+  }
+
+  /**
+   * As `resetPassword`, answering the address the link was sent to when it
+   * reset a password, or `null`, so the caller can forget that address's
+   * failed sign-ins (ADR-0172 Decision 4).
+   */
+  async resetPasswordReturningAddress(token: string, password: string): Promise<string | null> {
     const usable = await this.usableLink(token);
-    if (!usable) return "INVALID";
+    if (!usable) return null;
     if (typeof password !== "string" || password.length < MIN_PASSWORD_LENGTH) {
       throw new AppError("VALIDATION_FAILED", "Password is too short");
     }
@@ -135,7 +144,7 @@ export class PasswordResetService {
     // STALE: since the check, the link was used (this reset opened twice at
     // once) or deleted by another reset, its hour ended, or the account
     // changed.
-    return outcome === "APPLIED" ? "RESET" : "INVALID";
+    return outcome === "APPLIED" ? link.email : null;
   }
 
   private async usableLink(token: string): Promise<{ link: AccountLink; user: User } | null> {

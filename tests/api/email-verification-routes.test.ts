@@ -18,7 +18,8 @@ import { readDevelopmentEmailOutbox } from "@app/storage";
  * Route tests for email verification (AT-3b, ADR-0129): sign-up mails a link
  * and waits on the verify page, opening the link verifies the address without
  * a sign-in, the link is sent again on request, and a sign-in that has not
- * verified its address reaches no other route. Only the cookie store, the
+ * verified its address reaches no other route. Its emails are limited per
+ * address (ADR-0172). Only the cookie store, the
  * environment and the identity wiring are stubbed: the session gate, the
  * domain services and the development outbox run for real.
  */
@@ -42,7 +43,7 @@ vi.mock(nextHeaders, () => ({
 }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
-// The sign-in limits run for real, on an in-memory store made afresh for each test (ADR-0171).
+// The limits run for real, on an in-memory store made afresh for each test (ADR-0171, ADR-0172).
 vi.mock("@/lib/rate-limit", async (original) => ({
   ...(await original<typeof import("@/lib/rate-limit")>()),
   getRateLimiter: () => limits.value,
@@ -89,8 +90,8 @@ const form = (fields: Record<string, string>) =>
   new Request("http://localhost/api/auth", { method: "POST", body: new URLSearchParams(fields) });
 const location = (response: Response) => {
   const url = new URL(response.headers.get("location")!);
-  // A redirect carries a notice or an error and nothing else: never a token, never a fragment.
-  expect([...url.searchParams.keys()].filter((key) => key !== "notice" && key !== "error")).toEqual([]);
+  // A redirect carries a notice, its wait or an error and nothing else: never a token, never a fragment.
+  expect([...url.searchParams.keys()].filter((key) => !["notice", "retry", "error"].includes(key))).toEqual([]);
   expect(url.hash).toBe("");
   return { path: url.pathname, notice: url.searchParams.get("notice"), error: url.searchParams.get("error") };
 };
@@ -242,5 +243,48 @@ describe("sending the link again", () => {
     await verify(form({ token: token! }));
     expect(location(await resend(form({}))).path).toBe("/");
     expect(await mailedTokens()).toHaveLength(1);
+  });
+});
+
+describe("the verification email limit (ADR-0172)", () => {
+  const retry = (response: Response) => new URL(response.headers.get("location")!).searchParams.get("retry");
+  const limitWith = (store: ConstructorParameters<typeof WebRateLimits>[0]) => {
+    const settings = { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) };
+    limits.value = new WebRateLimits(store, settings, { warn: () => undefined });
+  };
+  const down = { hit: () => Promise.reject(new Error("down")), giveBack: async () => {}, forget: async () => {} };
+
+  it("counts sign-up's email, and refuses the fourth within the hour with its wait, mailing nothing", async () => {
+    cookie.value = sessionCookie(await signUp());
+    for (let i = 0; i < 2; i += 1) expect(location(await resend(form({}))).notice).toBe("sent");
+    deps.clock.advanceSeconds(60);
+    const refused = await resend(form({}));
+    expect(location(refused)).toEqual({ path: "/verify-email", notice: "limited", error: null });
+    expect(retry(refused)).toBe("59");
+    expect(await mailedTokens()).toHaveLength(3);
+    deps.clock.advanceSeconds(3540);
+    // The window has ended, and so has the sign-in.
+    cookie.value = sessionCookie(await login(form({ email: "new@example.com", password: PASSWORD })));
+    expect(location(await resend(form({}))).notice).toBe("sent");
+  });
+
+  it("keeps the account and the sign-in, mailing nothing, when sign-up's email is refused", async () => {
+    const limiter = limits.value as InstanceType<typeof WebRateLimits>;
+    for (let i = 0; i < 3; i += 1) await limiter.verificationEmail("new@example.com", deps.clock.now());
+    const response = await signUp(" NEW@example.com");
+    expect(location(response)).toEqual({ path: "/verify-email", notice: "limited", error: null });
+    expect(retry(response)).toBe("60");
+    expect(sessionCookie(response)).toBeDefined();
+    expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
+  });
+
+  it("answers not-sent, mailing nothing, when the limiter cannot answer, and sign-up keeps the account", async () => {
+    limitWith(down);
+    const response = await signUp();
+    expect(location(response)).toEqual({ path: "/verify-email", notice: "not-sent", error: null });
+    cookie.value = sessionCookie(response);
+    expect(cookie.value).toBeDefined();
+    expect(location(await resend(form({})))).toEqual({ path: "/verify-email", notice: "not-sent", error: null });
+    expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
   });
 });

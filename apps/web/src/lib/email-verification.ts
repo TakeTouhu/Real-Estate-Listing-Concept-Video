@@ -3,6 +3,7 @@ import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
 import { getMailer, tokenLink } from "./mailer";
+import { getRateLimiter, refusalText, retryMinutes } from "./rate-limit";
 
 /** The page a verification link opens, and where an unverified sign-in waits (ADR-0129). */
 export const VERIFY_EMAIL_PATH = "/verify-email";
@@ -11,13 +12,14 @@ export const VERIFY_EMAIL_PATH = "/verify-email";
  * What the verify page says, by the code a route sends it back with
  * (`?notice=`). The page shows only these: never text the address carries.
  * `invalid` covers every link that verifies nothing, whatever the reason
- * (ADR-0128 Decision 4).
+ * (ADR-0128 Decision 4). `limited` answers a send a limit refused (ADR-0172).
  */
 export const VERIFY_EMAIL_NOTICES = {
   sent: "We sent a new link to your email address.",
   "not-sent": "The verification email could not be sent. Try again later.",
   invalid: "This link does not work. It may have expired or been used already.",
   verified: "Your email address is verified.",
+  limited: "Too many verification emails. Try again later.",
 } as const;
 
 export type VerifyEmailNotice = keyof typeof VERIFY_EMAIL_NOTICES;
@@ -29,10 +31,22 @@ export function verifyEmailNotice(param: string | readonly string[] | undefined)
     : null;
 }
 
-/** The verify page with `notice`, on the address the request came to: a redirect, never an emailed link. */
-export function verifyEmailPage(requestUrl: string, notice?: VerifyEmailNotice): URL {
+/** A notice's text; `limited` names the wait a whole number of minutes in `?retry=` gives. */
+export function verifyEmailNoticeText(notice: VerifyEmailNotice, retry?: string | readonly string[]): string {
+  const minutes = retryMinutes(retry);
+  return notice === "limited" && minutes !== null
+    ? refusalText("VERIFICATION_EMAIL", minutes)
+    : VERIFY_EMAIL_NOTICES[notice];
+}
+
+/**
+ * The verify page with `notice`, and the minutes a refusal waits, on the
+ * address the request came to: a redirect, never an emailed link.
+ */
+export function verifyEmailPage(requestUrl: string, notice?: VerifyEmailNotice, retry?: number): URL {
   const url = new URL(VERIFY_EMAIL_PATH, requestUrl);
   if (notice !== undefined) url.searchParams.set("notice", notice);
+  if (retry !== undefined) url.searchParams.set("retry", String(retry));
   return url;
 }
 
@@ -82,4 +96,29 @@ export async function sendVerificationLinkTo(
     log.error("A verification email could not be sent", { code, userId });
     return "NOT_SENT";
   }
+}
+
+/** A verification email a limit refused, with the whole minutes to wait. */
+export interface LimitedSend {
+  readonly waitMinutes: number;
+}
+
+/**
+ * Mail the user a verification link, counted first by the address it goes
+ * to, the account's (ADR-0172 Decision 3). A limiter that cannot answer
+ * sends nothing: `NOT_SENT`, logged by its error code alone.
+ */
+export async function sendLimitedVerificationLinkTo(
+  user: { readonly id: string; readonly email: string },
+  log: Pick<Logger, "error"> = getEmailVerificationLogger(),
+): Promise<Awaited<ReturnType<typeof sendVerificationLinkTo>> | LimitedSend> {
+  try {
+    const attempt = await getRateLimiter().verificationEmail(user.email, getIdentityServices().deps.clock.now());
+    if (!attempt.allowed) return { waitMinutes: attempt.minutes };
+  } catch (error) {
+    const code = error instanceof AppError ? error.code : "UNEXPECTED";
+    log.error("A verification email could not be counted", { code });
+    return "NOT_SENT";
+  }
+  return sendVerificationLinkTo(user.id, log);
 }

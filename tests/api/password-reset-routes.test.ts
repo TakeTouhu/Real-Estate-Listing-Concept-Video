@@ -11,7 +11,8 @@ import { readDevelopmentEmailOutbox } from "@app/storage";
  * Route tests for password reset (AT-4c, ADR-0133): asking for a link answers
  * the same for every address and every failure, and a link replaces the
  * password once, ends every session and leaves MFA and email verification to
- * the next sign-in. Only the cookie store, the environment and the identity
+ * the next sign-in. Requests are limited, and a reset forgets the address's
+ * failed sign-ins (ADR-0172). Only the cookie store, the environment and the identity
  * wiring are stubbed: the session gate, the domain services and the
  * development outbox run for real.
  */
@@ -36,7 +37,7 @@ vi.mock(nextHeaders, () => ({
 }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
-// The sign-in limits run for real, on an in-memory store made afresh for each test (ADR-0171).
+// The limits run for real, on an in-memory store made afresh for each test (ADR-0171, ADR-0172).
 vi.mock("@/lib/rate-limit", async (original) => ({
   ...(await original<typeof import("@/lib/rate-limit")>()),
   getRateLimiter: () => limits.value,
@@ -83,8 +84,8 @@ const form = (fields: Record<string, string>) =>
 const location = (response: Response) => {
   expect(response.status).toBe(303);
   const url = new URL(response.headers.get("location")!);
-  // A redirect carries a notice or an error and nothing else: never a token, never an address.
-  expect([...url.searchParams.keys()].filter((key) => key !== "notice" && key !== "error")).toEqual([]);
+  // A redirect carries a notice, its wait or an error and nothing else: never a token, never an address.
+  expect([...url.searchParams.keys()].filter((key) => !["notice", "retry", "error"].includes(key))).toEqual([]);
   expect(url.hash).toBe("");
   return { path: url.pathname, notice: url.searchParams.get("notice"), error: url.searchParams.get("error") };
 };
@@ -224,5 +225,72 @@ describe("the next sign-in", () => {
     expect(location(await reset(form({ token, password: NEW_PASSWORD })))).toEqual(resetPage("reset"));
     expect((await signIn(NEW_PASSWORD, "new@example.com")).path).toBe("/verify-email");
     expect(deps.repos.users.peek(unverified.id)?.emailVerifiedAt).toBeNull();
+  });
+});
+
+describe("the reset limits (ADR-0172)", () => {
+  const SIGN_IN_REFUSED = "Too many sign-in attempts. Try again in 15 minutes.";
+  const from = (ip: string, email: string) =>
+    new Request("http://localhost/api/auth", {
+      method: "POST",
+      headers: { "x-forwarded-for": ip },
+      body: new URLSearchParams({ email }),
+    });
+  const limited = (response: Response) => {
+    expect(location(response)).toEqual(resetPage("limited"));
+    return new URL(response.headers.get("location")!).searchParams.get("retry");
+  };
+  const limitWith = (store: ConstructorParameters<typeof WebRateLimits>[0], trusted?: string) => {
+    const settings = { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32), FORWARDED_FOR_TRUSTED_ENTRIES: trusted };
+    limits.value = new WebRateLimits(store, settings, { warn: () => undefined });
+  };
+  const down = { hit: () => Promise.reject(new Error("down")), giveBack: async () => {}, forget: async () => {} };
+
+  it("refuses the fourth request for an address within the hour, account or not, mailing nothing", async () => {
+    for (const email of ["user@example.com", "nobody@example.com"]) {
+      for (let i = 0; i < 3; i += 1) expect(location(await ask(form({ email })))).toEqual(resetPage("sent"));
+      expect(limited(await ask(form({ email: ` ${email.toUpperCase()}` })))).toBe("60");
+    }
+    expect(await mailedTokens()).toHaveLength(3);
+    deps.clock.advanceSeconds(3599);
+    expect(limited(await ask(form({ email: "user@example.com" })))).toBe("1");
+    deps.clock.advanceSeconds(1);
+    expect(location(await ask(form({ email: "user@example.com" })))).toEqual(resetPage("sent"));
+    expect(await mailedTokens()).toHaveLength(4);
+  });
+
+  it("refuses the 21st request from one client address within the hour, whatever the address", async () => {
+    limitWith(new InMemoryRateLimitStore(), "1");
+    for (let i = 0; i < 20; i += 1) {
+      expect(location(await ask(from("203.0.113.7", `person${i}@example.com`)))).toEqual(resetPage("sent"));
+    }
+    expect(limited(await ask(from("203.0.113.7", "user@example.com")))).toBe("60");
+    expect(await mailedTokens()).toEqual([]);
+    expect(location(await ask(from("198.51.100.1", "user@example.com")))).toEqual(resetPage("sent"));
+    expect(await mailedTokens()).toHaveLength(1);
+  });
+
+  it("answers sent, mailing nothing, when the limiter cannot answer", async () => {
+    limitWith(down);
+    expect(location(await ask(form({ email: "user@example.com" })))).toEqual(resetPage("sent"));
+    expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
+  });
+
+  it("forgets the address's failed sign-ins when the password is reset", async () => {
+    for (let i = 0; i < 5; i += 1) await signIn("wrong-password");
+    expect(await signIn(PASSWORD)).toMatchObject({ path: "/login", error: SIGN_IN_REFUSED });
+    const token = await askedToken();
+    expect(location(await reset(form({ token, password: NEW_PASSWORD })))).toEqual(resetPage("reset"));
+    expect(await signIn(NEW_PASSWORD)).toMatchObject({ path: "/", error: null });
+  });
+
+  it("still says the password was changed when the failed sign-ins cannot be forgotten", async () => {
+    const token = await askedToken();
+    const store = Object.assign(Object.create(new InMemoryRateLimitStore()) as InMemoryRateLimitStore, {
+      forget: () => Promise.reject(new Error("down")),
+    });
+    limitWith(store);
+    expect(location(await reset(form({ token, password: NEW_PASSWORD })))).toEqual(resetPage("reset"));
+    expect(location(await reset(form({ token, password: "another-password-1" })))).toEqual(resetPage("invalid"));
   });
 });

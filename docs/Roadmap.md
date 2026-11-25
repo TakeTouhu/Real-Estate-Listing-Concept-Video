@@ -1292,6 +1292,20 @@ The limiter has its own small database client, whose statements the
 database ends after a second. Turning MFA off and confirming its set-up
 are not limited.
 
+**RD-7e — reset and verification emails are limited** (ADR-0172, no
+migration): a reset request is counted per client address and per typed
+address, whether or not an account uses it, before any lookup, and a
+refused one says "Too many reset requests. Try again in N minutes." the
+same for every address; any other request still answers that a link was
+sent if an account uses the address. Verification emails, sign-up's
+included, are counted per account address; a refused one sends nothing
+and the verify page says when to ask again, sign-up keeping the account.
+A limiter that cannot answer sends nothing. A completed reset clears the
+address's held sign-in. Sign-in checks a password against a placeholder
+hash for an address without an account, as its comment said; sign-up
+still tells which addresses have accounts. RD-7 is complete; the other
+limits wait for RD-8.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

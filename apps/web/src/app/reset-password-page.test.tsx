@@ -55,7 +55,7 @@ beforeEach(async () => {
 
 afterEach(cleanup);
 
-type Params = { token?: string | string[]; notice?: string | string[]; error?: string };
+type Params = { token?: string | string[]; notice?: string | string[]; retry?: string | string[]; error?: string };
 const search = (params: Params = {}) => ({ searchParams: Promise.resolve(params) });
 
 async function mailedToken(): Promise<string> {
@@ -105,6 +105,21 @@ describe("asking for a link", () => {
     render(await ResetPasswordPage(search({ notice: "Your account is closed", error: "Your account is closed" })));
     expect(screen.queryByText("Your account is closed")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says how long to wait when a request was refused, naming only a whole number of minutes", async () => {
+    const shownFor = async (retry?: string | string[]) => {
+      render(await ResetPasswordPage(search({ notice: "limited", retry })));
+      const text = screen.getByRole("alert").textContent;
+      askingForm();
+      cleanup();
+      return text;
+    };
+    expect(await shownFor("60")).toBe("Too many reset requests. Try again in 60 minutes.");
+    expect(await shownFor("1")).toBe("Too many reset requests. Try again in 1 minute.");
+    for (const retry of [undefined, "0", "1.5", "-1", "100000", "soon", ["5", "5"]]) {
+      expect(await shownFor(retry)).toBe("Too many reset requests. Try again later.");
+    }
   });
 
   it("says the password was changed, and leads to sign in", async () => {

@@ -150,6 +150,7 @@ describe("resetting the password", () => {
     await expect(auth.login("owner@example.test", NEW)).resolves.toMatchObject({ user: { id: userId } });
     expect(await reset.checkResetLink(token)).toBe("INVALID");
     expect(await reset.resetPassword(token, "yet-another-password")).toBe("INVALID");
+    expect(await reset.resetPasswordReturningAddress(token, "yet-another-password")).toBeNull();
     const link = await deps.repos.accountLinks.findByTokenHash(deps.tokens.hash(token));
     expect(deps.repos.auditLogs.all().filter((e) => e.action === "user.password_reset")).toEqual([
       expect.objectContaining({
@@ -176,6 +177,12 @@ describe("resetting the password", () => {
     expect(await deps.repos.accountLinks.findByTokenHash(deps.tokens.hash(first))).toBeNull();
     expect(await reset.resetPassword(first, "yet-another-password")).toBe("INVALID");
     expect(await verification.verifyEmail(verifying)).toBe("VERIFIED");
+  });
+
+  it("names the address its link was sent to when it resets a password (ADR-0172 Decision 4)", async () => {
+    const { sender, reset } = await setup();
+    await reset.requestReset(" OWNER@example.test");
+    expect(await reset.resetPasswordReturningAddress(lastToken(sender), NEW)).toBe("owner@example.test");
   });
 
   it("works until the hour ends, and not at its end", async () => {

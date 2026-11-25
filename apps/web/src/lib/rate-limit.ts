@@ -37,12 +37,15 @@ export const RATE_LIMIT_DATABASE_CONNECTIONS = 3;
 export const RATE_LIMIT_STATEMENT_MILLISECONDS = 1000;
 
 /** What a limit guards, as its refusal is logged. */
-export type RateLimitedAction = "SIGN_IN" | "MFA_CODE";
+export type RateLimitedAction = "SIGN_IN" | "MFA_CODE" | "PASSWORD_RESET_EMAIL" | "VERIFICATION_EMAIL";
 
 /** An attempt the limits let through, with what its success settles; or the text that refuses it. */
 export type LimitedAttempt =
   | { readonly allowed: true; readonly succeeded: () => Promise<void> }
   | { readonly allowed: false; readonly message: string };
+
+/** An email the limits let through, or the whole minutes until another may be asked for. */
+export type LimitedEmail = { readonly allowed: true } | { readonly allowed: false; readonly minutes: number };
 
 /** The settings the limits are read from. */
 export type RateLimitSettings = Pick<ServerEnv, RateLimitSetting | "SESSION_SECRET" | "FORWARDED_FOR_TRUSTED_ENTRIES">;
@@ -50,6 +53,8 @@ export type RateLimitSettings = Pick<ServerEnv, RateLimitSetting | "SESSION_SECR
 const REFUSALS: Readonly<Record<RateLimitedAction, string>> = {
   SIGN_IN: "Too many sign-in attempts.",
   MFA_CODE: "Too many wrong codes.",
+  PASSWORD_RESET_EMAIL: "Too many reset requests.",
+  VERIFICATION_EMAIL: "Too many verification emails.",
 };
 
 /** Whole minutes until `retryAt`, rounded up, at least one. */
@@ -57,10 +62,23 @@ export function refusalMinutes(retryAt: Date, now: Date): number {
   return Math.max(1, Math.ceil((retryAt.getTime() - now.getTime()) / 60_000));
 }
 
+/** The text of a refusal that waits `minutes`, as a page shows it from `?retry=` (ADR-0172). */
+export function refusalText(action: RateLimitedAction, minutes: number): string {
+  return `${REFUSALS[action]} Try again in ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`;
+}
+
 /** The text a refused attempt is answered with. It names no address, IP, subject or user. */
 export function refusalMessage(action: RateLimitedAction, retryAt: Date, now: Date): string {
-  const minutes = refusalMinutes(retryAt, now);
-  return `${REFUSALS[action]} Try again in ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`;
+  return refusalText(action, refusalMinutes(retryAt, now));
+}
+
+/**
+ * The whole minutes a page's `?retry=` names (ADR-0172 Decision 2), or `null`
+ * for anything but 1 to 99,999, which covers the longest window a setting
+ * takes.
+ */
+export function retryMinutes(param: string | readonly string[] | undefined): number | null {
+  return typeof param === "string" && /^[1-9][0-9]{0,4}$/.test(param) ? Number(param) : null;
 }
 
 let logger: Logger | undefined;
@@ -151,6 +169,35 @@ export class WebRateLimits {
     const decision = await this.limiter.hit([user], now);
     if (!decision.allowed) return { allowed: false, message: this.refuse("MFA_CODE", decision, now) };
     return { allowed: true, succeeded: () => this.limiter.forget(user) };
+  }
+
+  /**
+   * One reset request, counted by its client address, then by the typed
+   * address, whether or not an account uses it, before any lookup (ADR-0172
+   * Decision 1). No success gives a hit back; a refusal by the typed address
+   * gives back the client address's, as every refusal does.
+   */
+  passwordResetEmail(headers: Pick<Headers, "get">, typedAddress: string, now: Date): Promise<LimitedEmail> {
+    const client = this.clientKey("password-reset-email.client", headers);
+    const address = this.addressKey("password-reset-email.address", typedAddress);
+    return this.email("PASSWORD_RESET_EMAIL", client === undefined ? [address] : [client, address], now);
+  }
+
+  /** One verification email, counted by the account's address, sign-up's own included (ADR-0172 Decision 3). */
+  verificationEmail(storedAddress: string, now: Date): Promise<LimitedEmail> {
+    return this.email("VERIFICATION_EMAIL", [this.addressKey("verification-email.address", storedAddress)], now);
+  }
+
+  /** Forgets an address's failed sign-ins, as a completed reset does (ADR-0172 Decision 4). */
+  forgetSignInAddress(address: string): Promise<void> {
+    return this.limiter.forget(this.addressKey("sign-in.address", address));
+  }
+
+  private async email(action: RateLimitedAction, keys: RateLimitKey[], now: Date): Promise<LimitedEmail> {
+    const decision = await this.limiter.hit(keys, now);
+    if (decision.allowed) return { allowed: true };
+    this.refuse(action, decision, now);
+    return { allowed: false, minutes: refusalMinutes(decision.retryAt, now) };
   }
 }
 

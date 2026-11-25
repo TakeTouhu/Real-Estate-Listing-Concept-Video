@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthService } from "@app/domain";
-import { createTestDeps, type TestDeps } from "@app/domain/testing";
+import { InMemoryRateLimitStore, createTestDeps, type TestDeps } from "@app/domain/testing";
+import { RATE_LIMIT_DEFAULTS } from "@app/shared";
 import { readDevelopmentEmailOutbox } from "@app/storage";
 
 /**
@@ -16,10 +17,20 @@ const env = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const identity = vi.hoisted(() => ({ value: null as unknown }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
+// The limits run on an in-memory store whose hit fails (ADR-0172 Decision 6).
+vi.mock("@/lib/rate-limit", async (original) => {
+  const limits = await original<typeof import("@/lib/rate-limit")>();
+  const settings = { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) };
+  const store = Object.assign(Object.create(new InMemoryRateLimitStore()) as InMemoryRateLimitStore, {
+    hit: () => Promise.reject(new Error("new@example.com is down")),
+  });
+  return { ...limits, getRateLimiter: () => new limits.WebRateLimits(store, settings) };
+});
 
 const {
   VERIFY_EMAIL_NOTICES,
   getEmailVerificationService,
+  sendLimitedVerificationLinkTo,
   sendVerificationLinkTo,
   verificationUrl,
   verifyEmailNotice,
@@ -117,6 +128,17 @@ describe("sending a link", () => {
       expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
     });
   }
+
+  it("sends nothing when the limits cannot answer, logging the code and never the address or user", async () => {
+    const log = silentLog();
+    expect(await sendLimitedVerificationLinkTo({ id: userId, email: "new@example.com" }, log)).toBe("NOT_SENT");
+    expect(log.error).toHaveBeenCalledExactlyOnceWith("A verification email could not be counted", {
+      code: "UNEXPECTED",
+    });
+    const lines = JSON.stringify(log.error.mock.calls);
+    for (const secret of ["new@example.com", userId]) expect(lines).not.toContain(secret);
+    expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
+  });
 
   it("logs a failure that is not the product's own error as UNEXPECTED", async () => {
     vi.spyOn(deps.repos.users, "findById").mockRejectedValueOnce(new Error("connection lost to new@example.com"));
