@@ -377,6 +377,8 @@ describe("createSmtpEmailSender", () => {
       const error = thrown as AppError;
       expect(`${error.code}: ${error.message}`).toBe("PROVIDER_ERROR: The email was not accepted for delivery (EAUTH)");
       expect(error.cause).toBeUndefined();
+      // The code alone, as data, for the web app's log (ADR-0168).
+      expect(error.details).toEqual({ smtpCode: "EAUTH" });
       const own = Object.getOwnPropertyNames(error).sort();
       expect(own).toEqual(["code", "details", "httpStatus", "message", "name", "stack"]);
       const auth = server.heard.find(({ line }) => line.startsWith("AUTH"))?.line.split(" ").pop() ?? "";
@@ -522,17 +524,19 @@ describe("who builds it", () => {
     });
   }
 
-  it("is built by nothing in the apps yet, and the mail library is loaded by the adapter alone (ADR-0166)", () => {
+  it("is built by the web app's adapters alone, and the mail library loaded by the adapter alone (ADR-0168)", () => {
     const files = [...sources(join(REPO_ROOT, "apps")), ...sources(join(REPO_ROOT, "packages"))];
     expect(files.map(({ name }) => name)).toContain("apps/web/src/lib/adapters.ts");
     const naming = files.filter(({ text }) => /createSmtpEmailSender|@app\/storage\/smtp|smtp-email-sender/.test(text));
     expect(naming.map(({ name }) => name).sort()).toEqual([
+      "apps/web/src/lib/adapters.ts",
       "packages/storage/src/smtp/index.ts",
       "packages/storage/src/smtp/smtp-email-sender.ts",
     ]);
+    expect(naming.some(({ name }) => name.startsWith("apps/worker/"))).toBe(false);
     const loading = files.filter(({ text }) => /["']nodemailer["']/.test(text));
     expect(loading.map(({ name }) => name)).toEqual(["packages/storage/src/smtp/smtp-email-sender.ts"]);
-    // Not through the barrel, which the worker and the upload routes load.
+    // Not through the barrel, which the worker loads.
     const barrel = files.find(({ name }) => name === "packages/storage/src/index.ts");
     expect(barrel?.text).toBeDefined();
     expect(barrel?.text).not.toMatch(/\.\/smtp/);

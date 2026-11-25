@@ -301,7 +301,11 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       blunts telling addresses with accounts from the rest by timing*)
       (*since AT-4c, ADR-0133, that ask is a route anyone can post to:
       `POST /api/auth/reset-password/request`; its limit must be in place
-      before production gets an email service*) (*since AT-6b, ADR-0136,
+      before production gets an email service*) (*amended in RD-6d,
+      ADR-0168: a production start may now choose SMTP; part 1 deploys
+      nothing, and no deployment is to set `SMTP_HOST` before RD-7 and RD-8
+      put the reset and invitation limits in place, which nothing in code
+      enforces*) (*since AT-6b, ADR-0136,
       inviting sends mail to any address an `OWNER` or `ADMIN` enters, from
       `POST /api/organizations/{id}/invitations`; each pending invitation
       takes a seat, but cancelling and inviting again sends again, so its
@@ -1695,6 +1699,8 @@ blocks activation. The production email service is tracked below, under
       *Amended in RD-3d (ADR-0159): such a server given a bucket chooses
       Google's store and asks it, and readiness's `start` check still reads
       the scanner and email as refused until RD-5 and RD-6.*
+      *Amended in RD-6d (ADR-0168): readiness's `start` check no longer
+      reads email as refused for an environment with `SMTP_HOST`.*
 
 ## Found after RD-2d — two CI jobs that failed now and then
 
@@ -1964,6 +1970,9 @@ into on 2026-11-17.
       production-mode test is to run the image RD-10 builds the same way,
       with Google's two names pointed at stand-ins and a test certificate,
       and its start checked.
+      *Amended in RD-6d (ADR-0168): a production start can now pass, so
+      RD-11 can run with the start hook; it needs all seven SMTP settings,
+      and a mail stand-in whose certificate the image trusts.*
 - [ ] **Give the worker the same construction rules.** RD-4 gives the
       worker Cloud Storage. It is to build Google's store only where both
       `NODE_ENV` values say production, and refuse the emulator where
@@ -2000,6 +2009,24 @@ into on 2026-11-17.
       5). Its helpers would need a second server or run. RD-11's
       production-mode test or part 2 is to decide.
 
+## Open in RD-6d — what SMTP in the web app leaves open
+
+- [ ] **Decide who reads bounces and complaints** (ADR-0168): the
+      envelope sender is `EMAIL_FROM`; which mailbox reads bounces, and
+      whether a bounced address is marked, needs the chosen service.
+- [ ] **Decide whether sends need a pool or a cap** (ADR-0168): one
+      connection per email and no cap on how many at once, so a burst of
+      sign-ups may meet `421`; part 2, if volume needs it.
+- [ ] **Decide whether readiness asks the SMTP server** (ADR-0168): it
+      would need a deadline; decided with the deployment's layout in part
+      2, as for ClamAV.
+- [ ] **Decide whether a relay that trusts the source address may be
+      used** (ADR-0168): the sender always logs in; allowing a relay
+      without a login is a later decision.
+- [ ] **Decide whether the worker sends email** (ADR-0168): it sends
+      none; if part 2 gives it some, part 2 is to decide whether the same
+      settings and rules apply.
+
 ## Open in RD-6c — what the SMTP settings leave open
 
 - [ ] **Decide whether to refuse the settings that widen what Node.js
@@ -2019,11 +2046,19 @@ into on 2026-11-17.
       sign-up, a reset or an invitation for minutes, and one that trickles
       bytes holds it without bound. A deadline in the repository's code
       is put to the product owner first.
+      *Amended in RD-6d (ADR-0168): put to the product owner on
+      2026-11-25, who chose to decide it in part 2; there is none in our
+      code, and a production start may now choose SMTP.*
 - [ ] **Decide what a password reset answers while its email is sent**
       (ADR-0166 Decision 5): the product owner's. The send now costs a
       round trip to the mail server, so the delay of the answer can tell
       an address that has an account; RD-7's limits narrow that but do
       not close it.
+      *Amended in RD-6d (ADR-0168): a production start may now send over
+      SMTP, and the reset answer waits for a whole SMTP session for an
+      address with an account, against one lookup for any other: a
+      difference of up to seconds, which one request shows and a rate
+      limit does not remove. Still open.*
 - [ ] **Set the library's limits from the chosen service's numbers**
       (ADR-0166 Decision 5): 10 s to connect, 10 s for the greeting and
       for DNS, 30 s idle are provisional, part 2's.
@@ -2981,6 +3016,8 @@ them is **built**. Each item below records the settled decision and what remains
       Decision 6); the browser tests open the link from the outbox.
       Production still cannot send it: see "Choose the production email
       service".*
+      *Amended in RD-6d (ADR-0168): production can send it over SMTP once a
+      service is chosen.*
 - [ ] **Take back an account someone else made with your address.** Anyone
       can sign up with an address that is not theirs. Opening the link needs
       no sign-in (ADR-0129 Decision 3), so if the address's owner presses
@@ -3306,6 +3343,11 @@ below.
       and TLS (port 465, or 587 with STARTTLS); the service, its domain,
       its sender authentication and where its credential is kept are
       still open.*
+      *Amended in RD-6d (ADR-0168): the web app sends through the SMTP
+      sender when `SMTP_HOST` is set; `EMAIL_FROM` must be on the domain
+      the service's DKIM and DMARC cover, and `SMTP_EHLO_NAME` a name of
+      that deployment's. The service, its domain and where its credential
+      is kept are still open.*
 
 - [ ] **Decide whether a failed replacement gives back the scene regeneration
       right that started it** — does not block GS-1, whose rollback changes no

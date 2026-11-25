@@ -46,7 +46,7 @@ export function verificationUrl(baseUrl: string, token: string): string {
 
 /**
  * Email verification in the web app (ADR-0129), mailing through `getMailer`:
- * with no outbox or no `APP_BASE_URL`, sending a link fails with
+ * with no email sender or no `APP_BASE_URL`, sending a link fails with
  * `CONFIGURATION_ERROR` before anything is written. Opening a link needs
  * neither.
  */

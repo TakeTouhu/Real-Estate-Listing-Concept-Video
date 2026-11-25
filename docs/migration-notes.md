@@ -3004,3 +3004,28 @@ browser test refuses every one.
 
 **Rolling back.** To RD-6b's build: safe. The settings are no longer
 checked, and nothing stores anything new.
+
+## RD-6d — SMTP in the web app
+
+**No migration** (ADR-0168). Migration 34 stays the last.
+
+**What changes at deploy.** With `SMTP_HOST` and its six companions set,
+the web app sends every email through that server, and a production
+start can pass for the first time. `SMTP_USER` and `SMTP_PASSWORD` come
+from the secret manager; the web app alone needs outbound 465 or 587;
+`SMTP_HOST` must have a certificate Node.js's bundled authorities trust,
+since no setting of ours adds one; `EMAIL_FROM` must be on the domain the
+service signs for. A passing start does not show that an email can be
+delivered: nothing is tried until the first send. No deployment is to
+set `SMTP_HOST` before RD-7 and RD-8 limit resets and invitations
+(`TODO.md`); nothing in code enforces it.
+
+**For the first deployment that uses it.** An operator reads `An email
+was not accepted for delivery` and its `code` (component `email`), beside
+the flow's own `PROVIDER_ERROR` line.
+
+**On a development machine.** Nothing changes unless `SMTP_HOST` is set.
+The browser test refuses every SMTP setting.
+
+**Rolling back.** To RD-6c's build: safe. The settings are checked but no
+longer used, and a production start is refused for email again.

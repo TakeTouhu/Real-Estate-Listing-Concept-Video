@@ -22,8 +22,11 @@ export interface WebAdapterChoice {
    * scanner, which knows only the EICAR test file (ADR-0008).
    */
   readonly malwareScanner: "clamav" | "passthrough";
-  /** The development outbox (ADR-0126), or none: then no email is sent (ADR-0129). */
-  readonly email: "outbox" | "none";
+  /**
+   * The SMTP server `SMTP_HOST` names (ADR-0166, ADR-0168), the development
+   * outbox (ADR-0126), or none: then no email is sent (ADR-0129).
+   */
+  readonly email: "smtp" | "outbox" | "none";
   /** The offline analysis (ADR-0009). */
   readonly imageAnalysis: "deterministic";
   /** The offline check of a prompt against the preservation rules (ADR-0014). */
@@ -38,12 +41,18 @@ function storageOf(env: ServerEnv): WebAdapterChoice["storage"] {
   return env.SHARED_STORAGE_DIR !== undefined ? "shared-folder" : "memory";
 }
 
+/** The schema refuses both together; the SMTP server comes first, as the bucket does before the shared folder. */
+function emailOf(env: ServerEnv): WebAdapterChoice["email"] {
+  if (env.SMTP_HOST !== undefined) return "smtp";
+  return env.EMAIL_OUTBOX_DIR !== undefined ? "outbox" : "none";
+}
+
 /** Which adapter serves each port, from the environment alone. Constructs nothing. */
 export function chooseWebAdapters(env: ServerEnv): WebAdapterChoice {
   return {
     storage: storageOf(env),
     malwareScanner: env.CLAMAV_HOST !== undefined ? "clamav" : "passthrough",
-    email: env.EMAIL_OUTBOX_DIR !== undefined ? "outbox" : "none",
+    email: emailOf(env),
     imageAnalysis: env.ANALYSIS_PROVIDER,
     promptModeration: "offline",
   };

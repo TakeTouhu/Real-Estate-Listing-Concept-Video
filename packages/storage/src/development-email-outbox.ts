@@ -62,7 +62,7 @@ export function createDevelopmentEmailOutbox(options: DevelopmentEmailOutboxOpti
     assertNotProduction(
       "DevelopmentEmailOutbox",
       "it writes every email to a folder on this machine and delivers none",
-      "configure a production email service",
+      "set SMTP_HOST and the other SMTP settings, for an SMTP server",
       { nodeEnv },
     );
   }

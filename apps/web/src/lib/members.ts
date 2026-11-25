@@ -52,9 +52,10 @@ class InvitationNotMailed extends Error {
 /**
  * Inviting and cancelling in the web app (ADR-0135, ADR-0136): the seats come
  * from the organization's plan, and the invitation is mailed through
- * `getMailer`, its link on `APP_BASE_URL`. With no outbox or no base address,
- * inviting fails with `CONFIGURATION_ERROR` before anything is written; a send
- * that fails once the invitation is kept fails as {@link InvitationNotMailed}.
+ * `getMailer`, its link on `APP_BASE_URL`. With no email sender or no base
+ * address, inviting fails with `CONFIGURATION_ERROR` before anything is
+ * written; a send that fails once the invitation is kept fails as
+ * {@link InvitationNotMailed}.
  */
 export function getMembershipService(): MembershipService {
   const mailer = getMailer();
