@@ -245,6 +245,15 @@ as blocks × price. No field names are chosen here.
 
 `id`, `organization_id`, `user_id`, `consent_type`, `version`, `accepted_at`, `evidence_json`
 
+### RateLimitCounter
+
+*Implemented by RD-7b (migration 35, ADR-0169) as `rate_limit_counters`:
+one row per abuse limit and subject, keyed by both, holding the current
+window's start and count, the cooldown's end and level, and when the row
+stops deciding anything. The subject is a 64-character HMAC, never an
+address or IP, and the row belongs to no organization. Later hits delete
+expired rows two at a time; nothing is scheduled.*
+
 ## Lifecycle
 
 Assets and outputs use explicit lifecycle states and retention dates. Scheduled jobs physically delete expired customer data and corresponding storage objects after the recovery window. Audit and billing records follow separate legal retention rules.

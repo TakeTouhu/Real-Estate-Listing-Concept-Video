@@ -1256,6 +1256,13 @@ each other. Only a success gives a hit back. The rule is a set of cases
 every store must pass; an in-memory store passes them now. Nothing is
 limited yet: RD-7b to RD-7e add the table, the settings and the routes.
 
+**RD-7b — the abuse-limit counters in PostgreSQL** (migration 35): the
+`rate_limit_counters` table and the store that decides each hit in one
+statement, from the row as it was, and deletes up to two expired rows of
+other keys. It passes the same cases as the in-memory store, loses no
+count when 200 hits arrive at once, and stores times as UTC whatever the
+session's zone. Nothing uses it yet: RD-7d builds it into sign-in.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

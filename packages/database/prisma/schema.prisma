@@ -1900,3 +1900,30 @@ model UnitPurchaseCancellation {
 
   @@map("unit_purchase_cancellations")
 }
+
+/// Abuse-limit counters (RD-7b, ADR-0169): one row per policy and subject.
+/// `subject` is an HMAC of what is limited (an address, an IP), never the
+/// value itself. Each hit is one INSERT ... ON CONFLICT statement on the
+/// request path, a give-back one UPDATE and a forget one DELETE; a row is
+/// overwritten when its window has passed, and rows past `expiresAt` are
+/// deleted two at a time by later hits. Nothing schedules a clean-up. A
+/// CHECK in migration 35 holds its shape.
+model RateLimitCounter {
+  /// Which limit, such as `sign-in.account`.
+  policy          String
+  /// HMAC-SHA-256 of the limited value, as 64 lowercase hex characters.
+  subject         String
+  windowStartedAt DateTime
+  /// Hits counted in the current window; the limit plus one after a refusal without a cooldown.
+  count           Int
+  /// Refused until this instant; kept after it passes, to grow the next cooldown.
+  lockedUntil     DateTime?
+  /// Cooldowns in a row; 0 exactly when `lockedUntil` is null.
+  lockLevel       Int       @default(0)
+  /// After this instant the row decides nothing and may be deleted.
+  expiresAt       DateTime
+
+  @@id([policy, subject])
+  @@index([expiresAt])
+  @@map("rate_limit_counters")
+}

@@ -423,8 +423,9 @@ describe("durable shape", () => {
     // MFA-1's migration 25, MFA-4's migration 26, UP-2's migration 27, UP-5's
     // migration 28, DS-3's migration 29, DS-4's migration 30, DS-5b-2a's
     // migration 31, GS-4b's migration 32, AT-3a's migration 33 and AT-6a's
-    // migration 34 follow Phase 5C's, so it is now twentieth from last.
-    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 20);
+    // migration 34 and RD-7b's migration 35 follow Phase 5C's, so it is now
+    // twenty-first from last.
+    expect(dirs.indexOf(MIGRATION_DIR)).toBe(dirs.length - 21);
   });
 
   it("creates one table and rewrites no existing row", () => {
