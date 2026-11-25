@@ -1,5 +1,6 @@
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SMTP_SETTINGS } from "@app/shared";
 
 /**
  * Where the browser test runs, and with what (GS-13a, ADR-0121).
@@ -68,7 +69,7 @@ export function e2eDatabaseUrl(source: NodeJS.ProcessEnv = process.env): string 
  * The environment of the web app and of every command the test runs: one
  * database, one shared folder and one signing secret, so a photo the web app
  * stored is the one a command reads, and one outbox. Refused under
- * `NODE_ENV=production`, and beside a Cloud Storage or ClamAV setting.
+ * `NODE_ENV=production`, and beside a Cloud Storage, ClamAV or SMTP setting.
  */
 export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   if (source.NODE_ENV === "production") {
@@ -83,6 +84,10 @@ export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<
   // It runs no daemon: a setting from the shell would have its uploads scanned by one it does not start (ADR-0164).
   if (source.CLAMAV_HOST !== undefined || source.CLAMAV_PORT !== undefined) {
     throw new Error("The browser test scans with the test scanner: unset CLAMAV_HOST and CLAMAV_PORT");
+  }
+  // It reads its mail from the outbox: a setting from the shell would name a server it does not run (ADR-0167).
+  if (SMTP_SETTINGS.some((name) => source[name] !== undefined)) {
+    throw new Error(`The browser test reads its mail from the outbox: unset ${SMTP_SETTINGS.join(", ")}`);
   }
   return {
     DATABASE_URL: e2eDatabaseUrl(source),

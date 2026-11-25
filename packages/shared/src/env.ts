@@ -1,5 +1,7 @@
+import { isIP } from "node:net";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
+import { isPlainEmailAddress } from "./email-address";
 
 /**
  * Server-side environment schema. This module must only ever be imported by
@@ -67,8 +69,13 @@ export const CLAMAV_DEFAULT_PORT = 3310;
 const CLAMAV_PORT_MESSAGE = "CLAMAV_PORT must be a whole number from 1 to 65535";
 
 /** Whether `value` is a TCP port in plain digits, 1 to 65535, with no sign, space or leading zero (ADR-0164). */
-export function isClamAvPort(value: string): boolean {
+export function isNetworkPort(value: string): boolean {
   return /^[1-9][0-9]{0,4}$/.test(value) && Number(value) <= 65_535;
+}
+
+/** Whether `value` can name a ClamAV daemon's port: {@link isNetworkPort} (ADR-0164). */
+export function isClamAvPort(value: string): boolean {
+  return isNetworkPort(value);
 }
 
 /** A DNS name: labels of letters, digits and inner hyphens, 253 characters in all. An IPv4 address is one too. */
@@ -88,6 +95,34 @@ export function isNetworkHost(value: string): boolean {
 export function isClamAvHost(value: string): boolean {
   return isNetworkHost(value);
 }
+
+/**
+ * Whether `value` is a DNS name and not an IP address: what a certificate or an EHLO greeting names (ADR-0166,
+ * ADR-0167). Its last label is never digits alone, as no top-level domain is, so nothing a resolver may read as an
+ * address, such as `127.1`, passes.
+ */
+export function isDnsName(value: string): boolean {
+  return isNetworkHost(value) && isIP(value) === 0 && !/(?:^|\.)[0-9]+$/.test(value);
+}
+
+/** How an SMTP connection is encrypted (ADR-0166 Decision 2): TLS from its first byte, or STARTTLS. No plain mode. */
+export function isSmtpTlsMode(value: string): value is "implicit" | "starttls" {
+  return value === "implicit" || value === "starttls";
+}
+
+/**
+ * The SMTP server and what it is given, all or none (ADR-0167): with `SMTP_HOST`, each of the rest is required;
+ * without it, none may be set. The browser test refuses every one.
+ */
+export const SMTP_SETTINGS = [
+  "SMTP_HOST",
+  "SMTP_PORT",
+  "SMTP_TLS",
+  "SMTP_USER",
+  "SMTP_PASSWORD",
+  "SMTP_EHLO_NAME",
+  "EMAIL_FROM",
+] as const;
 
 /**
  * Why an address is not an http(s) origin, or null when it is: no user, path,
@@ -173,10 +208,42 @@ export const serverEnvSchema = z
     // than in their place. Refused without a host, which it is read beside.
     CLAMAV_PORT: z.string().refine(isClamAvPort, CLAMAV_PORT_MESSAGE).optional(),
 
+    // The SMTP server every email is to be handed to (ADR-0166, ADR-0167): a
+    // DNS name with no port, never an IP address, since its certificate is
+    // checked for this name and no setting names another. Set, each of
+    // SMTP_PORT, SMTP_TLS, SMTP_USER, SMTP_PASSWORD, SMTP_EHLO_NAME and
+    // EMAIL_FROM is required; unset, none may be. Never beside
+    // EMAIL_OUTBOX_DIR. The seven are checked here and used by nothing yet:
+    // the web app is given the SMTP sender in the next milestone.
+    SMTP_HOST: z
+      .string()
+      .refine(isDnsName, "SMTP_HOST must be a DNS name, with no port and not an IP address")
+      .optional(),
+    // Its TCP port, plain digits kept as text, as CLAMAV_PORT is. No default:
+    // which port goes with which encryption is the mail service's to say.
+    SMTP_PORT: z.string().refine(isNetworkPort, "SMTP_PORT must be a whole number from 1 to 65535").optional(),
+    // "implicit" (TLS from the first byte) or "starttls" (TLS required before
+    // logging in). Text with a check, not a list of choices, so a wrong value
+    // is refused beside every other refusal rather than in their place.
+    SMTP_TLS: z.string().refine(isSmtpTlsMode, 'SMTP_TLS must be "implicit" or "starttls"').optional(),
+    // The login, in every environment: the sender never hands an email over
+    // unnamed (ADR-0166 Decision 3). A secret in production; never logged.
+    SMTP_USER: z.string().min(1, "SMTP_USER must not be empty").optional(),
+    SMTP_PASSWORD: z.string().min(1, "SMTP_PASSWORD must not be empty").optional(),
+    // The DNS name this side gives in EHLO, so no container's own name or
+    // address is sent (ADR-0166 Decision 6).
+    SMTP_EHLO_NAME: z.string().refine(isDnsName, "SMTP_EHLO_NAME must be a DNS name, not an IP address").optional(),
+    // The sender, as From and in the envelope: one plain address in lower
+    // case with no display name, so nothing about it is changed silently.
+    EMAIL_FROM: z
+      .string()
+      .refine(isPlainEmailAddress, "EMAIL_FROM must be one plain address, in lower case, with no name")
+      .optional(),
+
     // The folder the product's emails are written to instead of being sent,
     // in development and CI only (ADR-0126). Absolute, for the same reason as
     // the shared folder. Unset, the web app sends no email (ADR-0129).
-    // Refused in production, where no email service is chosen yet.
+    // Refused in production, and beside SMTP_HOST.
     EMAIL_OUTBOX_DIR: z.string().min(1).optional(),
 
     // The web app's own address, which every link it emails starts with
@@ -218,6 +285,12 @@ export const serverEnvSchema = z
     // (ADR-0158 Decision 6). Node.js reads it once, as the process starts, so
     // nothing can turn it off later: a start is refused instead.
     NODE_DEBUG: z.string().optional(),
+
+    // Node.js's own switch for checking certificates, read only to be refused
+    // in production (ADR-0167). Set to 0, it turns the check off for every
+    // connection that does not ask for it itself, so a client could send its
+    // token or password to a server nobody checked (measured, ADR-0166).
+    NODE_TLS_REJECT_UNAUTHORIZED: z.string().optional(),
 
     LOG_LEVEL: z
       .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
@@ -316,6 +389,24 @@ export const serverEnvSchema = z
       });
     }
 
+    // No SMTP message repeats a value, which the start check prints (ADR-0167).
+    const smtpIssue = (path: string, message: string): void =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+    for (const name of SMTP_SETTINGS.slice(1)) {
+      if (env.SMTP_HOST === undefined && env[name] !== undefined) {
+        smtpIssue(name, `SMTP_HOST is required when ${name} is set`);
+      }
+      if (env.SMTP_HOST !== undefined && env[name] === undefined) {
+        smtpIssue(name, `${name} is required when SMTP_HOST is set`);
+      }
+    }
+    if (env.SMTP_HOST !== undefined && env.EMAIL_OUTBOX_DIR !== undefined) {
+      smtpIssue(
+        "SMTP_HOST",
+        "SMTP_HOST and EMAIL_OUTBOX_DIR must not both be set: the web app sends each email one way",
+      );
+    }
+
     // Any value: which names write what is Node.js's to change. An empty value names nothing.
     if (production && (env.NODE_DEBUG ?? "") !== "") {
       ctx.addIssue({
@@ -324,6 +415,16 @@ export const serverEnvSchema = z
         message:
           "NODE_DEBUG must not be set in production: " +
           "Node.js would write requests, their tokens included, to the error output",
+      });
+    }
+    // Any value, as NODE_DEBUG: how Node.js reads it is Node.js's to change. An empty value names nothing.
+    if (production && (env.NODE_TLS_REJECT_UNAUTHORIZED ?? "") !== "") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["NODE_TLS_REJECT_UNAUTHORIZED"],
+        message:
+          "NODE_TLS_REJECT_UNAUTHORIZED must not be set in production: " +
+          "Node.js would let a connection skip checking the server's certificate",
       });
     }
 

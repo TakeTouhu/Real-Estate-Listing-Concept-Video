@@ -1,7 +1,7 @@
 import { isIP } from "node:net";
 import { createTransport } from "nodemailer";
-import { isDeliverableEmailAddress, outgoingEmail, type EmailSender, type OutgoingEmail } from "@app/domain";
-import { AppError, isNetworkHost } from "@app/shared";
+import { outgoingEmail, type EmailSender, type OutgoingEmail } from "@app/domain";
+import { AppError, isDnsName, isNetworkHost, isPlainEmailAddress } from "@app/shared";
 
 /**
  * The library's own limits, in milliseconds, each of which ends the one connection of one send (ADR-0166; allowed
@@ -84,18 +84,18 @@ export function createSmtpEmailSender(options: SmtpEmailSenderOptions): EmailSen
     refuse('The SMTP encryption must be "implicit" or "starttls"');
   }
   const servername = options.servername ?? (isIP(options.host) === 0 ? options.host : undefined);
-  if (servername === undefined || !isNetworkHost(servername) || isIP(servername) !== 0) {
+  if (servername === undefined || !isDnsName(servername)) {
     refuse("The SMTP certificate name must be a DNS name, given for an IP host");
   }
   if (!nonEmpty(options.user) || !nonEmpty(options.password)) {
     refuse("The SMTP user and password must each be given");
   }
-  // Already as the product stores an address (trimmed, lower case): nothing is changed silently.
-  const plain = typeof options.from === "string" && options.from === options.from.trim().toLowerCase();
-  if (!plain || !isDeliverableEmailAddress(options.from)) {
+  // Already as the product stores an address (trimmed, lower case): nothing is changed silently. The environment's
+  // `EMAIL_FROM` is judged by the same rule (ADR-0167).
+  if (typeof options.from !== "string" || !isPlainEmailAddress(options.from)) {
     refuse("The sender's address must be one plain address, in lower case");
   }
-  if (typeof options.ehloName !== "string" || !isNetworkHost(options.ehloName) || isIP(options.ehloName) !== 0) {
+  if (typeof options.ehloName !== "string" || !isDnsName(options.ehloName)) {
     refuse("The SMTP EHLO name must be a DNS name");
   }
   const limits = { ...SMTP_LIMITS_MS, ...options.limitsMs };

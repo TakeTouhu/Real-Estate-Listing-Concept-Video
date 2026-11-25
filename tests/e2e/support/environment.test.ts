@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SMTP_SETTINGS } from "@app/shared";
 import {
   E2E_BASE_URL,
   E2E_EMAIL_OUTBOX_DIR,
@@ -66,6 +67,11 @@ describe("the browser test's environment", () => {
     for (const name of ["CLAMAV_HOST", "CLAMAV_PORT"]) {
       expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, [name]: "set" })).toThrow("scans with the test scanner");
     }
+    // Every SMTP setting the schema knows, each by itself (ADR-0167).
+    for (const name of SMTP_SETTINGS) {
+      expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, [name]: "set" })).toThrow("reads its mail from the outbox");
+    }
+    expect(() => e2eEnvironment({ DATABASE_URL: LOCAL, SMTP_TLS: "" })).toThrow("reads its mail from the outbox");
     expect(() => e2eEnvironment({ DATABASE_URL: "postgresql://u:p@db.example.com/x" })).toThrow("on this machine");
     expect(() => e2eEnvironment({})).toThrow("needs DATABASE_URL");
   });

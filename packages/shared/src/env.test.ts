@@ -2,11 +2,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   isCloudStorageBucketName,
   isClamAvHost,
+  isClamAvPort,
+  isDnsName,
   isGoogleApiAddress,
   isNetworkHost,
+  isNetworkPort,
+  isSmtpTlsMode,
   loadServerEnv,
   resetServerEnvCache,
   serverEnvSchema,
+  SMTP_SETTINGS,
 } from "./env";
 
 const base = {
@@ -294,6 +299,123 @@ describe("serverEnvSchema", () => {
     ]);
   });
 
+  describe("SMTP (ADR-0167)", () => {
+    /** All seven, valid. Throwaway values: the password is not a secret. */
+    const SMTP = {
+      SMTP_HOST: "smtp.example.com",
+      SMTP_PORT: "587",
+      SMTP_TLS: "starttls",
+      SMTP_USER: "smtp-user",
+      SMTP_PASSWORD: "smtp-password-not-a-secret",
+      SMTP_EHLO_NAME: "app.example.com",
+      EMAIL_FROM: "noreply@example.com",
+    };
+    const issuesOf = (settings: Record<string, string>): string[] => {
+      const result = serverEnvSchema.safeParse({ ...base, ...settings });
+      return result.success ? [] : result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+    };
+    const BAD_HOST = "SMTP_HOST must be a DNS name, with no port and not an IP address";
+    /** The seven, with `name` taken out. */
+    const without = (name: string): Record<string, string> =>
+      Object.fromEntries(Object.entries(SMTP).filter(([key]) => key !== name));
+
+    it("names its seven settings in SMTP_SETTINGS, in order, which the browser test refuses", () => {
+      const keys = Object.keys(serverEnvSchema.innerType().shape);
+      expect(keys.filter((key) => key.startsWith("SMTP_") || key === "EMAIL_FROM")).toEqual([...SMTP_SETTINGS]);
+      expect(Object.keys(SMTP)).toEqual([...SMTP_SETTINGS]);
+    });
+
+    it("takes none by default, and all seven together in every environment, the port kept as text", () => {
+      const none = serverEnvSchema.parse({ ...base, NODE_ENV: "production" });
+      for (const name of SMTP_SETTINGS) expect(none[name]).toBeUndefined();
+      for (const NODE_ENV of ["development", "test", "production"]) {
+        for (const [SMTP_TLS, SMTP_PORT] of [["starttls", "587"], ["implicit", "465"]]) {
+          const settings = { ...SMTP, SMTP_TLS, SMTP_PORT };
+          expect(serverEnvSchema.parse({ ...base, NODE_ENV, ...settings })).toMatchObject(settings);
+        }
+      }
+    });
+
+    it("refuses each setting that is not what it names, by a message that repeats no value", () => {
+      const refused: [string, string[], string][] = [
+        ["SMTP_HOST", ["", "smtp.example.com:587", "smtp://smtp.example.com", "user@smtp.example.com"], BAD_HOST],
+        ["SMTP_HOST", ["smtp example", "127.0.0.1", "127.1", "::1", "[::1]"], BAD_HOST],
+        [
+          "SMTP_PORT",
+          ["", "0", "65536", "99999", "abc", "587.5", "0587", " 587", "0x24b", "1e3", "-1", "５８７"],
+          "SMTP_PORT must be a whole number from 1 to 65535",
+        ],
+        ["SMTP_TLS", ["", "none", "tls", "STARTTLS", "ssl"], 'SMTP_TLS must be "implicit" or "starttls"'],
+        ["SMTP_USER", [""], "SMTP_USER must not be empty"],
+        ["SMTP_PASSWORD", [""], "SMTP_PASSWORD must not be empty"],
+        [
+          "SMTP_EHLO_NAME",
+          ["", "127.0.0.1", "127.1", "0127.0.0.1", "app name", "app\r\nRCPT TO:<x@y.z>"],
+          "SMTP_EHLO_NAME must be a DNS name, not an IP address",
+        ],
+        [
+          "EMAIL_FROM",
+          ["", "VTaVision <noreply@example.com>", "NoReply@example.com", " noreply@example.com"],
+          "EMAIL_FROM must be one plain address, in lower case, with no name",
+        ],
+        [
+          "EMAIL_FROM",
+          ["noreply@example.com ", "noreply", "a@b@example.com", "noreply@localhost"],
+          "EMAIL_FROM must be one plain address, in lower case, with no name",
+        ],
+      ];
+      // Each beside the other six, valid, so its own line is the only one.
+      for (const [name, values, message] of refused) {
+        for (const value of values) expect(issuesOf({ ...SMTP, [name]: value })).toEqual([`${name}: ${message}`]);
+      }
+    });
+
+    it("takes all seven or none: each of the six needs the host, and the host needs each of them", () => {
+      for (const name of SMTP_SETTINGS.slice(1)) {
+        expect(issuesOf({ [name]: SMTP[name] })).toEqual([`${name}: SMTP_HOST is required when ${name} is set`]);
+        expect(issuesOf(without(name))).toEqual([`${name}: ${name} is required when SMTP_HOST is set`]);
+      }
+      expect(issuesOf({ SMTP_HOST: SMTP.SMTP_HOST })).toEqual(
+        SMTP_SETTINGS.slice(1).map((name) => `${name}: ${name} is required when SMTP_HOST is set`),
+      );
+    });
+
+    it("refuses the host beside the outbox folder: the web app sends each email one way", () => {
+      const both =
+        "SMTP_HOST: SMTP_HOST and EMAIL_OUTBOX_DIR must not both be set: the web app sends each email one way";
+      const outbox = { ...SMTP, EMAIL_OUTBOX_DIR: "/var/tmp/vtavision-outbox" };
+      expect(issuesOf(outbox)).toEqual([both]);
+      expect(issuesOf({ ...outbox, NODE_ENV: "production" })).toEqual([
+        "EMAIL_OUTBOX_DIR: EMAIL_OUTBOX_DIR is for development and CI only; it must not be set in production",
+        both,
+      ]);
+    });
+
+    it("refuses a wrong mode beside the other refusals, and hides none of them", () => {
+      expect(issuesOf({ ...without("EMAIL_FROM"), SMTP_TLS: "tls", SHARED_STORAGE_DIR: "relative" })).toEqual([
+        'SMTP_TLS: SMTP_TLS must be "implicit" or "starttls"',
+        "SHARED_STORAGE_DIR: SHARED_STORAGE_DIR must be an absolute path",
+        "EMAIL_FROM: EMAIL_FROM is required when SMTP_HOST is set",
+      ]);
+    });
+  });
+
+  it("refuses NODE_TLS_REJECT_UNAUTHORIZED in production, whatever it holds, and leaves it alone elsewhere", () => {
+    const line = "NODE_TLS_REJECT_UNAUTHORIZED: NODE_TLS_REJECT_UNAUTHORIZED must not be set in production: " +
+      "Node.js would let a connection skip checking the server's certificate";
+    for (const value of ["0", "1", "false", " "]) {
+      const switched = { ...base, NODE_TLS_REJECT_UNAUTHORIZED: value };
+      const result = serverEnvSchema.safeParse({ ...switched, NODE_ENV: "production" });
+      const issues = result.success ? [] : result.error.issues;
+      expect(issues.map((i) => `${i.path.join(".")}: ${i.message}`)).toEqual([line]);
+      for (const NODE_ENV of ["development", "test"]) {
+        expect(serverEnvSchema.safeParse({ ...switched, NODE_ENV }).success).toBe(true);
+      }
+    }
+    const empty = { ...base, NODE_ENV: "production", NODE_TLS_REJECT_UNAUTHORIZED: "" };
+    expect(serverEnvSchema.safeParse(empty).success).toBe(true);
+  });
+
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);
@@ -312,6 +434,36 @@ describe("isClamAvHost", () => {
     ];
     for (const host of others) expect(isClamAvHost(host)).toBe(false);
     for (const value of [...hosts, ...others]) expect(isNetworkHost(value)).toBe(isClamAvHost(value));
+  });
+});
+
+describe("the shared port, name and mode rules", () => {
+  it("takes a port in plain digits from 1 to 65535, ClamAV's by the same rule", () => {
+    const ports = ["1", "25", "465", "587", "3310", "65535", "", "0", "65536", "0587", " 587", "587 ", "+587", "5e2"];
+    for (const port of ports.slice(0, 6)) expect(isNetworkPort(port)).toBe(true);
+    for (const port of ports.slice(6)) expect(isNetworkPort(port)).toBe(false);
+    for (const port of ports) expect(isClamAvPort(port)).toBe(isNetworkPort(port));
+  });
+
+  it("takes a DNS name, and no IP address, nothing an address could be read from, port or space", () => {
+    for (const name of ["smtp.example.com", "mail", "a-b.example", "xn--eckwd4c7c.example", "123.example.com"]) {
+      expect(isDnsName(name)).toBe(true);
+    }
+    const addressLike = ["127.1", "0127.0.0.1", "1.2.3.4.5", "2130706433", "mail.123"];
+    for (const value of ["", "127.0.0.1", "10.0.0.7", "::1", "fd00::7", "[::1]", "smtp.example.com:587", "a b", "-a"]) {
+      expect(isDnsName(value)).toBe(false);
+    }
+    // Digits alone in the last label: no top-level domain is, and a resolver may read the name as an address.
+    for (const value of addressLike) {
+      expect(isDnsName(value)).toBe(false);
+    }
+  });
+
+  it("takes the two encryption modes, exactly as written", () => {
+    expect(["implicit", "starttls"].every(isSmtpTlsMode)).toBe(true);
+    for (const value of ["", "none", "tls", "ssl", "Implicit", "STARTTLS", " starttls"]) {
+      expect(isSmtpTlsMode(value)).toBe(false);
+    }
   });
 });
 
@@ -347,12 +499,29 @@ describe("loadServerEnv", () => {
       WAVESPEED_API_BASE_URL: "marker-not-an-address",
       WAVESPEED_VIDEO_MODEL_ID: "marker/another-model",
       WAVESPEED_WEBHOOK_SECRET: "",
+      SMTP_HOST: "marker-host:25",
+      SMTP_PORT: "marker",
+      SMTP_TLS: "marker",
+      SMTP_USER: "marker-user",
+      SMTP_PASSWORD: "marker-password",
+      SMTP_EHLO_NAME: "marker name",
+      EMAIL_FROM: "marker <x@example.com>",
+      NODE_TLS_REJECT_UNAUTHORIZED: "marker",
     };
+    // The login is valid beside a host, so it has no line of its own, and still must not be repeated.
+    const valid = new Set(["NODE_ENV", "VIDEO_PROVIDER", "SMTP_USER", "SMTP_PASSWORD"]);
     const message = messageOf(invalid);
     expect(message).toMatch(/^Invalid server environment configuration:\n {2}- /);
-    for (const name of Object.keys(invalid).filter((name) => name !== "NODE_ENV" && name !== "VIDEO_PROVIDER")) {
+    for (const name of Object.keys(invalid).filter((name) => !valid.has(name))) {
       expect(message).toContain(`  - ${name}: `);
     }
+    expect(message).not.toContain("marker");
+  });
+
+  it("names the SMTP login when it is set without a host, and repeats neither value", () => {
+    const message = messageOf({ ...base, SMTP_USER: "marker-user", SMTP_PASSWORD: "marker-password" });
+    expect(message).toContain("  - SMTP_USER: SMTP_HOST is required when SMTP_USER is set");
+    expect(message).toContain("  - SMTP_PASSWORD: SMTP_HOST is required when SMTP_PASSWORD is set");
     expect(message).not.toContain("marker");
   });
 

@@ -1,5 +1,9 @@
-import { AppError } from "@app/shared";
+import { AppError, isDeliverableEmailAddress } from "@app/shared";
 import { normalizeEmail } from "../identity/util";
+
+// Moved to `@app/shared`, so the environment can judge `EMAIL_FROM` with the same rule (ADR-0167); re-exported so
+// every caller keeps its import.
+export { EMAIL_ADDRESS_MAX_LENGTH, EMAIL_LOCAL_PART_MAX_LENGTH, isDeliverableEmailAddress } from "@app/shared";
 
 /**
  * The emails the product sends (ADR-0126): the link that verifies an account's
@@ -10,10 +14,6 @@ import { normalizeEmail } from "../identity/util";
 export const EMAIL_KINDS = ["EMAIL_VERIFICATION", "PASSWORD_RESET", "INVITATION"] as const;
 export type EmailKind = (typeof EMAIL_KINDS)[number];
 
-/** The longest address mail can carry (RFC 5321's path limit, less its brackets). */
-export const EMAIL_ADDRESS_MAX_LENGTH = 254;
-/** The longest local part, before the `@` (RFC 5321). */
-export const EMAIL_LOCAL_PART_MAX_LENGTH = 64;
 /** The longest subject, in characters. */
 export const EMAIL_SUBJECT_MAX_LENGTH = 200;
 /** The longest body, in characters. */
@@ -33,13 +33,6 @@ export type OutgoingEmail = {
   readonly text: string;
 } & { readonly [outgoingEmailBrand]: "OutgoingEmail" };
 
-// RFC 5322's dot-atom: atext runs joined by single dots. No quoted local part,
-// no comments, no display name, no list: one bare ASCII address.
-const LOCAL_PART = /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/;
-// Two or more DNS labels of letters, digits and inner hyphens. An
-// internationalized domain is accepted in its ASCII (punycode) form.
-const DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-
 // A control character, or a line or paragraph separator: anything that could
 // end a header line.
 const SUBJECT_FORBIDDEN = /[\p{Cc}\p{Zl}\p{Zp}]/u;
@@ -47,22 +40,6 @@ const SUBJECT_FORBIDDEN = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 // taken out before this is asked; every other, a carriage return included, is
 // refused.
 const CONTROL = /\p{Cc}/u;
-
-/**
- * Whether mail can be addressed to this address: one plain ASCII address,
- * `local@domain`, after the product's normalization (trimmed, lower case). It
- * judges the form only; whether the mailbox exists is the delivery's to find.
- */
-export function isDeliverableEmailAddress(address: string): boolean {
-  const normalized = normalizeEmail(address);
-  if (normalized.length > EMAIL_ADDRESS_MAX_LENGTH) return false;
-  const at = normalized.indexOf("@");
-  // A second "@" falls in the domain, which no domain label admits.
-  if (at < 0) return false;
-  const local = normalized.slice(0, at);
-  const domain = normalized.slice(at + 1);
-  return local.length <= EMAIL_LOCAL_PART_MAX_LENGTH && LOCAL_PART.test(local) && DOMAIN.test(domain);
-}
 
 function characters(value: string): number {
   return Array.from(value).length;

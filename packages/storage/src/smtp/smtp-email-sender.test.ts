@@ -440,7 +440,8 @@ describe("createSmtpEmailSender", () => {
       expect(refusal({ tls: "none" as "starttls" })).toBe(
         'CONFIGURATION_ERROR: The SMTP encryption must be "implicit" or "starttls"',
       );
-      for (const servername of [undefined, "10.0.0.7", "mail:587"]) {
+      // A name a resolver may read as an address, such as 127.1, is no certificate name (ADR-0167).
+      for (const servername of [undefined, "10.0.0.7", "mail:587", "127.1"]) {
         expect(refusal({ host: "10.0.0.7", servername })).toBe(
           "CONFIGURATION_ERROR: The SMTP certificate name must be a DNS name, given for an IP host",
         );
@@ -453,7 +454,7 @@ describe("createSmtpEmailSender", () => {
           "CONFIGURATION_ERROR: The sender's address must be one plain address, in lower case",
         );
       }
-      for (const ehloName of ["", "127.0.0.1", "app\r\nRCPT TO:<x@y.z>", "app name"]) {
+      for (const ehloName of ["", "127.0.0.1", "127.1", "app\r\nRCPT TO:<x@y.z>", "app name"]) {
         expect(refusal({ ehloName })).toBe("CONFIGURATION_ERROR: The SMTP EHLO name must be a DNS name");
       }
       for (const idle of [0, 1.5, 2_147_483_648]) {

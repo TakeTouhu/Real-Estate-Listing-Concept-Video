@@ -398,7 +398,7 @@ pnpm test:smtp   # vitest.smtp.config.ts
 ```
 
 Without those variables the run fails. CI runs it in the `storage` job.
-The web app does not send through SMTP yet (RD-6c); the outbox serves
+The web app does not send through SMTP yet (RD-6d); the outbox serves
 development.
 
 ### Browser tests

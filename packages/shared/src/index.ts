@@ -1,5 +1,6 @@
 export * from "./crypto";
 export * from "./deep-freeze";
+export * from "./email-address";
 export * from "./env";
 export * from "./errors";
 export * from "./mfa-crypto";
