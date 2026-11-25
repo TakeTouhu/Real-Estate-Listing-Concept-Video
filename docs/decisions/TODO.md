@@ -2026,6 +2026,9 @@ into on 2026-11-17.
 - [ ] **Organization and Property creation are not limited**
       (`api/organizations/route.ts`, `POST /api/properties`); product
       owner: whether an organization without a plan may upload.
+- [ ] **Page renders sign and audit a link per photo and the video
+      preview per render, unlimited** (`thumbnails.ts:20-36`); a download
+      link may be fetched with ranges for its 300 s.
 
 ## Open in RD-4c — what the development pipeline beside the emulator leaves open
 

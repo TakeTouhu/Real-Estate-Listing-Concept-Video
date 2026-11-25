@@ -9,6 +9,7 @@ import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
 import { getPropertyServices } from "./property";
+import { getRateLimiter, refusalText, retryMinutes } from "./rate-limit";
 import type { VideoDownloadForm } from "./video-progress-view";
 
 /**
@@ -45,7 +46,8 @@ export function getVideoDownloadLogger(): Pick<Logger, "error"> {
 /**
  * What the project page says when a download gave no link, by the code the
  * route sends it back with (`?download=`). The page shows only these: never
- * text the URL carries.
+ * text the URL carries. `limited` answers a download a limit refused, with the
+ * whole minutes of `?retry=` as its wait (ADR-0173 Decision 7).
  */
 export const DOWNLOAD_NOTICES = {
   none: "There is no delivered video to download.",
@@ -53,15 +55,28 @@ export const DOWNLOAD_NOTICES = {
   failed:
     "The video could not be downloaded. Try again; if it keeps failing, contact support with the video's " +
     "support reference.",
+  limited: "Too many downloads. Try again later.",
 } as const;
 
 export type DownloadNotice = keyof typeof DOWNLOAD_NOTICES;
 
 const NOTICES: ReadonlyMap<string, string> = new Map(Object.entries(DOWNLOAD_NOTICES));
 
-/** The notice a `?download=` code names, or `null` for anything else. */
-export function downloadNotice(param: string | readonly string[] | undefined): string | null {
-  return typeof param === "string" ? (NOTICES.get(param) ?? null) : null;
+/**
+ * The notice the page's `?download=` code names, or `null` for anything else;
+ * `limited` names the wait a whole number of minutes in `?retry=` gives. It
+ * takes the page's query whole, so the page cannot leave the wait behind.
+ */
+export function downloadNotice(query: {
+  readonly download?: string | readonly string[];
+  readonly retry?: string | readonly string[];
+}): string | null {
+  const { download, retry } = query;
+  if (typeof download !== "string") return null;
+  const minutes = retryMinutes(retry);
+  return download === "limited" && minutes !== null
+    ? refusalText("DOWNLOAD", minutes)
+    : (NOTICES.get(download) ?? null);
 }
 
 /**
@@ -79,10 +94,33 @@ export function downloadOnProjectPage(
   return { action: `/api/video-projects/${encodeURIComponent(videoProjectId)}/download`, organizationId, propertyId };
 }
 
-/** Where a download sends the member: to its link, or back to the project page with a notice. */
+/**
+ * Where a download sends the member: to its link, or back to the project page
+ * with a notice, a refused one with its whole minutes to wait.
+ */
 export type DownloadLanding =
   | { readonly to: "LINK"; readonly url: string }
-  | { readonly to: "PAGE"; readonly notice: DownloadNotice };
+  | { readonly to: "PAGE"; readonly notice: DownloadNotice; readonly retry?: number };
+
+/**
+ * One download, counted by the member's account before any link is asked for,
+ * and never given back (ADR-0173 Decisions 1, 3 and 4): `null` when the limit
+ * lets it through, else `limited` with its whole minutes to wait. Its own
+ * `try`, as the route rethrows what is not an `AppError`: a limiter that
+ * cannot answer refuses it as `failed`, never with the limiter's text, and is
+ * logged by its error code alone (Decision 9).
+ */
+export async function countDownload(actorUserId: string, log: Pick<Logger, "error">): Promise<DownloadLanding | null> {
+  try {
+    const now = getIdentityServices().deps.clock.now();
+    const request = await getRateLimiter().account("DOWNLOAD", actorUserId, now);
+    // The minutes `refusalMinutes` gives, from the whole seconds rounded up.
+    return request.allowed ? null : { to: "PAGE", notice: "limited", retry: Math.ceil(request.seconds / 60) };
+  } catch (error) {
+    log.error("A download could not be counted", { code: error instanceof AppError ? error.code : "UNEXPECTED" });
+    return { to: "PAGE", notice: "failed" };
+  }
+}
 
 /**
  * Ask for a link to download the project's video (ADR-0119), and say where it

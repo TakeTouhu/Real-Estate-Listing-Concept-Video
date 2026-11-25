@@ -3203,3 +3203,23 @@ within an hour of its first is refused until that hour ends.
 **Rolling back.** To RD-8c's build: safe, even with the new setting set,
 which that build's schema does not know and ignores. Analyses are no
 longer limited, and the table's rows for them are left unread.
+
+## RD-8e — downloads are limited per account
+
+**No migration** (ADR-0173). Migration 35 stays the last: the table's
+CHECK takes the new policy's name.
+
+**What changes at deploy.** Video downloads and photo download links are
+counted together per signed-in account, 60 an hour by default, failed
+ones included, on the signed-in limiter client. `RATE_LIMIT_DOWNLOAD` is
+optional and takes its default; a value out of form is refused, by the
+web app and the worker alike. Page renders that sign thumbnails or the
+video preview are not counted.
+
+**On a development machine.** A 61st download of one account within an
+hour of its first is refused until that hour ends.
+`DELETE FROM "rate_limit_counters";` clears every count.
+
+**Rolling back.** To RD-8d's build: safe, even with the new setting set,
+which that build's schema does not know and ignores. Downloads are no
+longer limited, and the table's rows for them are left unread.

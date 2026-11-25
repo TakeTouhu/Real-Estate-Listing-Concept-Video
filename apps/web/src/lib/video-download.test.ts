@@ -106,27 +106,42 @@ describe("the download button", () => {
 });
 
 describe("the notice after a download that gave no link", () => {
-  it("says what ADR-0120 Decision 3 says, for each code", () => {
+  it("says what ADR-0120 Decision 3 and ADR-0173 Decision 7 say, for each code", () => {
     expect(DOWNLOAD_NOTICES).toEqual({
       none: "There is no delivered video to download.",
       forbidden: "You may not download this video.",
       failed:
         "The video could not be downloaded. Try again; if it keeps failing, contact support with the video's " +
         "support reference.",
+      limited: "Too many downloads. Try again later.",
     });
   });
 
+  it.each([
+    ["14", "Too many downloads. Try again in 14 minutes."],
+    ["1", "Too many downloads. Try again in 1 minute."],
+    ["1440", "Too many downloads. Try again in 24 hours."],
+    [undefined, "Too many downloads. Try again later."],
+    ["0", "Too many downloads. Try again later."],
+    ["soon", "Too many downloads. Try again later."],
+    [["5", "6"], "Too many downloads. Try again later."],
+  ])("names a refusal's wait from ?retry=%j, or none it cannot read", (retry, text) => {
+    expect(downloadNotice({ download: "limited", retry })).toBe(text);
+    // Only a refusal names a wait.
+    expect(downloadNotice({ download: "failed", retry })).toBe(DOWNLOAD_NOTICES.failed);
+  });
+
   it("names each of the page's own notices by its code", () => {
-    expect(downloadNotice("none")).toBe(DOWNLOAD_NOTICES.none);
-    expect(downloadNotice("forbidden")).toBe(DOWNLOAD_NOTICES.forbidden);
-    expect(downloadNotice("failed")).toBe(DOWNLOAD_NOTICES.failed);
+    expect(downloadNotice({ download: "none" })).toBe(DOWNLOAD_NOTICES.none);
+    expect(downloadNotice({ download: "forbidden" })).toBe(DOWNLOAD_NOTICES.forbidden);
+    expect(downloadNotice({ download: "failed" })).toBe(DOWNLOAD_NOTICES.failed);
   });
 
   it("shows nothing for any other value, never the text the URL carries", () => {
     for (const param of [undefined, "", "Your video is ready", "toString", "__proto__", "constructor", "NONE"]) {
-      expect(downloadNotice(param)).toBeNull();
+      expect(downloadNotice({ download: param })).toBeNull();
     }
-    expect(downloadNotice(["none", "failed"])).toBeNull();
+    expect(downloadNotice({ download: ["none", "failed"] })).toBeNull();
   });
 
   it("says nothing of why a member may not download, or of a provider", () => {

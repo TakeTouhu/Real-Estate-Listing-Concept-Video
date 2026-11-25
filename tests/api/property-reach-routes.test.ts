@@ -19,8 +19,8 @@ import { AppError, RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/share
  * resolution is stubbed; the routes run against the real PropertyService and
  * AssetService over in-memory repositories. A CREATOR asking for a Property it
  * is not responsible for, or a photo under it, gets exactly the response it
- * would get for an id that does not exist. The upload limit runs for real,
- * on an in-memory store made afresh for each test (ADR-0173).
+ * would get for an id that does not exist. The upload and download limits
+ * run for real, on an in-memory store made afresh for each test (ADR-0173).
  */
 const PASSWORD = "password-123456";
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 2044 }, (_, i) => i % 251)]);
@@ -268,5 +268,59 @@ describe("the upload routes' limit per account (ADR-0173)", () => {
     }
     expect(checks).not.toHaveBeenCalled();
     expect(ctx.storage.signed).toBe(signed);
+  });
+});
+
+describe("the photo download link's limit per account (ADR-0173)", () => {
+  type Audited = { deps: { repos: { auditLogs: { all: () => readonly { action: string }[] } } } };
+  const issued = () =>
+    (identity.value as Audited).deps.repos.auditLogs.all().filter((e) => e.action === "asset.download_url_issued");
+  const link = () => routes["GET download-url"]!.call(ctx.mine.ready);
+
+  it("refuses past the limit with the JSON answer, signing and auditing no link", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_DOWNLOAD: "1/3600" });
+    expect((await link()).status).toBe(200);
+    const [signed, audited] = [ctx.storage.signed, issued().length];
+    const refused = await link();
+    expect([refused.status, refused.headers.get("retry-after"), refused.headers.get("cache-control")]).toEqual([
+      429,
+      "3600",
+      "no-store",
+    ]);
+    expect(await seen(refused)).toEqual({
+      status: 429,
+      body: {
+        error: {
+          code: "RATE_LIMITED",
+          message: "Too many downloads. Try again in 60 minutes.",
+          details: { retryAfterSeconds: 3600 },
+        },
+      },
+    });
+    expect([ctx.storage.signed, issued().length]).toEqual([signed, audited]);
+    // Another member of the same organization has a count of their own.
+    currentUser.value = { user: { id: ctx.ownerId } };
+    expect((await link()).status).toBe(200);
+  });
+
+  it("counts only after the session and the organization are checked", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_DOWNLOAD: "1/3600" });
+    expect((await downloadUrl(new Request("http://t/api"), asset(ctx.mine.ready))).status).toBe(422);
+    currentUser.value = null;
+    expect((await link()).status).toBe(401);
+    currentUser.value = { user: { id: ctx.creatorId } };
+    expect((await link()).status).toBe(200);
+  });
+
+  it("fails closed with the route's own 500, never the limiter's text, signing and auditing nothing", async () => {
+    const broken = new InMemoryRateLimitStore();
+    broken.hit = () => Promise.reject(new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row"));
+    limits.value = limitsOf({}, broken);
+    const [signed, audited] = [ctx.storage.signed, issued().length];
+    expect(await seen(await link())).toEqual({
+      status: 500,
+      body: { error: { code: "INTERNAL_ERROR", message: "Unexpected error", details: {} } },
+    });
+    expect([ctx.storage.signed, issued().length]).toEqual([signed, audited]);
   });
 });
