@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./support/csp-guard";
 import { decodeVideo, probeVideo } from "./support/media";
 import { provisionPremiumPlan, signUpOwner } from "./support/owner";
 import { makePhotos } from "./support/photos";

@@ -3359,3 +3359,34 @@ while the service is served over `https` only, as production requires
 (`APP_BASE_URL` is `https`); to end it early, deploy a build that sends
 `Strict-Transport-Security: max-age=0` and let browsers revisit. It
 never reaches other hosts of the domain: no `includeSubDomains`.
+
+## RD-9e — the pages' Content Security Policy
+
+**No migration** (ADR-0174). Migration 35 stays the last.
+
+**What changes at deploy.** Every page answer carries one
+`Content-Security-Policy` with a new nonce per request, set by
+`apps/web/src/middleware.ts`: scripts only with the nonce or loaded by
+one that has it, styles from the app or inline, images from the app or
+`data:`, video, fonts and connections from the app only, no plugin, no
+`<base>`, forms only to this origin, no frame and no framing. `/api`
+keeps RD-9d's policy. The policy is enforced, with nowhere to report a
+refusal. Anything the app loads from another site later (Stripe.js,
+analytics, a chat, web fonts) is refused until the policy is changed
+and reviewed. A load balancer or CDN must not add its own
+`Content-Security-Policy` to pages, nor cache a page: each carries its
+own nonce. An unknown address shows Next.js's prerendered "not found"
+text without its scripts. `/favicon.ico`, which the app does not have,
+and an unknown address under `/_next/` outside `/_next/static` get that
+not-found page with no page policy at all, only RD-9d's fixed headers:
+the middleware does not run there. A form redirected to the server's bind
+address, which a redirect built from `request.url` names behind a
+proxy, is now refused by the browser (`TODO.md`, "Open in RD-9").
+
+**On a development machine.** `next dev` sends the same policy with
+`'unsafe-eval'` for scripts and `ws: wss:` for its Fast Refresh socket.
+A refused load shows in the browser's console as "Refused to ...", and
+every browser test fails on one.
+
+**Rolling back.** To RD-9d's build: the page policy goes, and nothing
+was stored or is kept by a browser.

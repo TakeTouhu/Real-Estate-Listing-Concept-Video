@@ -1440,6 +1440,22 @@ contains the download route's own policy; a build run under
 is gone. No header a handler decides per answer is set there. Planned,
 not done: RD-9e the page policy and the records that close RD-9.
 
+**RD-9e — the pages' Content Security Policy** (ADR-0174, no
+migration): a middleware gives every page a policy with a new nonce per
+request, which Next.js puts on its scripts: scripts run only with the
+nonce or when one that has it loads them, styles may be inline, images,
+video, fonts and connections come from the app alone (images also from
+`data:`), forms post only to it, and no site may frame a page. `next
+dev` adds `eval` and its Fast Refresh socket. `/api` keeps the
+configuration's own policy, and no answer gets two. Every browser test
+now fails on anything the policy refuses while it runs. RD-9 is
+complete: RD-9a
+(#207) the comparison with `APP_BASE_URL` and the refusal log, RD-9b
+(#208) the signed-in work routes, RD-9c (#209) the sign-in and account
+routes, RD-9d (#210) the fixed headers and the API policy, and RD-9e
+the page policy; what it leaves open is in `TODO.md`, "Open in RD-9".
+RD-10 adds the container images.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

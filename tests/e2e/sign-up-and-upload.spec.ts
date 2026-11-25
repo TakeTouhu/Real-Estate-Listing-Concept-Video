@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./support/csp-guard";
 import { hydrated } from "./support/hydration";
 import { invitationLink } from "./support/outbox";
 import { newEmail, provisionPremiumPlan, signUpOwner } from "./support/owner";
