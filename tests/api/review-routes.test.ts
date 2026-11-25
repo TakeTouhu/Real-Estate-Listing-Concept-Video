@@ -49,9 +49,9 @@ vi.mock("@/lib/rate-limit", async (original) => ({
   getRateLimiter: () => limits.value,
 }));
 const { WebRateLimits } = await import("@/lib/rate-limit");
-const limitsOf = (settings: Partial<Record<RateLimitSetting, string>>) =>
+const limitsOf = (settings: Partial<Record<RateLimitSetting, string>>, store = new InMemoryRateLimitStore()) =>
   new WebRateLimits(
-    new InMemoryRateLimitStore(),
+    store,
     { ...RATE_LIMIT_DEFAULTS, ...settings, SESSION_SECRET: "x".repeat(32) },
     { warn: vi.fn() },
   );
@@ -157,8 +157,10 @@ function seed(
 const params = (assetId = "ast_1", propertyId = "prp_1") => ({
   params: Promise.resolve({ propertyId, assetId }),
 });
-const req = (body: unknown) =>
-  new Request("http://t/api/review", { method: "POST", body: JSON.stringify(body) });
+/** Posted as the app's pages post: with no `APP_BASE_URL` here, the host is compared (ADR-0174). */
+const SITE = { host: "t", origin: "http://t" };
+const req = (body: unknown, headers: Record<string, string> = SITE) =>
+  new Request("http://t/api/review", { method: "POST", headers, body: JSON.stringify(body) });
 async function jsonOf(res: Response): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
 }
@@ -381,7 +383,7 @@ describe("authentication, authorization and tenant isolation", () => {
   it("returns 422 for a malformed body, never a 500", async () => {
     expect((await approve(req({}), params())).status).toBe(422);
     expect((await approve(req({ organizationId: "" }), params())).status).toBe(422);
-    const bad = new Request("http://t/a", { method: "POST", body: "{not json" });
+    const bad = new Request("http://t/a", { method: "POST", headers: SITE, body: "{not json" });
     expect((await approve(bad, params())).status).toBe(422);
     expect(
       (await approve(req({ organizationId: ctx.orgId, reason: 42 }), params())).status,
@@ -546,7 +548,7 @@ describe("POST /analysis/correction — representable malformed values", () => {
 
   it("returns 422 for a malformed body, never a 500", async () => {
     const res = await correct(
-      new Request("http://t/c", { method: "POST", body: "not json" }),
+      new Request("http://t/c", { method: "POST", headers: SITE, body: "not json" }),
       params(),
     );
     expect(res.status).toBe(422);
@@ -718,5 +720,38 @@ describe("nested property/asset route integrity", () => {
     expect(
       (await correct(req({ organizationId: ctx.orgId, roomType: "STUDY" }), params())).status,
     ).toBe(403);
+  });
+});
+
+describe("the origin check (ADR-0174)", () => {
+  it.each([
+    ["no origin", { host: "t" }],
+    ["another site", { host: "t", origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading, counting or auditing anything, signed in or not", async (_, headers) => {
+    await analyzed("ast_1");
+    const store = new InMemoryRateLimitStore();
+    const hits = vi.spyOn(store, "hit");
+    limits.value = limitsOf({}, store);
+    const before = [await stored(), ctx.deps.repos.auditLogs.all().length];
+    const calls = vi.spyOn(ctx.service, "analyzeAsset");
+    const routes = [
+      [refresh, { organizationId: ctx.orgId }, "refreshed"],
+      [approve, { organizationId: ctx.orgId }, "approved"],
+      [reject, { organizationId: ctx.orgId, reason: "blurry" }, "rejected"],
+      [correct, { organizationId: ctx.orgId, roomType: "STUDY" }, "corrected"],
+    ] as const;
+    for (const user of [{ user: { id: ctx.ownerId } }, null]) {
+      currentUser.value = user;
+      for (const [call, body, done] of routes) {
+        const message = `A photo's analysis must be ${done} from this site`;
+        const request = req(body, headers);
+        const res = await call(request, params());
+        expect([res.status, (await jsonOf(res)).error]).toMatchObject([403, { code: "FORBIDDEN", message }]);
+        expect(request.bodyUsed).toBe(false);
+      }
+    }
+    expect(hits).not.toHaveBeenCalled();
+    expect(calls).not.toHaveBeenCalled();
+    expect([await stored(), ctx.deps.repos.auditLogs.all().length]).toEqual(before);
   });
 });

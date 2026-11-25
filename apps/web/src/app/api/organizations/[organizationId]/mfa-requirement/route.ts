@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
-import { formString, redirectWithError } from "@/lib/http";
+import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
+import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ organizationId: string }> },
 ): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/organizations/[organizationId]/mfa-requirement")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "The MFA requirement must be changed from this site"));
+  }
   const current = await getCurrentUser();
   if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
   const { organizationId } = await context.params;

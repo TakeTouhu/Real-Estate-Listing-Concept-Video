@@ -223,8 +223,13 @@ beforeEach(async () => {
 });
 
 const query = () => new Request(`http://t/api?organizationId=${encodeURIComponent(ctx.orgId)}`);
+// Posted as the app's pages post: with no `APP_BASE_URL` here, the host is compared (ADR-0174).
 const json = (body: Record<string, unknown>) =>
-  new Request("http://t/api", { method: "POST", body: JSON.stringify({ organizationId: ctx.orgId, ...body }) });
+  new Request("http://t/api", {
+    method: "POST",
+    headers: { host: "t", origin: "http://t" },
+    body: JSON.stringify({ organizationId: ctx.orgId, ...body }),
+  });
 const property = (propertyId: string) => ({ params: Promise.resolve({ propertyId }) });
 const project = (projectId: string) => ({ params: Promise.resolve({ projectId }) });
 

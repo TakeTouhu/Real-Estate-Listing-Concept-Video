@@ -98,14 +98,16 @@ async function signIn(who: keyof typeof emails): Promise<void> {
   cookie.value = token;
 }
 
-const post = (fields: Record<string, string>, organizationId = orgId) =>
-  setRequirement(
-    new Request(`http://localhost/api/organizations/${organizationId}/mfa-requirement`, {
-      method: "POST",
-      body: new URLSearchParams(fields),
-    }),
-    { params: Promise.resolve({ organizationId }) },
-  );
+/** Posted as the dashboard's form posts: with no `APP_BASE_URL` here, the host is compared (ADR-0174). */
+const SITE = { host: "localhost", origin: "http://localhost" };
+const posting = (fields: Record<string, string>, organizationId = orgId, headers: Record<string, string> = SITE) =>
+  new Request(`http://localhost/api/organizations/${organizationId}/mfa-requirement`, {
+    method: "POST",
+    headers,
+    body: new URLSearchParams(fields),
+  });
+const post = (fields: Record<string, string>, organizationId = orgId, request = posting(fields, organizationId)) =>
+  setRequirement(request, { params: Promise.resolve({ organizationId }) });
 const location = (response: Response) => {
   const url = new URL(response.headers.get("location")!);
   return { path: url.pathname, error: url.searchParams.get("error") };
@@ -184,6 +186,25 @@ describe("POST /api/organizations/:organizationId/mfa-requirement", () => {
     await post({ required: "false" });
     cookie.value = managerToken;
     expect(await getCurrentUser()).not.toBeNull();
+  });
+
+  it.each([
+    ["no origin", { host: "localhost" }],
+    ["another site", { host: "localhost", origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading or auditing anything, signed in or not", async (_, headers) => {
+    await signIn("owner");
+    const audited = deps.repos.auditLogs.all().length;
+    for (const token of [cookie.value, undefined]) {
+      cookie.value = token;
+      const request = posting({ required: "true" }, orgId, headers);
+      const response = await post({}, orgId, request);
+      expect([response.status, await response.json()]).toMatchObject([
+        403,
+        { error: { code: "FORBIDDEN", message: "The MFA requirement must be changed from this site" } },
+      ]);
+      expect(request.bodyUsed).toBe(false);
+    }
+    expect([await required(), deps.repos.auditLogs.all().length]).toEqual([false, audited]);
   });
 
   it("does not echo an unexpected error", async () => {

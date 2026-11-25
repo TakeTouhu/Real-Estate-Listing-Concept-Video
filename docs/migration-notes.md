@@ -3288,3 +3288,21 @@ address: `127.0.0.1` for `localhost`, or another port, is refused. Run
 
 **Rolling back.** To RD-8g's build: safe. The host rule returns
 everywhere, and nothing was stored.
+
+## RD-9b — the signed-in work routes check their origin
+
+**No migration** (ADR-0174). Migration 35 stays the last.
+
+**What changes at deploy.** Uploads, photo analysis and review, video
+project creation, storyboard composition and the organization's MFA
+requirement now accept a post only from `APP_BASE_URL`'s origin, as the
+20 routes RD-9a covered do. A wrong `APP_BASE_URL` now also stops
+uploads and the review pages with `403`. Each refusal is logged at
+`warn` as `ORIGIN_REFUSED`, with its reason and route.
+
+**On a development machine.** Nothing new: open the web app at exactly
+`APP_BASE_URL` where it is set. Run `pnpm test` without `APP_BASE_URL`
+in the shell.
+
+**Rolling back.** To RD-9a's build: safe. These 11 routes rely on
+`SameSite=Lax` alone again, and nothing was stored.

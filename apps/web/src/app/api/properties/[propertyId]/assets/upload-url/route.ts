@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { appErrorToResponse } from "@/lib/http";
+import { isSameOriginPost } from "@/lib/same-origin";
 import { getRateLimiter, limitJsonRequest } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ propertyId: string }> },
 ): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/properties/[propertyId]/assets/upload-url")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A photo's upload must be started from this site"));
+  }
   const current = await getCurrentUser();
   if (!current) return appErrorToResponse(new AppError("UNAUTHENTICATED", "Sign in required"));
   const { propertyId } = await context.params;

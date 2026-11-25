@@ -11,6 +11,7 @@ import {
   InMemoryMediaAssetRepository,
   InMemoryPropertyRepository,
   InMemoryRateLimitStore,
+  type TestDeps,
 } from "@app/domain/testing";
 import { AppError, RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/shared";
 
@@ -156,7 +157,10 @@ beforeEach(async () => {
   currentUser.value = { user: { id: creator.id } };
 });
 
-const json = (body: unknown) => new Request("http://t/api", { method: "POST", body: JSON.stringify(body) });
+/** Posted as the app's pages post: with no `APP_BASE_URL` here, the host is compared (ADR-0174). */
+const SITE = { host: "t", origin: "http://t" };
+const json = (body: unknown, headers: Record<string, string> = SITE) =>
+  new Request("http://t/api", { method: "POST", headers, body: JSON.stringify(body) });
 const query = () => new Request(`http://t/api?organizationId=${encodeURIComponent(ctx.orgId)}`);
 const asset = (assetId: string) => ({ params: Promise.resolve({ assetId }) });
 const property = (propertyId: string) => ({ params: Promise.resolve({ propertyId }) });
@@ -246,7 +250,7 @@ describe("the upload routes' limit per account (ADR-0173)", () => {
     const property = { params: Promise.resolve({ propertyId: ctx.mine.propertyId }) };
     expect((await requestUpload(json({ organizationId: ctx.orgId }), property)).status).toBe(422);
     expect((await completeUpload(json({}), asset(ctx.mine.pending))).status).toBe(422);
-    const unreadable = new Request("http://t/api", { method: "POST", body: "{" });
+    const unreadable = new Request("http://t/api", { method: "POST", headers: SITE, body: "{" });
     expect((await retryUpload(unreadable, asset(ctx.mine.pending))).status).toBe(422);
     currentUser.value = null;
     expect((await mine().link()).status).toBe(401);
@@ -322,5 +326,39 @@ describe("the photo download link's limit per account (ADR-0173)", () => {
       body: { error: { code: "INTERNAL_ERROR", message: "Unexpected error", details: {} } },
     });
     expect([ctx.storage.signed, issued().length]).toEqual([signed, audited]);
+  });
+});
+
+describe("the origin check (ADR-0174)", () => {
+  it.each([
+    ["no origin", { host: "t" }],
+    ["another site", { host: "t", origin: "https://evil.example.net" }],
+  ])("refuses a post from %s before reading, counting or signing anything, signed in or not", async (_, headers) => {
+    const store = new InMemoryRateLimitStore();
+    const hits = vi.spyOn(store, "hit");
+    limits.value = limitsOf({}, store);
+    const checks = vi.spyOn((propertyServices.value as { assets: AssetService }).assets, "completeUpload");
+    const audits = () => (identity.value as { deps: TestDeps }).deps.repos.auditLogs.all().length;
+    const before = [ctx.storage.signed, audits()];
+    const routes = [
+      [(r: Request) => requestUpload(r, property(ctx.mine.propertyId)), "started"],
+      [(r: Request) => completeUpload(r, asset(ctx.mine.pending)), "completed"],
+      [(r: Request) => retryUpload(r, asset(ctx.mine.pending)), "retried"],
+    ] as const;
+    for (const user of [{ user: { id: ctx.creatorId } }, null]) {
+      currentUser.value = user;
+      for (const [call, done] of routes) {
+        const request = json({ organizationId: ctx.orgId, filename: "x.jpg", sizeBytes: 10 }, headers);
+        const message = `A photo's upload must be ${done} from this site`;
+        expect(await seen(await call(request))).toEqual({
+          status: 403,
+          body: { error: { code: "FORBIDDEN", message, details: {} } },
+        });
+        expect(request.bodyUsed).toBe(false);
+      }
+    }
+    expect(hits).not.toHaveBeenCalled();
+    expect(checks).not.toHaveBeenCalled();
+    expect([ctx.storage.signed, audits()]).toEqual(before);
   });
 });

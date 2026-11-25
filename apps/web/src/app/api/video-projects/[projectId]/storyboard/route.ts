@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse } from "@/lib/http";
+import { isSameOriginPost } from "@/lib/same-origin";
 import { getStoryboardService, toStoryboardReadDto } from "@/lib/storyboard";
 import { readJsonBody, requireOrganizationIdFromQuery, requiredPositiveInteger } from "@/lib/request";
 
@@ -52,6 +53,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ projectId: string }> },
 ): Promise<NextResponse> {
+  if (!isSameOriginPost(request, "POST /api/video-projects/[projectId]/storyboard")) {
+    return appErrorToResponse(new AppError("FORBIDDEN", "A storyboard must be composed from this site"));
+  }
   const current = await getCurrentUser();
   if (!current) return appErrorToResponse(new AppError("UNAUTHENTICATED", "Sign in required"));
   const { projectId } = await context.params;
