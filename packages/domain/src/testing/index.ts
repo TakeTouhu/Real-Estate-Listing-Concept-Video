@@ -6,3 +6,5 @@ export * from "./in-memory-generation";
 export * from "./in-memory-mfa";
 export * from "./in-memory-units";
 export * from "./in-memory-unit-purchases";
+export * from "./in-memory-rate-limit";
+export * from "./rate-limit-contract";
