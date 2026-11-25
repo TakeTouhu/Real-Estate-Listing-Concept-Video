@@ -10,25 +10,38 @@ import {
   createTestDeps,
   InMemoryMediaAssetRepository,
   InMemoryPropertyRepository,
+  InMemoryRateLimitStore,
 } from "@app/domain/testing";
+import { AppError, RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/shared";
 
 /**
  * Reach through the HTTP routes (Phase 6I-1, ADR-0064). Only session
  * resolution is stubbed; the routes run against the real PropertyService and
  * AssetService over in-memory repositories. A CREATOR asking for a Property it
  * is not responsible for, or a photo under it, gets exactly the response it
- * would get for an id that does not exist.
+ * would get for an id that does not exist. The upload limit runs for real,
+ * on an in-memory store made afresh for each test (ADR-0173).
  */
 const PASSWORD = "password-123456";
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 2044 }, (_, i) => i % 251)]);
 
 const currentUser = vi.hoisted(() => ({ value: null as { user: { id: string } } | null }));
 const propertyServices = vi.hoisted(() => ({ value: null as unknown }));
+const identity = vi.hoisted(() => ({ value: null as unknown }));
+const limits = vi.hoisted(() => ({ value: null as unknown }));
 
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: () => Promise.resolve(currentUser.value),
 }));
 vi.mock("@/lib/property", () => ({ getPropertyServices: () => propertyServices.value }));
+vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => limits.value,
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
+const limitsOf = (settings: Partial<Record<RateLimitSetting, string>>, store = new InMemoryRateLimitStore()) =>
+  new WebRateLimits(store, { ...RATE_LIMIT_DEFAULTS, ...settings, SESSION_SECRET: "x".repeat(32) }, { warn: vi.fn() });
 
 const { GET: listProperties } = await import("@/app/api/properties/route");
 const { POST: requestUpload } = await import("@/app/api/properties/[propertyId]/assets/upload-url/route");
@@ -69,6 +82,7 @@ class MapStorage implements ObjectStorage {
 
 interface Ctx {
   readonly orgId: string;
+  readonly ownerId: string;
   readonly creatorId: string;
   readonly storage: MapStorage;
   /** The CREATOR is responsible for `mine`; `theirs` is unassigned. */
@@ -79,6 +93,8 @@ let ctx: Ctx;
 
 beforeEach(async () => {
   const deps = createTestDeps();
+  identity.value = { deps };
+  limits.value = limitsOf({});
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   const owner = await auth.register({ email: "o@e.com", password: PASSWORD, name: "Owner" });
   const creator = await auth.register({ email: "c@e.com", password: PASSWORD, name: "Creator" });
@@ -131,6 +147,7 @@ beforeEach(async () => {
   };
   ctx = {
     orgId: organization.id,
+    ownerId: owner.id,
     creatorId: creator.id,
     storage,
     mine: await seed(creator.id),
@@ -183,4 +200,73 @@ describe("Property and photo routes for a member out of reach", () => {
       expect((await route.call(route.of(ctx.mine))).status).toBe(200);
     });
   }
+});
+
+describe("the upload routes' limit per account (ADR-0173)", () => {
+  const services = () => (propertyServices.value as { assets: AssetService }).assets;
+  const mine = () => ({
+    link: () => routes["POST upload-url"]!.call(ctx.mine.propertyId),
+    retry: () => routes["POST retry"]!.call(ctx.mine.pending),
+    check: () => routes["POST complete"]!.call(ctx.mine.pending),
+  });
+
+  it("counts upload links, retries and checks together, and refuses the next with the JSON answer", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_UPLOAD: "2/86400" });
+    expect((await mine().link()).status).toBe(200);
+    expect((await mine().retry()).status).toBe(200);
+    const signed = ctx.storage.signed;
+    const checks = vi.spyOn(services(), "completeUpload");
+    for (const call of [mine().check, mine().link, mine().retry]) {
+      const refused = await call();
+      expect([refused.status, refused.headers.get("retry-after"), refused.headers.get("cache-control")]).toEqual([
+        429,
+        "86400",
+        "no-store",
+      ]);
+      expect(await seen(refused)).toEqual({
+        status: 429,
+        body: {
+          error: {
+            code: "RATE_LIMITED",
+            message: "Too many uploads. Try again in 24 hours.",
+            details: { retryAfterSeconds: 86400 },
+          },
+        },
+      });
+    }
+    expect(checks).not.toHaveBeenCalled();
+    expect(ctx.storage.signed).toBe(signed);
+    // Another member of the same organization has a count of their own: no key holds the organization.
+    currentUser.value = { user: { id: ctx.ownerId } };
+    expect((await mine().link()).status).toBe(200);
+  });
+
+  it("counts only after the session and the body are checked", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_UPLOAD: "1/86400" });
+    const property = { params: Promise.resolve({ propertyId: ctx.mine.propertyId }) };
+    expect((await requestUpload(json({ organizationId: ctx.orgId }), property)).status).toBe(422);
+    expect((await completeUpload(json({}), asset(ctx.mine.pending))).status).toBe(422);
+    const unreadable = new Request("http://t/api", { method: "POST", body: "{" });
+    expect((await retryUpload(unreadable, asset(ctx.mine.pending))).status).toBe(422);
+    currentUser.value = null;
+    expect((await mine().link()).status).toBe(401);
+    currentUser.value = { user: { id: ctx.creatorId } };
+    expect((await mine().link()).status).toBe(200);
+  });
+
+  it("fails closed with the route's own 500, never the limiter's text, and issues nothing", async () => {
+    const broken = new InMemoryRateLimitStore();
+    broken.hit = () => Promise.reject(new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row"));
+    limits.value = limitsOf({}, broken);
+    const signed = ctx.storage.signed;
+    const checks = vi.spyOn(services(), "completeUpload");
+    for (const call of Object.values(mine())) {
+      expect(await seen(await call())).toEqual({
+        status: 500,
+        body: { error: { code: "INTERNAL_ERROR", message: "Unexpected error", details: {} } },
+      });
+    }
+    expect(checks).not.toHaveBeenCalled();
+    expect(ctx.storage.signed).toBe(signed);
+  });
 });

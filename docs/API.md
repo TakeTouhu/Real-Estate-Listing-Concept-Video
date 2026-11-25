@@ -118,6 +118,9 @@ This endpoint must verify the current WaveSpeedAI-supported signature or authent
 }
 ```
 
+*A rate limit's refusal (`RATE_LIMITED`) answers 429 with `Retry-After` in
+seconds and `details.retryAfterSeconds` (ADR-0173).*
+
 ## Events
 
 - `generation.queued`

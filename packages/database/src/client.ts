@@ -11,6 +11,7 @@ const holder = globalThis as typeof globalThis & {
   appPrismaClient?: PrismaClient;
   readinessPrismaClient?: PrismaClient;
   rateLimitPrismaClient?: PrismaClient;
+  signedInRateLimitPrismaClient?: PrismaClient;
 };
 
 /**
@@ -93,9 +94,20 @@ export function statementLimitedDatabaseUrl(url: string, connections: number, st
  * itself as the first does.
  */
 export function getRateLimitPrismaClient(url: string | undefined): PrismaClient {
-  return (holder.rateLimitPrismaClient ??= new PrismaClient(
-    url === undefined ? undefined : { datasources: { db: { url } } },
-  ));
+  return (holder.rateLimitPrismaClient ??= limiterClient(url));
+}
+
+/**
+ * The process's PrismaClient for the limits of signed-in routes alone
+ * (ADR-0173 Decision 6), made as the first limiter client is: a flood on
+ * sign-in, sign-up or a reset holds that client's connections, never these.
+ */
+export function getSignedInRateLimitPrismaClient(url: string | undefined): PrismaClient {
+  return (holder.signedInRateLimitPrismaClient ??= limiterClient(url));
+}
+
+function limiterClient(url: string | undefined): PrismaClient {
+  return new PrismaClient(url === undefined ? undefined : { datasources: { db: { url } } });
 }
 
 export type { PrismaClient };

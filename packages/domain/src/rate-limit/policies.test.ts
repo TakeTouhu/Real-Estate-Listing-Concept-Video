@@ -22,6 +22,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       "password-reset-email.client": plain("password-reset-email.client", 20, 3600),
       "verification-email.address": plain("verification-email.address", 3, 3600),
       "sign-up.client": plain("sign-up.client", 60, 3600),
+      "upload.user": plain("upload.user", 1000, 86400),
     });
     expect(Object.keys(policies)).toEqual([...RATE_LIMIT_POLICY_NAMES]);
     expect(Object.isFrozen(policies)).toBe(true);
@@ -37,6 +38,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "9/900",
       RATE_LIMIT_VERIFICATION_EMAIL: "2/200",
       RATE_LIMIT_SIGN_UP_PER_IP: "8/800",
+      RATE_LIMIT_UPLOAD: "6/600",
     });
     expect(policies).toEqual({
       "sign-in.address": withCooldown("sign-in.address", 7, 700),
@@ -46,6 +48,7 @@ describe("the policies from the settings (ADR-0170)", () => {
       "password-reset-email.client": plain("password-reset-email.client", 9, 900),
       "verification-email.address": plain("verification-email.address", 2, 200),
       "sign-up.client": plain("sign-up.client", 8, 800),
+      "upload.user": plain("upload.user", 6, 600),
     });
   });
 

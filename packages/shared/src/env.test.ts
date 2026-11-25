@@ -420,6 +420,7 @@ describe("serverEnvSchema", () => {
         RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "20/3600",
         RATE_LIMIT_VERIFICATION_EMAIL: "3/3600",
         RATE_LIMIT_SIGN_UP_PER_IP: "60/3600",
+        RATE_LIMIT_UPLOAD: "1000/86400",
       });
       expect(Object.isFrozen(RATE_LIMIT_DEFAULTS)).toBe(true);
     });
@@ -572,6 +573,7 @@ describe("loadServerEnv", () => {
       RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "20/3600 marker",
       RATE_LIMIT_VERIFICATION_EMAIL: "marker 3/3600",
       RATE_LIMIT_SIGN_UP_PER_IP: "60/marker",
+      RATE_LIMIT_UPLOAD: "marker/86400",
       FORWARDED_FOR_TRUSTED_ENTRIES: "marker",
     };
     // The login is valid beside a host, so it has no line of its own, and still must not be repeated.

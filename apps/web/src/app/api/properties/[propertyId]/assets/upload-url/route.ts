@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
+import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { appErrorToResponse } from "@/lib/http";
+import { getRateLimiter, limitJsonRequest } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +42,9 @@ export async function POST(
   }
 
   try {
+    // Counted by the account after the body is checked, before the service, and never given back; upload links,
+    // retries and checks share one limit (ADR-0173 Decisions 3 and 4).
+    await limitJsonRequest(getRateLimiter, "UPLOAD", current.user.id, getIdentityServices().deps.clock.now());
     const { asset, upload } = await getPropertyServices().assets.requestUpload(current.user.id, {
       organizationId: body.organizationId,
       propertyId,

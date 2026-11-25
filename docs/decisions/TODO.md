@@ -2013,6 +2013,17 @@ into on 2026-11-17.
       where the web app keeps its photos. It refuses both stores together.
       CI's `database` job runs the pipeline's suite on both stores.*
 
+## Open in RD-8 — what the work limits leave open
+
+- [ ] **A signed-in flood can hold the signed-in limiter client**; an
+      edge limit per client address is part 2's.
+- [ ] **One upload link may be PUT many times within its 600 s**, and the
+      PUT reads the whole body before checking its size
+      (`storage/upload/route.ts:29-35`).
+- [ ] **Organization and Property creation are not limited**
+      (`api/organizations/route.ts`, `POST /api/properties`); product
+      owner: whether an organization without a plan may upload.
+
 ## Open in RD-4c — what the development pipeline beside the emulator leaves open
 
 - [ ] **Run the browser test on the emulator.** It keeps objects in its own
@@ -2045,16 +2056,26 @@ into on 2026-11-17.
       the others wait up to Prisma's pool wait, then fail closed.
       Measure on the deployment; a shorter pool wait or more connections
       would need a decision.
+      *Amended in RD-8b (ADR-0173): signed-in routes count on a limiter
+      client of their own, so a flood on sign-in, sign-up or reset no
+      longer holds them; a signed-in flood can still hold that client. An
+      edge limit per client address is part 2's.*
 - [ ] **Disable a factor after 100 failures; email the person when a
       correct password is followed by wrong codes** (product owner's;
       NIST SP 800-63B, OWASP).
 - [ ] **How support clears a real person's wait**: no operator command
       exists; one would be an audited admin action.
+      *Amended in RD-8b (ADR-0173): daily keys (uploads, and invitations
+      from RD-8c) can hold one person for up to a day; no key holds an
+      organization.*
 - [ ] **Whether entering a wait is audited.**
 - [ ] **The MFA page's "Attempts left" counts this sign-in only**; the
       per-account limit may refuse sooner.
-- [ ] **Limit `POST /api/mfa/disable` and send `Retry-After`** with RD-8's
+- [x] **Limit `POST /api/mfa/disable` and send `Retry-After`** with RD-8's
       first JSON route, if measurement asks for it.
+      *Done in RD-8b (ADR-0173): JSON refusals answer 429 with
+      `Retry-After`; `POST /api/mfa/disable` stays unlimited (ADR-0171
+      Decision 4).*
 
 ## Open in RD-7c — what the rate-limit settings leave open
 
@@ -2074,6 +2095,8 @@ into on 2026-11-17.
       each for the decay period. A flood on one key queues on its row; a
       read-only check of a locked key before the hit would remove that
       queue, but must never refuse an unlocked key at its limit.
+      *Amended in RD-8b: daily windows keep one row per active account and
+      policy for up to a day.*
 - [ ] **Raw comparisons of timestamp columns assume a UTC session.** The
       limiter converts its times explicitly; other repositories compare a
       `TIMESTAMP(3)` column with a parameter directly (for example
@@ -2439,6 +2462,10 @@ them is **built**. Each item below records the settled decision and what remains
       the internal Clean Master, composition temp, 30-day retained old versions
       and Audit/Billing records. No automatic deletion, no automatic overage
       charge.
+      *Amended in RD-8b (ADR-0173): until this is built, the per-account
+      upload limit is the only bound on stored volume; organizations and
+      Properties are created without limit, and an organization without a
+      plan may upload.*
 - [ ] **Produce and store a durable overlay-free Clean Master** at final
       composition (ADR-0052 Decision 17) and produce every customer deliverable
       from it by applying the disclosure/logo layer. Retain and delete it with

@@ -3138,3 +3138,24 @@ refuses the new setting from the shell.
 **Rolling back.** To RD-7e's build: safe, even with the new setting
 set, which that build's schema does not know and ignores. Sign-up is no
 longer limited, and the table's rows for it are left unread.
+
+## RD-8b — uploads are limited per account
+
+**No migration** (ADR-0173). Migration 35 stays the last: the table's
+CHECK takes the new policy's name.
+
+**What changes at deploy.** Upload links, retries and checks are counted
+per signed-in account, 1,000 a day by default, failed ones included.
+`RATE_LIMIT_UPLOAD` is optional and takes its default; a value out of
+form is refused, by the web app and the worker alike. Signed-in routes
+count on a second limiter database client, of up to 3 connections more,
+which count against the database's connection budget.
+
+**On a development machine.** A 1,001st upload request of one account
+within 24 hours of its first is refused until those 24 hours end.
+`DELETE FROM "rate_limit_counters";` clears every count.
+
+**Rolling back.** To RD-8a's build: safe, even with the new setting set,
+which that build's schema does not know and ignores. Uploads are no
+longer limited, the second client is not opened, and the table's rows
+for uploads are left unread.
