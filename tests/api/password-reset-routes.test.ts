@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthService, MfaService, createMfaSecretCipher, systemMfaRandom, totpStep } from "@app/domain";
-import { createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
-import { hotp } from "@app/shared";
+import { InMemoryRateLimitStore, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
+import { RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
 import { readDevelopmentEmailOutbox } from "@app/storage";
 
 /**
@@ -23,6 +23,7 @@ const BASE = "http://localhost:3210";
 const cookie = vi.hoisted(() => ({ value: undefined as string | undefined }));
 const env = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const identity = vi.hoisted(() => ({ value: null as unknown }));
+const limits = vi.hoisted(() => ({ value: null as unknown }));
 
 // `next` is installed for the web app only, so its module is named by its resolved path.
 const nextHeaders = await vi.hoisted(async () => {
@@ -35,6 +36,12 @@ vi.mock(nextHeaders, () => ({
 }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
+// The sign-in limits run for real, on an in-memory store made afresh for each test (ADR-0171).
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => limits.value,
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
 
 const { getSignIn } = await import("@/lib/auth");
 const { POST: login } = await import("@/app/api/auth/login/route");
@@ -48,6 +55,8 @@ let userId: string;
 
 beforeEach(async () => {
   deps = createTestDeps();
+  const settings = { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) };
+  limits.value = new WebRateLimits(new InMemoryRateLimitStore(), settings);
   auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   identity.value = { deps, auth };
   outbox = mkdtempSync(join(tmpdir(), "vtavision-outbox-reset-"));

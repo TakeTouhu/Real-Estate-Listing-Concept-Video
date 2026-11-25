@@ -1,13 +1,14 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { rateLimitPolicy } from "@app/domain";
-import { createPrismaRateLimitStore } from "@app/database";
+import { createPrismaRateLimitStore, statementLimitedDatabaseUrl } from "@app/database";
 import {
   RATE_LIMIT_CONTRACT_CASES,
   RATE_LIMIT_CONTRACT_SIGN_IN,
   RATE_LIMIT_CONTRACT_T0,
   replayRateLimitContract,
 } from "@app/domain/testing";
+import { RATE_LIMIT_DATABASE_CONNECTIONS, RATE_LIMIT_STATEMENT_MILLISECONDS } from "@/lib/rate-limit";
 
 /**
  * The abuse-limit counters in PostgreSQL (RD-7b, ADR-0169): migration 35's
@@ -211,5 +212,24 @@ describe("the table's CHECK", () => {
              ('itest.password-reset-email', ${"b".repeat(64)}, ${at(0)}, 4, ${at(10)}, 1, ${at(60)})`;
     expect(await prisma.$queryRaw<{ n: bigint }[]>`
       SELECT count(*) AS n FROM "rate_limit_counters" WHERE "policy" LIKE 'itest.%'`).toEqual([{ n: 2n }]);
+  });
+});
+
+describe("the limiter's own client (ADR-0171)", () => {
+  it("decides a hit over its own client, and has the database end a statement after a second", async () => {
+    const limits = [RATE_LIMIT_DATABASE_CONNECTIONS, RATE_LIMIT_STATEMENT_MILLISECONDS] as const;
+    const url = statementLimitedDatabaseUrl(process.env.DATABASE_URL ?? "", ...limits);
+    const own = new PrismaClient({ datasources: { db: { url } } });
+    try {
+      const hit = await createPrismaRateLimitStore(own).hit(shortPolicy, subject(1), at(0));
+      expect(hit).toMatchObject({ allowed: true, count: 1 });
+      expect(await own.$queryRaw`SHOW statement_timeout`).toEqual([{ statement_timeout: "1s" }]);
+      const started = Date.now();
+      await expect(own.$queryRaw`SELECT 1 FROM pg_sleep(3)`).rejects.toMatchObject({ code: "P2010" });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+      expect(Date.now() - started).toBeLessThan(2_500);
+    } finally {
+      await own.$disconnect();
+    }
   });
 });

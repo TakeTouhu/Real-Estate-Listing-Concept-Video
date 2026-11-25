@@ -3082,3 +3082,23 @@ shell.
 **Rolling back.** To RD-7b's build: safe. The settings are no longer
 checked, and a production start no longer needs the new one. Nothing
 stores anything new.
+
+## RD-7d — sign-in and wrong MFA codes are limited
+
+**No migration** (ADR-0171). Migration 35 stays the last.
+
+**What changes at deploy.** Sign-in is limited per typed address and,
+where `FORWARDED_FOR_TRUSTED_ENTRIES` is set, per client address; wrong
+MFA codes are limited per user, across sign-ins. The web app writes
+`rate_limit_counters` from the first sign-in. The limiter opens a
+database client of its own, of up to 3 connections, which count against
+the database's connection budget beside the web app's own and the
+readiness probe's.
+
+**On a development machine.** Five wrong passwords for one address, or
+five wrong codes for one user, within 15 minutes now hold the next
+attempt for 15 minutes. `DELETE FROM "rate_limit_counters";` clears
+every count.
+
+**Rolling back.** To RD-7c's build: safe. Nothing is limited, and the
+table's rows are left unread.
