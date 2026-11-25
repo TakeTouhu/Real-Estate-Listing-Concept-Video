@@ -125,6 +125,48 @@ export const SMTP_SETTINGS = [
 ] as const;
 
 /**
+ * The abuse limits, one setting each (ADR-0170), in the order the browser test names them when it refuses them:
+ * sign-in per typed address and per client address, wrong MFA codes per user, reset emails per address and per
+ * client address, verification emails per address. No limit can be turned off.
+ */
+export const RATE_LIMIT_SETTINGS = [
+  "RATE_LIMIT_SIGN_IN",
+  "RATE_LIMIT_MFA_CODE",
+  "RATE_LIMIT_PASSWORD_RESET_EMAIL",
+  "RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP",
+  "RATE_LIMIT_VERIFICATION_EMAIL",
+] as const;
+
+/** One of the abuse limits' settings. */
+export type RateLimitSetting = (typeof RATE_LIMIT_SETTINGS)[number];
+
+/**
+ * Each limit's default, `count/seconds` (ADR-0170): the values the product owner approved on 2026-11-16 for sign-in
+ * and the emails per address, the CTO's for wrong MFA codes and reset emails per client address.
+ */
+export const RATE_LIMIT_DEFAULTS: Readonly<Record<RateLimitSetting, string>> = Object.freeze({
+  RATE_LIMIT_SIGN_IN: "5/900",
+  RATE_LIMIT_MFA_CODE: "5/900",
+  RATE_LIMIT_PASSWORD_RESET_EMAIL: "3/3600",
+  RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "20/3600",
+  RATE_LIMIT_VERIFICATION_EMAIL: "3/3600",
+});
+
+/**
+ * Whether `value` is a limit as its setting takes it: `count/seconds` in plain digits, 1 to 99,999 hits in 1 to
+ * 999,999 seconds, with no sign, space or leading zero. The bounds guard against a typo, not a policy (ADR-0170).
+ */
+export function isRateLimitValue(value: string): boolean {
+  return /^[1-9][0-9]{0,4}\/[1-9][0-9]{0,5}$/.test(value);
+}
+
+/** A limit's setting: text with a check, as CLAMAV_PORT is, and its default when unset. No message repeats a value. */
+function rateLimitSetting(name: RateLimitSetting) {
+  const message = `${name} must be count/seconds: 1 to 99999 hits in 1 to 999999 seconds`;
+  return z.string().refine(isRateLimitValue, message).default(RATE_LIMIT_DEFAULTS[name]);
+}
+
+/**
  * Why an address is not an http(s) origin, or null when it is: no user, path,
  * query or fragment, so nothing built on it can lead anywhere else; https in
  * production. An application base address must be one to start an emailed
@@ -157,7 +199,10 @@ export const serverEnvSchema = z
     // start of the web app refuses without it (ADR-0151).
     DATABASE_URL: z.string().url().optional(),
 
-    // Session signing secret for the web session cookie.
+    // The key the abuse limits' subjects are made from (ADR-0170): an
+    // address, a client address or a user id is counted only as an HMAC under
+    // a key derived from it (`rateLimitSubjectKey`). No session is signed
+    // with it. Changing it only starts every limit's count afresh.
     SESSION_SECRET: z.string().min(16, "SESSION_SECRET must be at least 16 characters"),
     HEALTHCHECK_API_TOKEN: z
       .string()
@@ -260,6 +305,26 @@ export const serverEnvSchema = z
     MFA_SECRET_KEY: z
       .string()
       .regex(/^[0-9a-fA-F]{64}$/, "MFA_SECRET_KEY must be 32 bytes as 64 hex characters")
+      .optional(),
+
+    // The abuse limits (ADR-0170), each `count/seconds`, its default when
+    // unset: sign-in per typed address and per client address, wrong MFA
+    // codes per user, reset emails per address and per client address,
+    // verification emails per address. Read by nothing yet (RD-7d, RD-7e).
+    RATE_LIMIT_SIGN_IN: rateLimitSetting("RATE_LIMIT_SIGN_IN"),
+    RATE_LIMIT_MFA_CODE: rateLimitSetting("RATE_LIMIT_MFA_CODE"),
+    RATE_LIMIT_PASSWORD_RESET_EMAIL: rateLimitSetting("RATE_LIMIT_PASSWORD_RESET_EMAIL"),
+    RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: rateLimitSetting("RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP"),
+    RATE_LIMIT_VERIFICATION_EMAIL: rateLimitSetting("RATE_LIMIT_VERIFICATION_EMAIL"),
+
+    // How many entries at the right end of X-Forwarded-For our own
+    // infrastructure writes; the client is the left-most of them (ADR-0170).
+    // Unset, no limit is kept by client address. Plain digits, 1 to 5, kept
+    // as text, as CLAMAV_PORT is. A production start of the web app refuses
+    // without it; the value is measured at deployment, never guessed.
+    FORWARDED_FOR_TRUSTED_ENTRIES: z
+      .string()
+      .refine((v) => /^[1-5]$/.test(v), "FORWARDED_FOR_TRUSTED_ENTRIES must be a whole number from 1 to 5")
       .optional(),
 
     // Image-analysis provider selection. Phase 3 ships the deterministic

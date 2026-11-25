@@ -139,6 +139,7 @@ describe("buildReadiness", () => {
       'malware scanning: "passthrough" is not a production adapter',
       "email: none is configured, so sign-up cannot send its verification link",
       "APP_BASE_URL is not set",
+      "FORWARDED_FOR_TRUSTED_ENTRIES is not set",
     ];
     expect(readiness.status).toBe("degraded");
     expect(readiness.checks.filter((check) => !check.ok)).toEqual([

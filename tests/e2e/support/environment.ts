@@ -1,6 +1,6 @@
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SMTP_SETTINGS } from "@app/shared";
+import { RATE_LIMIT_SETTINGS, SMTP_SETTINGS } from "@app/shared";
 
 /**
  * Where the browser test runs, and with what (GS-13a, ADR-0121).
@@ -69,7 +69,8 @@ export function e2eDatabaseUrl(source: NodeJS.ProcessEnv = process.env): string 
  * The environment of the web app and of every command the test runs: one
  * database, one shared folder and one signing secret, so a photo the web app
  * stored is the one a command reads, and one outbox. Refused under
- * `NODE_ENV=production`, and beside a Cloud Storage, ClamAV or SMTP setting.
+ * `NODE_ENV=production`, and beside a Cloud Storage, ClamAV, SMTP or
+ * rate-limit setting.
  */
 export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   if (source.NODE_ENV === "production") {
@@ -88,6 +89,12 @@ export function e2eEnvironment(source: NodeJS.ProcessEnv = process.env): Record<
   // It reads its mail from the outbox: a setting from the shell would name a server it does not run (ADR-0167).
   if (SMTP_SETTINGS.some((name) => source[name] !== undefined)) {
     throw new Error(`The browser test reads its mail from the outbox: unset ${SMTP_SETTINGS.join(", ")}`);
+  }
+  // It runs the limits production starts with, and no client-address key (ADR-0170): a value from the shell
+  // would change what it runs.
+  const limits = [...RATE_LIMIT_SETTINGS, "FORWARDED_FOR_TRUSTED_ENTRIES"];
+  if (limits.some((name) => source[name] !== undefined)) {
+    throw new Error(`The browser test runs the default limits: unset ${limits.join(", ")}`);
   }
   return {
     DATABASE_URL: e2eDatabaseUrl(source),

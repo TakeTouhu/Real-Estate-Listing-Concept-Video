@@ -3061,3 +3061,24 @@ db:migrate` applies it. The database suite gains
 never reads. To remove it as well, drop it
 (`DROP TABLE "rate_limit_counters";`) and delete migration 35's row from
 `_prisma_migrations`, or a later deploy would not create it again.
+
+## RD-7c — rate-limit settings and the client address
+
+**No migration** (ADR-0170). Migration 35 stays the last.
+
+**What changes at deploy.** A production start of the web app now needs
+`FORWARDED_FOR_TRUSTED_ENTRIES`: how many entries at the right end of
+`X-Forwarded-For` the deployment's own infrastructure writes, measured
+there, never guessed. The five `RATE_LIMIT_*` settings are optional and
+take their defaults; a value out of form is refused in every
+environment, by the web app and the worker alike. Nothing is limited
+yet: no route reads them until RD-7d.
+
+**On a development machine.** Nothing changes unless a `RATE_LIMIT_*`
+setting is set: a value out of form is then refused. The browser test
+refuses the five limits and `FORWARDED_FOR_TRUSTED_ENTRIES` from the
+shell.
+
+**Rolling back.** To RD-7b's build: safe. The settings are no longer
+checked, and a production start no longer needs the new one. Nothing
+stores anything new.
