@@ -423,6 +423,7 @@ describe("serverEnvSchema", () => {
         RATE_LIMIT_UPLOAD: "1000/86400",
         RATE_LIMIT_INVITATION: "50/86400",
         RATE_LIMIT_ANALYSIS: "300/3600",
+        RATE_LIMIT_DOWNLOAD: "60/3600",
       });
       expect(Object.isFrozen(RATE_LIMIT_DEFAULTS)).toBe(true);
     });
@@ -578,6 +579,7 @@ describe("loadServerEnv", () => {
       RATE_LIMIT_UPLOAD: "marker/86400",
       RATE_LIMIT_INVITATION: "50/marker",
       RATE_LIMIT_ANALYSIS: "300/3600marker",
+      RATE_LIMIT_DOWNLOAD: "marker60/3600",
       FORWARDED_FOR_TRUSTED_ENTRIES: "marker",
     };
     // The login is valid beside a host, so it has no line of its own, and still must not be repeated.

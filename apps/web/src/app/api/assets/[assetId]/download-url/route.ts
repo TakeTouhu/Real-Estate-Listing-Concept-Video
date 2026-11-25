@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
+import { getIdentityServices } from "@/lib/identity";
 import { getPropertyServices } from "@/lib/property";
 import { appErrorToResponse } from "@/lib/http";
+import { getRateLimiter, limitJsonRequest } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
-/** Issue a short-lived signed download/preview URL for a READY asset. */
+/**
+ * Issue a short-lived signed download/preview URL for a READY asset. Each
+ * request is counted per account with the video downloads, here and never in
+ * the asset service, which page renders also call (ADR-0173 Decision 4).
+ */
 export async function GET(
   request: Request,
   context: { params: Promise<{ assetId: string }> },
@@ -22,6 +28,9 @@ export async function GET(
   }
 
   try {
+    // Counted after the session and the organization are checked, before any link is signed or audited, and never
+    // given back; a refusal answers 429, a limiter that cannot answer the route's own 500 (ADR-0173).
+    await limitJsonRequest(getRateLimiter, "DOWNLOAD", current.user.id, getIdentityServices().deps.clock.now());
     const url = await getPropertyServices().assets.createDownloadUrl(
       current.user.id,
       organizationId,

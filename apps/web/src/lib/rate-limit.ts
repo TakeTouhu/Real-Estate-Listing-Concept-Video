@@ -52,13 +52,15 @@ export type RateLimitedAction =
   | "SIGN_UP"
   | "UPLOAD"
   | "INVITATION"
-  | "ANALYSIS";
+  | "ANALYSIS"
+  | "DOWNLOAD";
 
 /** The signed-in actions, each counted per account on its own plain policy (ADR-0173 Decisions 1 and 3). */
 const ACCOUNT_POLICIES = {
   UPLOAD: "upload.user",
   INVITATION: "invitation.user",
   ANALYSIS: "analysis.user",
+  DOWNLOAD: "download.user",
 } as const satisfies Partial<Record<RateLimitedAction, RateLimitPolicyName>>;
 
 /** A signed-in action counted per account. */
@@ -70,6 +72,7 @@ const WAITS_IN_HOURS: ReadonlySet<RateLimitedAction> = new Set<RateLimitedAction
   "UPLOAD",
   "INVITATION",
   "ANALYSIS",
+  "DOWNLOAD",
 ]);
 
 /** An attempt the limits let through, with what its success settles; or the text that refuses it. */
@@ -100,6 +103,7 @@ const REFUSALS: Readonly<Record<RateLimitedAction, string>> = {
   UPLOAD: "Too many uploads.",
   INVITATION: "Too many invitations.",
   ANALYSIS: "Too many analysis requests.",
+  DOWNLOAD: "Too many downloads.",
 };
 
 /** Whole minutes until `retryAt`, rounded up, at least one. */

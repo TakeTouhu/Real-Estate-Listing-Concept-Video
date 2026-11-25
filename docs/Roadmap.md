@@ -1353,6 +1353,19 @@ error. Another member of the organization keeps its own count.
 Planned, not done: RD-8e downloads; RD-8f generation start; RD-8g Unit
 purchase and the records that close RD-8.
 
+**RD-8e — downloads are limited per account** (ADR-0173, no migration):
+a video download and a photo download link share one count per
+signed-in account, 60 an hour by default, failed ones included, taken in
+the routes after the session and form checks and before any link is
+signed or audited. A refused video download returns to the project
+page, which says "Too many downloads." with the wait; a refused photo
+link answers 429 with `Retry-After`. A limiter that cannot answer
+refuses with the route's own failure. Page renders that sign thumbnails
+or the video preview are not counted. Another member of the
+organization keeps its own count.
+Planned, not done: RD-8f generation start; RD-8g Unit purchase and the
+records that close RD-8.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AppError } from "@app/shared";
+import { InMemoryRateLimitStore } from "@app/domain/testing";
+import { AppError, RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/shared";
 
 /**
  * The download route (GS-12c-3, ADR-0120): what it reads from the project
  * page's form, what it asks the download service, and where each answer sends
  * the member. The service is a recording double: who may download, and that
- * each link is recorded, are proved in its own suites (ADR-0119).
+ * each link is recorded, are proved in its own suites (ADR-0119). The download
+ * limit runs for real, on an in-memory store made afresh for each test, and
+ * counts the photo link beside it (ADR-0173).
  */
 const SITE = "https://app.vtavision.test";
 const PROJECT = "vpr_route_1";
@@ -16,6 +19,8 @@ const USER = "usr_route_1";
 const currentUser = vi.hoisted(() => ({ value: null as { user: { id: string } } | null, reads: 0 }));
 const downloading = vi.hoisted(() => ({ value: null as unknown }));
 const reported = vi.hoisted(() => ({ errors: [] as [string, unknown][] }));
+const limits = vi.hoisted(() => ({ value: null as unknown, broken: null as Error | null }));
+const photoLinks = vi.hoisted(() => ({ asked: [] as string[] }));
 
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: () => {
@@ -31,8 +36,36 @@ vi.mock("@/lib/video-download", async (actual) => ({
   }),
 }));
 
+vi.mock("@/lib/identity", () => ({
+  getIdentityServices: () => ({ deps: { clock: { now: () => new Date("2026-11-25T09:00:00.000Z") } } }),
+}));
+vi.mock("@/lib/property", () => ({
+  getPropertyServices: () => ({
+    assets: {
+      createDownloadUrl: (_actor: string, _organizationId: string, assetId: string) => {
+        photoLinks.asked.push(assetId);
+        return Promise.resolve({ url: "/photo", expiresAt: new Date("2026-11-25T09:05:00.000Z") });
+      },
+    },
+  }),
+}));
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => {
+    if (limits.broken) throw limits.broken;
+    return limits.value;
+  },
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
+let warned: [string, unknown][];
+const limitsOf = (settings: Partial<Record<RateLimitSetting, string>>, store = new InMemoryRateLimitStore()) =>
+  new WebRateLimits(store, { ...RATE_LIMIT_DEFAULTS, ...settings, SESSION_SECRET: "x".repeat(32) }, {
+    warn: (message: string, fields?: unknown) => void warned.push([message, fields]),
+  });
+
 const route = await import("@/app/api/video-projects/[projectId]/download/route");
 const { POST } = route;
+const { GET: photoLink } = await import("@/app/api/assets/[assetId]/download-url/route");
 
 const LINK = "/api/storage/download?token=signed.token";
 
@@ -44,6 +77,10 @@ beforeEach(() => {
   currentUser.value = { user: { id: USER } };
   currentUser.reads = 0;
   reported.errors = [];
+  warned = [];
+  photoLinks.asked = [];
+  limits.value = limitsOf({});
+  limits.broken = null;
   asked = [];
   answer = () => Promise.resolve({ url: LINK, expiresAt: new Date("2026-11-06T09:05:00.000Z") });
   downloading.value = {
@@ -242,4 +279,93 @@ describe("what the route refuses before asking for a link", () => {
       expect(asked).toEqual([]);
     },
   );
+});
+
+describe("the download limit per account (ADR-0173)", () => {
+  const limitedTo = (count: number) => (limits.value = limitsOf({ RATE_LIMIT_DOWNLOAD: `${count}/3600` }));
+  const photo = () => photoLink(new Request(`${SITE}/api/assets/ast_1/download-url?organizationId=${ORG}`), {
+    params: Promise.resolve({ assetId: "ast_1" }),
+  });
+
+  it("refuses past the limit back to the project page with its wait, asking for no link", async () => {
+    limitedTo(2);
+    expect((await post()).headers.get("location")).toBe(LINK);
+    expect((await post()).headers.get("location")).toBe(LINK);
+    const refused = await post();
+    const url = location(refused);
+    expect(url.pathname).toBe(PROJECT_PAGE);
+    expect([...url.searchParams]).toEqual([["download", "limited"], ["retry", "60"]]);
+    // A redirect back to a page: no Retry-After rides on it.
+    expect(refused.headers.get("retry-after")).toBeNull();
+    expect(asked).toHaveLength(2);
+    expect(reported.errors).toEqual([]);
+    // Logged by its codes alone.
+    expect(warned).toEqual([
+      ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "DOWNLOAD", dimension: "user" }],
+    ]);
+  });
+
+  it("counts video downloads and photo links together", async () => {
+    limitedTo(2);
+    expect((await photo()).status).toBe(200);
+    expect((await post()).headers.get("location")).toBe(LINK);
+    expect([...location(await post()).searchParams]).toEqual([["download", "limited"], ["retry", "60"]]);
+    const refused = await photo();
+    expect([refused.status, refused.headers.get("retry-after")]).toEqual([429, "3600"]);
+    expect(await error(refused)).toEqual({
+      code: "RATE_LIMITED",
+      message: "Too many downloads. Try again in 60 minutes.",
+    });
+    expect(asked).toHaveLength(1);
+    expect(photoLinks.asked).toEqual(["ast_1"]);
+  });
+
+  it("rounds a wait that is not whole minutes up, never down", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_DOWNLOAD: "1/90" });
+    expect((await post()).headers.get("location")).toBe(LINK);
+    expect([...location(await post()).searchParams]).toEqual([["download", "limited"], ["retry", "2"]]);
+  });
+
+  it("answers a limiter that cannot be built as failed, asking for no link", async () => {
+    limits.broken = new TypeError("The limiter's settings are missing");
+    const url = location(await post());
+    expect(url.pathname).toBe(PROJECT_PAGE);
+    expect([...url.searchParams]).toEqual([["download", "failed"]]);
+    expect(asked).toEqual([]);
+    expect(reported.errors).toEqual([["A download could not be counted", { code: "UNEXPECTED" }]]);
+  });
+
+  it("keeps a count per account: another member of the organization is not held", async () => {
+    limitedTo(1);
+    expect((await post()).headers.get("location")).toBe(LINK);
+    expect(location(await post()).searchParams.get("download")).toBe("limited");
+    currentUser.value = { user: { id: "usr_route_2" } };
+    expect((await post()).headers.get("location")).toBe(LINK);
+    expect(asked).toEqual([[USER, ORG, PROJECT], ["usr_route_2", ORG, PROJECT]]);
+  });
+
+  it("counts only after the origin, the session and the form are checked", async () => {
+    limitedTo(1);
+    expect((await post(fields(), { origin: "https://evil.example.net" })).status).toBe(403);
+    expect((await post(fields(), { origin: SITE }, "application/json")).status).toBe(422);
+    expect((await post({ ...fields(), propertyId: "../a" })).status).toBe(422);
+    currentUser.value = null;
+    expect(location(await post()).pathname).toBe("/login");
+    currentUser.value = { user: { id: USER } };
+    expect((await post()).headers.get("location")).toBe(LINK);
+  });
+
+  it.each([
+    ["an application error", new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row"), "INTERNAL_ERROR"],
+    ["any other error", new TypeError("The rate-limit store is gone"), "UNEXPECTED"],
+  ])("fails closed as failed on %s, never the limiter's text, asking for no link", async (_what, failure, code) => {
+    const broken = new InMemoryRateLimitStore();
+    broken.hit = () => Promise.reject(failure);
+    limits.value = limitsOf({}, broken);
+    const url = location(await post());
+    expect(url.pathname).toBe(PROJECT_PAGE);
+    expect([...url.searchParams]).toEqual([["download", "failed"]]);
+    expect(asked).toEqual([]);
+    expect(reported.errors).toEqual([["A download could not be counted", { code }]]);
+  });
 });

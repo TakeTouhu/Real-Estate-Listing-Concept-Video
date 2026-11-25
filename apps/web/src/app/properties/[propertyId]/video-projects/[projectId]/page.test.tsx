@@ -153,7 +153,9 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-async function page(searchParams: { download?: string | string[] } = {}): Promise<string> {
+async function page(
+  searchParams: { download?: string | string[]; retry?: string | string[] } = {},
+): Promise<string> {
   const element = (await StoryboardPage({
     params: Promise.resolve({ propertyId: "prp_1", projectId: "vpr_1" }),
     searchParams: Promise.resolve(searchParams),
@@ -271,6 +273,10 @@ describe("the project page's download (ADR-0120)", () => {
     expect(await page({ download: "none" })).toContain("There is no delivered video to download.");
     cleanup();
     expect(await page({ download: "failed" })).toContain("The video could not be downloaded. Try again;");
+    cleanup();
+    expect(await page({ download: "limited", retry: "14" })).toContain("Too many downloads. Try again in 14 minutes.");
+    cleanup();
+    expect(await page({ download: "limited" })).toContain("Too many downloads. Try again later.");
     cleanup();
     const text = await page({ download: "Your video was deleted" });
     expect(text).not.toContain("Your video was deleted");

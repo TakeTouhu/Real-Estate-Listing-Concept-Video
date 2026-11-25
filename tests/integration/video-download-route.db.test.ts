@@ -1,7 +1,9 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { managedDeliverableOutputKey } from "@app/domain";
+import { InMemoryRateLimitStore } from "@app/domain/testing";
 import { getPrismaClient } from "@app/database";
+import { RATE_LIMIT_DEFAULTS } from "@app/shared";
 import {
   ASSET_A,
   dropTenants,
@@ -23,9 +25,11 @@ import {
  * a project with no delivered video come back to the page, with nothing
  * audited.
  *
- * Only the session and the environment are stubbed; every service, repository
- * and store is the one the web app builds (the in-memory store, as no shared
- * folder is set).
+ * Only the session, the environment and the limits' store are stubbed; every
+ * service, repository and store is the one the web app builds (the in-memory
+ * store, as no shared folder is set). The download limit runs on an in-memory
+ * store made afresh for each test, so no count is left in the database
+ * (ADR-0173).
  */
 const SITE = "https://app.vtavision.test";
 const OWNER = "usr_itest_download_route_owner";
@@ -46,6 +50,18 @@ vi.mock("@/lib/env", () => ({
 }));
 const signedIn = vi.hoisted(() => ({ id: "" }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: () => Promise.resolve({ user: { id: signedIn.id } }) }));
+const limits = vi.hoisted(() => ({ value: null as unknown }));
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => limits.value,
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
+const limitsOf = (download: string) =>
+  new WebRateLimits(
+    new InMemoryRateLimitStore(),
+    { ...RATE_LIMIT_DEFAULTS, RATE_LIMIT_DOWNLOAD: download, SESSION_SECRET: "x".repeat(32) },
+    { warn: vi.fn() },
+  );
 
 const { POST } = await import("@/app/api/video-projects/[projectId]/download/route");
 const { GET } = await import("@/app/api/storage/download/route");
@@ -137,6 +153,7 @@ describe.skipIf(!HAS_DB)("the download route through the web app's composition, 
       ],
     });
     signedIn.id = OWNER;
+    limits.value = limitsOf(RATE_LIMIT_DEFAULTS.RATE_LIMIT_DOWNLOAD);
   });
 
   afterAll(async () => {
@@ -206,5 +223,18 @@ describe.skipIf(!HAS_DB)("the download route through the web app's composition, 
       `${SITE}/properties/${PROP_A}/video-projects/${PROJECT_A}?download=none`,
     );
     expect(await downloadsAudited()).toEqual([]);
+  });
+
+  it("sends the owner past the download limit back to the page with its wait, auditing no second link", async () => {
+    limits.value = limitsOf("1/3600");
+    await seedJob("DELIVERABLE_READY", "CONSUMED");
+    await deliver();
+    expect((await post(ORG_A)).headers.get("location")).toMatch(/^\/api\/storage\/download\?token=/);
+
+    const response = await post(ORG_A);
+    expect(response.headers.get("location")).toBe(
+      `${SITE}/properties/${PROP_A}/video-projects/${PROJECT_A}?download=limited&retry=60`,
+    );
+    expect(await downloadsAudited()).toHaveLength(1);
   });
 });
