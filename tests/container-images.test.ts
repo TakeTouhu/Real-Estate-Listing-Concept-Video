@@ -1,6 +1,21 @@
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { DISCLOSURE_LAYER_ASSETS } from "@app/domain";
 import { serverEnvSchema } from "@app/shared";
 
 /**
@@ -11,7 +26,7 @@ import { serverEnvSchema } from "@app/shared";
  * builds each image and pushes none. A later image adds its Dockerfile here.
  */
 const REPO_ROOT = join(__dirname, "..");
-const DOCKERFILES = ["apps/web/Dockerfile"];
+const DOCKERFILES = ["apps/web/Dockerfile", "apps/worker/Dockerfile"];
 const WORKFLOW = ".github/workflows/ci.yml";
 const DIGEST = "sha256:f0960f8dc047f358e3fb428f36ccba21732194fa5f0cac849f401e63e62fb9e6";
 
@@ -146,7 +161,7 @@ describe.each(DOCKERFILES)("%s", (file) => {
   });
 });
 
-/** A step of the `web-image` job: its scalar fields, its `with:` and its `run:` text. */
+/** A step of an image's job: its scalar fields, its `with:` and its `run:` text. */
 interface Step {
   readonly fields: Map<string, string>;
   readonly with: Map<string, string>;
@@ -258,7 +273,7 @@ const commands = (run: string): string[] =>
 const DOCKER_COMMANDS = ["run", "exec", "logs", "rm", "image inspect", "buildx build"];
 const BUILD = new RegExp(
   [
-    "^docker buildx build --provenance=false --load --platform linux/amd64 -f (\\S+)",
+    "^docker buildx build --provenance=false --load --platform linux/amd64 -f (\\S+)(?: --target ([\\w-]+))?",
     ' --label "org\\.opencontainers\\.image\\.revision=\\$REVISION" --tag [\\w.-]+:ci \\.$',
   ].join(""),
 );
@@ -270,6 +285,22 @@ const BANNED_WORKFLOW = new RegExp(
   ].join("|"),
   "i",
 );
+
+/**
+ * Each image's job, what it builds in order (the Dockerfile and a `--target`,
+ * empty for the last stage) and its steps run whatever happened before them.
+ */
+const IMAGE_JOBS = [
+  { name: "web-image", builds: [["apps/web/Dockerfile", ""]], guarded: [["Stop the server", "always()"]] },
+  {
+    name: "worker-image",
+    builds: [
+      ["apps/worker/Dockerfile", "media-test"],
+      ["apps/worker/Dockerfile", ""],
+    ],
+    guarded: [],
+  },
+];
 
 describe("the images together", () => {
   it("use one base digest", () => {
@@ -285,10 +316,12 @@ describe("the images together", () => {
     expect(existsSync(join(REPO_ROOT, ".dockerignore"))).toBe(false);
   });
 
-  it("are each built in the web-image job, which reads, builds and runs, and nothing else", () => {
+  it.each(IMAGE_JOBS)("are built in the $name job, which reads, builds and runs, and nothing else", (image) => {
     const ci = raw(WORKFLOW);
-    const job = readJob(ci, "web-image");
+    const job = readJob(ci, image.name);
     expect(job.unknown).toEqual([]);
+    expect(job.keys.get("runs-on")).toBe("ubuntu-24.04");
+    expect(job.keys.get("timeout-minutes")).toBe("30");
     expect([...job.keys.keys()].sort()).toEqual(["env", "permissions", "runs-on", "steps", "timeout-minutes"]);
     expect([...job.permissions]).toEqual([["contents", "read"]]);
     expect([...job.env]).toEqual([["REVISION", "${{ github.sha }}"]]);
@@ -298,22 +331,28 @@ describe("the images together", () => {
     expect([...(checkout?.with ?? [])]).toEqual([["persist-credentials", "false"]]);
     expect(rest.filter((s) => s.fields.has("uses") || s.with.size > 0)).toEqual([]);
     const guarded = job.steps.filter((s) => s.fields.has("if")).map((s) => [s.fields.get("name"), s.fields.get("if")]);
-    expect(guarded).toEqual([["Stop the server", "always()"]]);
+    expect(guarded).toEqual(image.guarded);
 
-    const built: string[] = [];
+    const built: string[][] = [];
     for (const command of job.steps.flatMap((s) => commands(s.fields.get("run") ?? ""))) {
       for (const [, one = "", two = ""] of command.matchAll(/\bdocker\s+(\S+)(?:\s+(\S+))?/g)) {
         const sub = one === "image" || one === "buildx" ? `${one} ${two}` : one;
         expect(`${command}: ${DOCKER_COMMANDS.includes(sub)}`).toBe(`${command}: true`);
         if (sub !== "buildx build") continue;
-        const file = BUILD.exec(command)?.[1];
-        expect(`${command}: ${file !== undefined}`).toBe(`${command}: true`);
-        if (file !== undefined) built.push(file);
+        const build = BUILD.exec(command);
+        expect(`${command}: ${build !== null}`).toBe(`${command}: true`);
+        if (build !== null) built.push([build[1] ?? "", build[2] ?? ""]);
       }
     }
-    expect(built.sort()).toEqual([...DOCKERFILES].sort());
+    expect(built).toEqual(image.builds);
+  });
 
-    const outside = ci.split(/\r?\n/).filter((_, i) => i < job.first || i >= job.last);
+  it("are every one built by a job, with no docker outside those jobs, and nothing pushed or cached", () => {
+    const ci = raw(WORKFLOW);
+    const built = new Set(IMAGE_JOBS.flatMap((image) => image.builds.map(([file]) => file)));
+    expect([...built].sort()).toEqual([...DOCKERFILES].sort());
+    const jobs = IMAGE_JOBS.map((image) => readJob(ci, image.name));
+    const outside = ci.split(/\r?\n/).filter((_, i) => jobs.every((job) => i < job.first || i >= job.last));
     expect(outside.filter((line) => /docker/i.test(line))).toEqual([]);
     expect(ci.split(/\r?\n/).filter((line) => BANNED_WORKFLOW.test(line))).toEqual([]);
   });
@@ -447,5 +486,291 @@ describe("the web image", () => {
     ]);
     expect(ofKind(instructions(file), "ENTRYPOINT")).toHaveLength(1);
     expect(ofKind(instructions(file), "CMD")).toEqual([]);
+  });
+});
+
+describe("the worker image", () => {
+  const file = "apps/worker/Dockerfile";
+  const refusal = "The worker has no production runtime until part 2 (ADR-0151 Decision 4).";
+  const lines = (...text: string[]): string => text.join("\n");
+  const words = (...text: string[]): string => text.join(" ");
+
+  it("is exactly ADR-0176's three stages: FFmpeg, the media suites on it, and the runtime layer", () => {
+    expect(instructions(file)).toEqual([
+      `FROM node:22-trixie-slim@${DIGEST} AS ffmpeg`,
+      [
+        "RUN apt-get -o Acquire::Retries=3 update",
+        "&& apt-get -o Acquire::Retries=3 install --yes --no-install-recommends ffmpeg",
+        "&& rm -rf /var/lib/apt/lists/*",
+      ].join(" "),
+      "FROM ffmpeg AS media-test",
+      "ENV CI=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+      "WORKDIR /repo",
+      "RUN corepack enable",
+      "COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./",
+      "RUN pnpm fetch --frozen-lockfile",
+      "COPY . .",
+      "RUN pnpm install --frozen-lockfile --offline",
+      'CMD ["node_modules/.bin/vitest", "run", "--config", "vitest.media.config.ts"]',
+      "FROM ffmpeg AS runtime",
+      "COPY assets/disclosure/layer-v1-*.png /app/assets/disclosure/",
+      "COPY apps/worker/image/disclosure-layers.sha256 /app/assets/disclosure.sha256",
+      "COPY apps/worker/image/check.sh /usr/local/bin/worker-image-check",
+      "USER 1000:1000",
+      `CMD ["/bin/sh", "-c", "echo '${refusal}' >&2; exit 2"]`,
+    ]);
+  });
+
+  it("leaves exactly the required lines out of its context, so every media suite reaches the stage", () => {
+    const ignores = raw(`${file}.dockerignore`)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"));
+    expect(ignores).toEqual(REQUIRED_IGNORES);
+  });
+
+  it("checks FFmpeg's series and libx264, then the images, word for word, from a file Git keeps executable", () => {
+    expect(statSync(join(REPO_ROOT, "apps/worker/image/check.sh")).mode & 0o111).toBe(0o111);
+    const text = raw("apps/worker/image/check.sh").split("\n");
+    expect(text.slice(0, 1)).toEqual(["#!/bin/sh"]);
+    // Comments may change; every other line is held, so none is piped, loosened or skipped.
+    expect(text.filter((line) => line.trim() !== "" && !line.trim().startsWith("#"))).toEqual([
+      "set -eu",
+      'series="7.1"',
+      'list="/app/assets/disclosure.sha256"',
+      "nl='",
+      "'",
+      "refuse() {",
+      '  echo "worker-image-check: refused: $1" >&2',
+      "  exit 1",
+      "}",
+      "check_series() {",
+      '  out=$("$1" -hide_banner -version) || refuse "$1 -version failed"',
+      '  first=${out%%"$nl"*}',
+      '  echo "$first"',
+      '  case "$first" in',
+      '    "$1 version $series."* | "$1 version $series-"*) ;;',
+      '    *) refuse "$1 is not of the series $series" ;;',
+      "  esac",
+      "}",
+      "check_series ffmpeg",
+      "check_series ffprobe",
+      'encoders=$(ffmpeg -hide_banner -encoders) || refuse "ffmpeg -encoders failed"',
+      'case "$encoders" in',
+      '  *"$nl "??????" libx264 "*) echo "libx264: listed" ;;',
+      '  *) refuse "ffmpeg lists no libx264 encoder" ;;',
+      "esac",
+      'sha256sum --check --strict "$list" || refuse "a disclosure image does not match $list"',
+      "listed=0",
+      "while IFS= read -r line; do",
+      "  listed=$((listed + 1))",
+      'done < "$list"',
+      "found=0",
+      "for entry in /app/assets/disclosure/* /app/assets/disclosure/.[!.]* /app/assets/disclosure/..?*; do",
+      '  if [ -e "$entry" ] || [ -L "$entry" ]; then found=$((found + 1)); fi',
+      "done",
+      '[ "$found" -eq "$listed" ] || refuse "/app/assets/disclosure holds $found entries, $list names $listed"',
+      'echo "worker-image-check: passed"',
+    ]);
+  });
+
+  /** A stand-in for `ffmpeg` or `ffprobe`: the first line of `-version`, and `-encoders` with these names. */
+  const tool = (name: string, version: string, encoders: readonly string[]): string =>
+    lines(
+      "#!/bin/sh",
+      'case "$2" in',
+      `  -version) echo '${name} version ${version} Copyright (c) 2000-2025 the FFmpeg developers' ;;`,
+      `  -encoders) printf '%s\\n' 'Encoders:' ' V..... = Video' ' ------' ${encoders
+        .map((one) => `' V....D ${one.padEnd(20)} libx264 H.264 / AVC (codec h264)'`)
+        .join(" ")} ;;`,
+      "  *) exit 1 ;;",
+      "esac",
+      "",
+    );
+
+  interface CheckResult {
+    readonly status: number | null;
+    readonly stdout: string;
+    readonly stderr: string;
+  }
+
+  interface CheckRun {
+    readonly ffmpeg?: string;
+    readonly ffprobe?: string;
+    readonly encoders?: readonly string[];
+    readonly change?: (images: string) => void;
+  }
+
+  /** check.sh with `/app` moved under a temporary folder, run by `/bin/sh` against stand-in tools. */
+  function runCheck(run: CheckRun): CheckResult {
+    const root = mkdtempSync(join(tmpdir(), "worker-image-check-"));
+    try {
+      const ffmpeg = run.ffmpeg ?? "7.1.2-0+deb13u1";
+      const encoders = run.encoders ?? ["libx264", "libx264rgb"];
+      mkdirSync(join(root, "bin"));
+      writeFileSync(join(root, "bin/ffmpeg"), tool("ffmpeg", ffmpeg, encoders), { mode: 0o755 });
+      writeFileSync(join(root, "bin/ffprobe"), tool("ffprobe", run.ffprobe ?? ffmpeg, []), { mode: 0o755 });
+      const images = join(root, "app/assets/disclosure");
+      mkdirSync(images, { recursive: true });
+      for (const asset of DISCLOSURE_LAYER_ASSETS) {
+        copyFileSync(join(REPO_ROOT, "assets/disclosure", asset.fileName), join(images, asset.fileName));
+      }
+      const moved = (text: string): string => text.replaceAll("/app/", `${root}/app/`);
+      const list = raw("apps/worker/image/disclosure-layers.sha256");
+      writeFileSync(join(root, "app/assets/disclosure.sha256"), moved(list));
+      writeFileSync(join(root, "check.sh"), moved(raw("apps/worker/image/check.sh")));
+      run.change?.(images);
+      const result = spawnSync("/bin/sh", [join(root, "check.sh")], {
+        encoding: "utf8",
+        env: { PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}`, LC_ALL: "C" },
+      });
+      return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("passes FFmpeg 7.1 with libx264 and the six images, run against stand-ins", () => {
+    const result = runCheck({});
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout.split("\n")).toEqual([
+      "ffmpeg version 7.1.2-0+deb13u1 Copyright (c) 2000-2025 the FFmpeg developers",
+      "ffprobe version 7.1.2-0+deb13u1 Copyright (c) 2000-2025 the FFmpeg developers",
+      "libx264: listed",
+      ...DISCLOSURE_LAYER_ASSETS.map((asset) =>
+        expect.stringContaining(`/app/assets/disclosure/${asset.fileName}: OK`),
+      ),
+      "worker-image-check: passed",
+      "",
+    ]);
+  });
+
+  const first = DISCLOSURE_LAYER_ASSETS[0]?.fileName ?? "";
+  it.each<[string, CheckRun, string]>([
+    ["FFmpeg 6.1.1", { ffmpeg: "6.1.1-3ubuntu5" }, "ffmpeg is not of the series 7.1"],
+    ["FFmpeg 7.10.1", { ffmpeg: "7.10.1" }, "ffmpeg is not of the series 7.1"],
+    ["an ffprobe of another series", { ffprobe: "6.1.1" }, "ffprobe is not of the series 7.1"],
+    ["libx264rgb alone", { encoders: ["libx264rgb"] }, "ffmpeg lists no libx264 encoder"],
+    ["a changed image", { change: (images) => appendFileSync(join(images, first), "\n") }, "does not match"],
+    ["a missing image", { change: (images) => rmSync(join(images, first)) }, "does not match"],
+    ["a seventh image", { change: (images) => writeFileSync(join(images, "layer-v1-640x360.png"), "") }, "holds 7"],
+    ["a dotfile", { change: (images) => writeFileSync(join(images, ".hidden"), "") }, "holds 7 entries"],
+  ])("refuses %s with exit code 1, run against stand-ins", (_, run, reason) => {
+    const result = runCheck(run);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/^worker-image-check: refused: /m);
+    expect(result.stderr).toContain(reason);
+    expect(result.stdout).not.toContain("worker-image-check: passed");
+  });
+
+  it("pins each disclosure image by DISCLOSURE_LAYER_ASSETS, line for line, as the files really are", () => {
+    const text = raw("apps/worker/image/disclosure-layers.sha256").split("\n");
+    expect(text.at(-1)).toBe("");
+    expect(text.slice(0, -1)).toEqual(
+      DISCLOSURE_LAYER_ASSETS.map((asset) => `${asset.sha256}  /app/assets/disclosure/${asset.fileName}`),
+    );
+    for (const asset of DISCLOSURE_LAYER_ASSETS) {
+      const bytes = readFileSync(join(REPO_ROOT, "assets/disclosure", asset.fileName));
+      expect(`${asset.fileName}: ${createHash("sha256").update(bytes).digest("hex")}`).toBe(
+        `${asset.fileName}: ${asset.sha256}`,
+      );
+    }
+    // The image copies `layer-v1-*.png`: exactly the listed files, and only they, match it.
+    const names = DISCLOSURE_LAYER_ASSETS.map((asset) => asset.fileName);
+    expect(names.filter((name) => !/^layer-v1-[^/]*\.png$/.test(name))).toEqual([]);
+    const copied = readdirSync(join(REPO_ROOT, "assets/disclosure")).filter((name) => /^layer-v1-.*\.png$/.test(name));
+    expect(copied.sort()).toEqual([...names].sort());
+  });
+
+  it("is held step by step, word for word, in the worker-image job", () => {
+    const job = readJob(raw(WORKFLOW), "worker-image");
+    const build = (target: string, tag: string): string =>
+      words(
+        "docker buildx build --provenance=false --load --platform linux/amd64 -f apps/worker/Dockerfile",
+        ...(target === "" ? [] : [`--target ${target}`]),
+        '--label "org.opencontainers.image.revision=$REVISION"',
+        `--tag ${tag} .`,
+      );
+    const layers = "docker image inspect -f '{{range .RootFS.Layers}}{{println .}}{{end}}'";
+    const isolated = "docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \\";
+    const find = "docker run --rm --network none --read-only --entrypoint find vtavision-worker:ci \\";
+    const steps = job.steps.map((s) => [
+      s.fields.get("name") ?? "",
+      s.fields.get("timeout-minutes") ?? "",
+      s.fields.get("run") ?? "",
+    ]);
+    expect(steps).toEqual([
+      ["", "", ""],
+      ["Build the media suites' stage", "20", build("media-test", "vtavision-worker-media:ci")],
+      [
+        "Run the media suites against the image's FFmpeg",
+        "15",
+        lines(
+          "docker run --rm --network none --entrypoint ffmpeg vtavision-worker-media:ci -hide_banner -version",
+          "docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges vtavision-worker-media:ci",
+        ),
+      ],
+      ["Build the worker image", "10", build("", "vtavision-worker:ci")],
+      [
+        "Check that both share the FFmpeg stage",
+        "",
+        lines(
+          `media="$(${layers} vtavision-worker-media:ci)"`,
+          `worker="$(${layers} vtavision-worker:ci)"`,
+          "shared=\"$(printf '%s\\n' \"$worker\" | grep . | head -n -3)\"",
+          "count=\"$(printf '%s\\n' \"$shared\" | grep -c .)\"",
+          'test "$count" -ge 2',
+          "test \"$(printf '%s\\n' \"$media\" | head -n \"$count\")\" = \"$shared\"",
+        ),
+      ],
+      [
+        "Check the image's user, files, entrypoint and environment",
+        "",
+        lines(
+          "test \"$(docker image inspect -f '{{.Config.User}}' vtavision-worker:ci)\" = \"1000:1000\"",
+          'test "$(docker run --rm --network none --read-only --entrypoint id vtavision-worker:ci -u)" = "1000"',
+          find,
+          "  /app /usr/local/bin/worker-image-check -printf '%u:%g %m %p\\n'",
+          `loose="$(${find}`,
+          '  /app /usr/local/bin/worker-image-check ! -user 0 -o ! -group 0 -o -perm /o=w)"',
+          'test -z "$loose"',
+          "test \"$(docker image inspect -f '{{json .Config.Entrypoint}}' vtavision-worker:ci)\" = \\",
+          "  '[\"docker-entrypoint.sh\"]'",
+          "env_json=\"$(docker image inspect -f '{{json .Config.Env}}' vtavision-worker:ci)\"",
+          "if printf '%s' \"$env_json\" | grep -qi proxy; then",
+          '  echo "The image\'s environment names a proxy." >&2',
+          "  exit 1",
+          "fi",
+          "docker image inspect -f '{{json .Config.Cmd}}' vtavision-worker:ci",
+          "docker image inspect -f '{{json .Config.Labels}}' vtavision-worker:ci",
+        ),
+      ],
+      ["Run the image's check", "2", lines(isolated, "  vtavision-worker:ci worker-image-check")],
+      [
+        "Refuse to run by default",
+        "2",
+        lines(
+          "set +e",
+          isolated,
+          '  vtavision-worker:ci > "$RUNNER_TEMP/refused.log" 2>&1',
+          "code=$?",
+          "set -e",
+          'cat "$RUNNER_TEMP/refused.log"',
+          'test "$code" -eq 2',
+          `grep -qF "${refusal}" "$RUNNER_TEMP/refused.log"`,
+        ),
+      ],
+      [
+        "Print what the image holds",
+        "",
+        lines(
+          "docker run --rm --network none --read-only --entrypoint dpkg-query vtavision-worker:ci \\",
+          "  -W -f '${Package}\\t${Version}\\n'",
+          "docker run --rm --network none --read-only --entrypoint node vtavision-worker:ci --version",
+          "docker image inspect -f '{{.Size}} bytes' vtavision-worker:ci",
+        ),
+      ],
+    ]);
   });
 });

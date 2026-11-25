@@ -3506,3 +3506,34 @@ before and the line is gone; those caught and answered are logged
 nowhere again, and those rethrown (the generation start, the Unit
 purchase, the security page) keep only Next.js's raw line. Nothing was
 stored.
+
+## RD-10c — the worker image's runtime layer
+
+**No migration** (ADR-0176). Migration 35 stays the last.
+
+**What changes at deploy.** Nothing is deployed or pushed.
+`apps/worker/Dockerfile`, built from the repository root with
+`docker buildx build --platform linux/amd64 -f apps/worker/Dockerfile .`,
+makes the worker's image: ADR-0175's base at its one digest, Debian 13's
+FFmpeg, the six disclosure images at `/app/assets/disclosure` with
+their checksums, and uid 1000. It holds no worker code, and its default
+command exits 2, saying that the worker has no production runtime until
+part 2; a deployment of it before then runs nothing.
+`worker-image-check` is its explicit check. CI's new `worker-image` job
+builds it and its `media-test` stage on every push and pull request and
+runs the media suites on that FFmpeg with no network, so a pull request
+shows 14 checks; "every check green" stays the merge rule. FFmpeg
+floats within Debian 13: a point release reaches CI's image at its next
+build, where the suites run again; CI's build is never pushed, so the
+image a deployment runs must be that build or one the suites run on
+again (ADR-0176 Decision 3).
+
+**On a development machine.** Nothing changes for `pnpm dev`, the tests
+or the browser test. Building the image needs Docker with BuildKit and
+access to Docker Hub, Debian's mirror and the npm registry
+(`docs/local-setup.md`, section 7).
+
+**Rolling back.** To the tree of the unknown-failure PR: the
+Dockerfile, its ignore file, `apps/worker/image/`, the job and the
+guard's worker rules go; the checks return to 12. Nothing was stored,
+pushed or deployed.

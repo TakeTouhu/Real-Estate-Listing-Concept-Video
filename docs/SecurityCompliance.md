@@ -197,6 +197,10 @@ release and **is not activated** (ADR-0054 Decision 2).
 - Idempotency for generation and financial commands
 - SSRF protections for any server-side URL retrieval
 - FFmpeg runs in a restricted container with resource/time limits
+  *Since RD-10c (ADR-0176), the worker image carries Debian 13's FFmpeg
+  and runs as uid 1000, and CI runs its check with no network, a
+  read-only root and no capabilities; FFmpeg runs nowhere in production
+  yet. Resource and time limits are the deployment's, part 2.*
 
 ## Privacy and data lifecycle
 
@@ -304,6 +308,8 @@ Audit metadata must be sanitized and tamper-evident. Do not store full secrets o
   *Not part 1's: since RD-10a (ADR-0175), CI builds the web image from
   a pinned base and runs it with no network, and prints its packages;
   no container or dependency scan runs, and part 2 chooses one.*
+  *Since RD-10c (ADR-0176) the same holds for the worker image, whose
+  packages, FFmpeg's included, CI prints too.*
 - Tenant-isolation tests pass
 - Restore test succeeds
 - Secrets are not committed

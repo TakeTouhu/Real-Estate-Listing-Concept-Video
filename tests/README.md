@@ -152,6 +152,20 @@ exec, read logs, remove and inspect. Anywhere in the workflow: no
 cache, output, schedule or proxy. It builds nothing: CI's `web-image`
 job does.
 
+Since RD-10c (ADR-0176) it lists the worker's Dockerfile too, reads
+each image's builds in its own job (`--target` allowed, word for word),
+and holds the worker image: its three stages word for word; its ignore
+file of exactly the required lines; `check.sh` executable in the
+checkout and word for word but its comments, and run under `/bin/sh`
+against stand-in `ffmpeg` and `ffprobe` in a temporary folder, where
+it passes 7.1 and refuses another series, `libx264rgb` alone and a
+changed, missing or extra file;
+`apps/worker/image/disclosure-layers.sha256` equal to
+`DISCLOSURE_LAYER_ASSETS` line for line and to the committed images'
+SHA-256, with `layer-v1-*.png` matching exactly the listed files; and
+every step of the `worker-image` job: its name, time limit and whole
+`run:` text.
+
 ## Unit tests
 
 Unit tests live next to their source as `*.test.ts` and run via the root
