@@ -3102,3 +3102,20 @@ every count.
 
 **Rolling back.** To RD-7c's build: safe. Nothing is limited, and the
 table's rows are left unread.
+
+## RD-7e — reset and verification emails are limited
+
+**No migration** (ADR-0172). Migration 35 stays the last.
+
+**What changes at deploy.** Reset requests are limited per typed address
+and, where `FORWARDED_FOR_TRUSTED_ENTRIES` is set, per client address;
+verification emails, sign-up's included, per account address. A
+completed reset clears the address's held sign-in. No deployment is to
+set `SMTP_HOST` yet: the invitation limit waits for RD-8 (`TODO.md`).
+
+**On a development machine.** A fourth reset request, or a fourth
+verification email, for one address within the hour is refused until
+the hour ends. `DELETE FROM "rate_limit_counters";` clears every count.
+
+**Rolling back.** To RD-7d's build: safe. The emails are no longer
+limited, and the table's rows for them are left unread.

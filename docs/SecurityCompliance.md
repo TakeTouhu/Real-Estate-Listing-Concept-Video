@@ -175,6 +175,12 @@ release and **is not activated** (ADR-0054 Decision 2).
   request **must not consume a Unit or cause a Provider POST**, and plan
   generation concurrency is a **separate control** from abuse rate limiting
   (ADR-0054 Decision 5).
+  *In place since RD-7 (ADR-0169 to ADR-0172), counted in PostgreSQL with
+  documented, configurable values: sign-in, per typed address and per
+  client address, with a growing cooldown; wrong MFA codes, per account;
+  password reset emails, per address and per client address; verification
+  emails, per address. Sign-up, uploads, analysis, generation,
+  downloads, invitations and Unit purchase are not limited yet: RD-8.*
 - Idempotency for generation and financial commands
 - SSRF protections for any server-side URL retrieval
 - FFmpeg runs in a restricted container with resource/time limits
@@ -288,7 +294,9 @@ Audit metadata must be sanitized and tamper-evident. Do not store full secrets o
 - Provider terms/data handling re-verified (ADR-0054 Decision 2)
 - Real malware scanning in place; `PassthroughMalwareScanner` absent from
   production
-- Rate limiting in place across the sensitive surfaces
+- Rate limiting in place across the sensitive surfaces (*sign-in, MFA
+  codes and the reset and verification emails since RD-7; the rest waits
+  for RD-8*)
 - Privileged support access time-limited, audited, and without generic
   impersonation
 - Privacy policy, terms, subprocessor list, Mode C consent wording and AI

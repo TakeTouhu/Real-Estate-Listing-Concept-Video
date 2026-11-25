@@ -5,6 +5,7 @@ import {
   RESET_PASSWORD_NOTICES,
   openResetLink,
   resetPasswordNotice,
+  resetPasswordNoticeText,
   type ResetPasswordNotice,
 } from "@/lib/password-reset";
 
@@ -14,7 +15,7 @@ export const dynamic = "force-dynamic";
 // origin, never its path or query (as on the verify page, ADR-0129).
 export const metadata: Metadata = { referrer: "strict-origin" };
 
-type Params = { token?: string | string[]; notice?: string | string[] };
+type Params = { token?: string | string[]; notice?: string | string[]; retry?: string | string[] };
 
 /**
  * Password reset (ADR-0133), with no sign-in. Opened from an emailed link, it
@@ -39,7 +40,7 @@ export default async function ResetPasswordPage({ searchParams }: { searchParams
       </section>
     );
   }
-  return <AskForLink notice={notice} />;
+  return <AskForLink notice={notice} retry={params.retry} />;
 }
 
 async function openLink(token: string | string[]): Promise<ReactElement> {
@@ -72,13 +73,13 @@ async function openLink(token: string | string[]): Promise<ReactElement> {
   );
 }
 
-function AskForLink({ notice }: { notice: ResetPasswordNotice | null }) {
+function AskForLink({ notice, retry }: { notice: ResetPasswordNotice | null; retry?: string | string[] }) {
   return (
     <section>
       <h1>{notice === "invalid" ? "Link not valid" : "Reset your password"}</h1>
       {notice ? (
         <p className={notice === "sent" ? "status-ok" : "status-bad"} role={notice === "sent" ? "status" : "alert"}>
-          {RESET_PASSWORD_NOTICES[notice]}
+          {resetPasswordNoticeText(notice, retry)}
         </p>
       ) : null}
       <form method="post" action="/api/auth/reset-password/request" className="card">

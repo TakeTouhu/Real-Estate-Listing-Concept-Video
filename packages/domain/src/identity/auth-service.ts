@@ -25,6 +25,15 @@ export interface LoginResult {
 /** The shortest password an account may have, at sign-up and at a reset. */
 export const MIN_PASSWORD_LENGTH = 10;
 
+/**
+ * A scrypt hash of a random password nobody kept, checked when an address
+ * has no account with a password, so a sign-in for it hashes as one with
+ * an account does (ADR-0172 Decision 5).
+ */
+export const PLACEHOLDER_PASSWORD_HASH =
+  "scrypt$eitQp6dZETbqsYcQQkJYJg$" +
+  "lUCzYRyxnHClNutUsKHTiBnueB69TmG42SK6q6LiTZlLZ14qdypXrdXhArN3HZWVQMLjVEbvMuU1l5rAu9BMHw";
+
 function emailTaken(): AppError {
   return new AppError("VALIDATION_FAILED", "Email is already registered");
 }
@@ -68,11 +77,8 @@ export class AuthService {
     const user = await this.deps.repos.users.findByEmail(normalizeEmail(email));
     const credential = user ? await this.deps.repos.credentials.findByUserId(user.id) : null;
     // Always run a verify to reduce user-enumeration timing differences.
-    const ok =
-      user !== null &&
-      user.status === "ACTIVE" &&
-      credential !== null &&
-      (await this.deps.passwords.verify(password, credential.passwordHash));
+    const verified = await this.deps.passwords.verify(password, credential?.passwordHash ?? PLACEHOLDER_PASSWORD_HASH);
+    const ok = user !== null && user.status === "ACTIVE" && credential !== null && verified;
     if (!ok || !user || !credential) {
       throw new AppError("UNAUTHENTICATED", "Invalid email or password");
     }

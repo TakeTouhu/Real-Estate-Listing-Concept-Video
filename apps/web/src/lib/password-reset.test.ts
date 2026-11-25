@@ -2,8 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthService } from "@app/domain";
-import { createTestDeps, type TestDeps } from "@app/domain/testing";
+import { AuthService, type RateLimitStore } from "@app/domain";
+import { InMemoryRateLimitStore, createTestDeps, type TestDeps } from "@app/domain/testing";
+import { RATE_LIMIT_DEFAULTS } from "@app/shared";
 import { readDevelopmentEmailOutbox } from "@app/storage";
 
 /**
@@ -17,9 +18,22 @@ const env = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 const identity = vi.hoisted(() => ({ value: null as unknown }));
 vi.mock("@/lib/env", () => ({ getServerEnv: () => env.value }));
 vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
+// The limits run on an in-memory store made afresh for each test, or one whose calls fail (ADR-0172).
+const limiter = vi.hoisted(() => ({ store: null as unknown }));
+vi.mock("@/lib/rate-limit", async (original) => {
+  const limits = await original<typeof import("@/lib/rate-limit")>();
+  const settings = { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) };
+  return { ...limits, getRateLimiter: () => new limits.WebRateLimits(limiter.store as RateLimitStore, settings) };
+});
+/** The in-memory store, but one of its calls fails. */
+const failing = (fails: keyof RateLimitStore): RateLimitStore =>
+  Object.assign(Object.create(new InMemoryRateLimitStore()) as InMemoryRateLimitStore, {
+    [fails]: () => Promise.reject(new Error("user@example.com is down")),
+  });
 
 const {
   RESET_PASSWORD_NOTICES,
+  askForLimitedResetLink,
   askForResetLink,
   openResetLink,
   resetPasswordNotice,
@@ -33,6 +47,7 @@ let deps: TestDeps;
 let outbox: string;
 
 beforeEach(async () => {
+  limiter.store = new InMemoryRateLimitStore();
   deps = createTestDeps();
   identity.value = { deps };
   outbox = mkdtempSync(join(tmpdir(), "vtavision-outbox-reset-lib-"));
@@ -89,6 +104,17 @@ describe("asking for a link", () => {
     expect(log.error).toHaveBeenCalledWith("A password reset link could not be sent", { code: "UNEXPECTED" });
     expect(JSON.stringify(log.error.mock.calls)).not.toContain("user@example.com");
   });
+
+  it("sends nothing when the limits cannot answer, logging the code and never the address", async () => {
+    limiter.store = failing("hit");
+    const log = logged();
+    await expect(askForLimitedResetLink(new Headers(), "user@example.com", log)).resolves.toBeNull();
+    expect(log.error).toHaveBeenCalledExactlyOnceWith("A password reset request could not be counted", {
+      code: "UNEXPECTED",
+    });
+    expect(JSON.stringify(log.error.mock.calls)).not.toContain("user@example.com");
+    expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
+  });
 });
 
 describe("choosing a new password", () => {
@@ -132,5 +158,17 @@ describe("choosing a new password", () => {
     expect(log.error).toHaveBeenCalledWith("A password could not be reset", { code: "UNEXPECTED" });
     expect(JSON.stringify(log.error.mock.calls)).not.toContain(usable);
     expect(await resetPasswordWith(usable, "new-password-1", log)).toBe("reset");
+  });
+
+  it("resets when the address's failed sign-ins cannot be forgotten, logging the code alone", async () => {
+    const usable = await token();
+    limiter.store = failing("forget");
+    const log = logged();
+    expect(await resetPasswordWith(usable, "new-password-1", log)).toBe("reset");
+    expect(log.error).toHaveBeenCalledExactlyOnceWith("A reset could not forget the address's failed sign-ins", {
+      code: "UNEXPECTED",
+    });
+    const lines = JSON.stringify(log.error.mock.calls);
+    for (const secret of ["user@example.com", usable]) expect(lines).not.toContain(secret);
   });
 });

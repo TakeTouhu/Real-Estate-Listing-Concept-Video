@@ -4,8 +4,8 @@ import { InMemoryRateLimitStore } from "@app/domain/testing";
 import { RATE_LIMIT_DEFAULTS, rateLimitSubject, rateLimitSubjectKey } from "@app/shared";
 
 /**
- * The web app's abuse limits (ADR-0171): the refusal's minutes, the keys, and
- * lines logged by code alone, on the in-memory store.
+ * The web app's abuse limits (ADR-0171, ADR-0172): the refusal's minutes, the
+ * keys, and lines logged by code alone, on the in-memory store.
  */
 const SECRET = "session-secret-0123456789abcdef";
 const prismaUrl = vi.hoisted(() => ({ calls: [] as (string | undefined)[] }));
@@ -96,18 +96,34 @@ describe("a refusal", () => {
       allowed: false,
       message: "Too many wrong codes. Try again in 15 minutes.",
     });
+    for (let i = 0; i < 3; i += 1) await limits.passwordResetEmail(headers("198.51.100.1"), "person@example.com", NOW);
+    expect(await limits.passwordResetEmail(headers("198.51.100.1"), "person@example.com", after(61))).toEqual({
+      allowed: false,
+      minutes: 59,
+    });
+    for (let i = 0; i < 3; i += 1) await limits.verificationEmail("person@example.com", NOW);
+    expect(await limits.verificationEmail("person@example.com", NOW)).toEqual({ allowed: false, minutes: 60 });
     expect(log.warn.mock.calls).toEqual([
       ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "SIGN_IN", dimension: "client" }],
       ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "MFA_CODE", dimension: "user" }],
+      [
+        "An attempt was refused by a rate limit",
+        { code: "RATE_LIMITED", action: "PASSWORD_RESET_EMAIL", dimension: "address" },
+      ],
+      [
+        "An attempt was refused by a rate limit",
+        { code: "RATE_LIMITED", action: "VERIFICATION_EMAIL", dimension: "address" },
+      ],
     ]);
     const logged = JSON.stringify(log.warn.mock.calls);
-    for (const secret of ["203.0.113.7", "example.com", "user-1", subject("client", "v4:203.0.113.7")]) {
+    const named = ["203.0.113.7", "198.51.100.1", "example.com", "user-1", subject("client", "v4:203.0.113.7")];
+    for (const secret of named) {
       expect(logged).not.toContain(secret);
     }
   });
 });
 
-describe("one sign-in's keys", () => {
+describe("one attempt's keys", () => {
   /** The in-memory store, recording each call by its policy's last word. */
   const recorded = () => {
     const store = new InMemoryRateLimitStore();
@@ -144,6 +160,21 @@ describe("one sign-in's keys", () => {
     calls.length = 0;
     expect((await limits.signIn(headers("203.0.113.7"), "person@example.com", NOW)).allowed).toBe(false);
     expect(calls).toEqual(["hit client", "hit address", "giveBack client"]);
+  });
+
+  it("count a reset request by its client address first, giving it back when the address refuses", async () => {
+    const { calls, limits } = recorded();
+    for (let i = 0; i < 3; i += 1) await limits.passwordResetEmail(headers("203.0.113.7"), "person@example.com", NOW);
+    calls.length = 0;
+    expect(await limits.passwordResetEmail(headers("203.0.113.7"), "person@example.com", NOW)).toEqual({
+      allowed: false,
+      minutes: 60,
+    });
+    expect(calls).toEqual(["hit client", "hit address", "giveBack client"]);
+    for (let i = 0; i < 17; i += 1) await limits.passwordResetEmail(headers("203.0.113.7"), `p${i}@example.com`, NOW);
+    calls.length = 0;
+    expect((await limits.passwordResetEmail(headers("203.0.113.7"), "other@example.com", NOW)).allowed).toBe(false);
+    expect(calls).toEqual(["hit client"]);
   });
 });
 
