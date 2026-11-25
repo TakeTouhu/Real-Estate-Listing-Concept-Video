@@ -1219,6 +1219,17 @@ and never the server's reply. The library's own limits end a connection
 that cannot connect, is not greeted or goes quiet. Nothing builds the
 sender yet: RD-6c gives it to the web app.
 
+**RD-6b — Mailpit in CI** (no ADR, no migration): CI's `storage` job
+runs Mailpit `v1.33.1`, pinned by digest, a mail catcher that makes its
+own certificate, requires STARTTLS, accepts any login and relays nothing.
+`pnpm test:smtp` proves the SMTP email sender against it: emails
+delivered over STARTTLS with that certificate the only one trusted, one
+with Japanese text, an emoji and dot lines, another with a body of the
+longest length, each intact; and nothing delivered when the certificate
+is not trusted or carries another name, or when the sender is told to
+speak TLS from the first byte to a server that speaks STARTTLS. No
+setting or behaviour of the product changes.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

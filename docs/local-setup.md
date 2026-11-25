@@ -374,6 +374,33 @@ The same daemon can scan the web app's uploads (ADR-0164): set
 3310. Unset, the web app uses the test scanner. The browser test refuses
 both settings, as it runs no daemon.
 
+### SMTP email sender tests
+
+The suite for the SMTP email sender (ADR-0166) speaks to Mailpit, a mail
+catcher, on this machine. Start it with Docker as CI does: it makes its
+own certificate for `mail.rd6.test`, requires STARTTLS, accepts any login
+and relays nothing. Publish it on `127.0.0.1` alone:
+
+```bash
+docker run --rm -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 \
+  -e MP_DISABLE_VERSION_CHECK=true \
+  -e MP_SMTP_TLS_CERT=sans:mail.rd6.test \
+  -e MP_SMTP_TLS_KEY=sans:mail.rd6.test \
+  -e MP_SMTP_REQUIRE_STARTTLS=true -e MP_SMTP_AUTH_ACCEPT_ANY=true \
+  axllent/mailpit:v1.33.1
+```
+
+Then name its two ports and run it:
+
+```bash
+export MAILPIT_TEST_SMTP_PORT=1025 MAILPIT_TEST_API_PORT=8025
+pnpm test:smtp   # vitest.smtp.config.ts
+```
+
+Without those variables the run fails. CI runs it in the `storage` job.
+The web app does not send through SMTP yet (RD-6c); the outbox serves
+development.
+
 ### Browser tests
 
 The browser test (ADR-0121) drives the web app in Playwright's Chromium. It

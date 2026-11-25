@@ -91,7 +91,11 @@ jobs:
     # involved, and the suites refuse an emulator that is not on this machine.
     # Beside it, a ClamAV daemon (ADR-0163) proves the scanner adapter. Its
     # signature updater and mail filter are off, so it sends no request; its
-    # own image's PING check, every 2 s, says when it has loaded.
+    # own image's PING check, every 2 s, says when it has loaded. And Mailpit,
+    # a mail catcher, proves the SMTP email sender (ADR-0166): it makes its own
+    # certificate for mail.rd6.test, so no key is kept here, requires STARTTLS
+    # before anything is sent, accepts any login, so no credential is written
+    # here, and relays nothing, since no relay is configured.
     runs-on: ubuntu-24.04
     services:
       gcs:
@@ -120,9 +124,25 @@ jobs:
           --health-timeout 5s
           --health-retries 45
           --health-start-period 1s
+      mailpit:
+        image: axllent/mailpit:v1.33.1@sha256:aef2aacc11f075ec0fb6874275ee4a421e688e11a96ebb296134d1735c7761ce
+        env:
+          MP_DISABLE_VERSION_CHECK: "true"
+          MP_SMTP_TLS_CERT: "sans:mail.rd6.test"
+          MP_SMTP_TLS_KEY: "sans:mail.rd6.test"
+          MP_SMTP_REQUIRE_STARTTLS: "true"
+          MP_SMTP_AUTH_ACCEPT_ANY: "true"
+        ports: ["1025:1025", "8025:8025"]
+        options: >-
+          --health-cmd "/mailpit readyz"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
     env:
       GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT: http://127.0.0.1:4443
       CLAMAV_TEST_PORT: "3310"
+      MAILPIT_TEST_SMTP_PORT: "1025"
+      MAILPIT_TEST_API_PORT: "8025"
     steps:
       - uses: actions/checkout@v4
 
@@ -145,6 +165,9 @@ jobs:
 
       - name: ClamAV scanner tests
         run: pnpm run test:clamav
+
+      - name: SMTP email sender tests
+        run: pnpm run test:smtp
 
   database:
     # Live PostgreSQL: proves the migrations apply to an empty database, that

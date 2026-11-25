@@ -51,6 +51,8 @@ export default defineConfig({
       "tests/storage/**",
       // ClamAV suites; run via vitest.clamav.config.ts.
       "tests/scanner/**",
+      // SMTP suites against Mailpit; run via vitest.smtp.config.ts.
+      "tests/email/**",
       // Browser tests; run by Playwright (playwright.config.ts).
       "tests/e2e/**/*.spec.ts",
     ],
