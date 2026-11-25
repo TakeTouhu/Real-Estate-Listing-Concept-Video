@@ -3329,3 +3329,33 @@ that sends no `Origin`.
 
 **Rolling back.** To RD-9b's build: safe. These 13 routes rely on
 `SameSite=Lax` alone again, and nothing was stored.
+
+## RD-9d — fixed security headers and the API policy
+
+**No migration** (ADR-0174). Migration 35 stays the last.
+
+**What changes at deploy.** Every answer carries `nosniff`,
+`Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options:
+DENY`, a `Permissions-Policy` and COOP and CORP `same-origin`; every
+`/api` answer carries `default-src 'none'; frame-ancestors 'none';
+sandbox`; `X-Powered-By` is gone. A build made under
+`NODE_ENV=production` also sends `Strict-Transport-Security:
+max-age=31536000`, for the app's own host only. HSTS follows the
+`NODE_ENV` in effect when `next build` runs; `next build` sets it to
+`production` only when it is unset, and a build run with another
+`NODE_ENV` sends no HSTS. So build the production image with `NODE_ENV`
+unset or `production` (RD-10 builds the images). These headers are
+fixed by `next build`: rebuild to change them. No page
+can be shown in another site's frame. Anything a load balancer or CDN
+adds of the same names should be removed there, so one value is sent.
+
+**On a development machine.** `next dev` sends the same headers but
+HSTS, so `localhost` is never pinned to `https`.
+
+**Rolling back.** To RD-9c's build: the headers go, and nothing was
+stored. HSTS does not go: a browser that saw it keeps using `https` for
+the app's host until `max-age` runs out, up to a year. That is harmless
+while the service is served over `https` only, as production requires
+(`APP_BASE_URL` is `https`); to end it early, deploy a build that sends
+`Strict-Transport-Security: max-age=0` and let browsers revisit. It
+never reaches other hosts of the domain: no `includeSubDomains`.

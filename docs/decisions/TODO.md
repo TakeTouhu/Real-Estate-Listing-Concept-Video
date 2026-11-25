@@ -2055,6 +2055,12 @@ into on 2026-11-17.
 - [ ] **A browser that sends no `Origin` on a form post cannot sign
       in.** No supported-browser statement exists; the refusal log
       (`NO_ORIGIN`) will show whether it happens.
+- [ ] **HSTS without `includeSubDomains` or `preload`** until the
+      public domain is chosen; its `max-age` is an operations decision
+      then (RD-9d, ADR-0174 Decision 12).
+- [ ] **RD-10's image build must run `next build` with `NODE_ENV` unset
+      or `production`**, or production sends no HSTS: `next build` only
+      defaults it (ADR-0174 Decision 8).
 
 ## Open in RD-8 — what the work limits leave open
 
