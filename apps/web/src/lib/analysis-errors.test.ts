@@ -13,6 +13,12 @@ describe("analysis error mapping", () => {
     expect(mapAnalysisError(422, message)).toBe(message);
   });
 
+  it("shows a limit's own message, which names the wait, as it is (ADR-0173)", () => {
+    const message = "Too many analysis requests. Try again in 12 minutes.";
+    expect(mapAnalysisError(429, message)).toBe(message);
+    expect(mapAnalysisError(429, null)).toBe(ANALYSIS_ERRORS.generic);
+  });
+
   it("falls back for a 422 with no message, any other status, or no response", () => {
     expect(mapAnalysisError(422, null)).toBe(ANALYSIS_ERRORS.generic);
     expect(mapAnalysisError(500, "boom")).toBe(ANALYSIS_ERRORS.generic);

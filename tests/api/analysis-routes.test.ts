@@ -14,14 +14,18 @@ import {
   createTestDeps,
   InMemoryAssetAnalysisRepository,
   InMemoryMediaAssetRepository,
+  InMemoryRateLimitStore,
   InMemoryReviewTransaction,
   StandInProperties,
 } from "@app/domain/testing";
+import { AppError, RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/shared";
 
 /**
  * Route-level tests. Only session resolution is stubbed; the routes run against
  * a real AnalysisService over in-memory repositories, so authorization and
- * tenant isolation are exercised for real rather than mocked away.
+ * tenant isolation are exercised for real rather than mocked away. The
+ * analysis limit runs for real, on an in-memory store made afresh for each
+ * test (ADR-0173).
  */
 const PASSWORD = "password-123456";
 const STORAGE_KEY = "org/o/properties/prp_1/assets/ast_1/normalized.jpg";
@@ -29,6 +33,8 @@ const STORAGE_KEY = "org/o/properties/prp_1/assets/ast_1/normalized.jpg";
 const currentUser = vi.hoisted(() => ({ value: null as { user: { id: string } } | null }));
 const analysisService = vi.hoisted(() => ({ value: null as unknown }));
 const propertyServices = vi.hoisted(() => ({ value: null as unknown }));
+const identity = vi.hoisted(() => ({ value: null as unknown }));
+const limits = vi.hoisted(() => ({ value: null as unknown }));
 
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: () => Promise.resolve(currentUser.value),
@@ -38,6 +44,15 @@ vi.mock("@/lib/analysis", async () => {
   const actual = await vi.importActual<typeof import("@/lib/analysis")>("@/lib/analysis");
   return { ...actual, getAnalysisService: () => analysisService.value };
 });
+vi.mock("@/lib/identity", () => ({ getIdentityServices: () => identity.value }));
+vi.mock("@/lib/rate-limit", async (original) => ({
+  ...(await original<typeof import("@/lib/rate-limit")>()),
+  getRateLimiter: () => limits.value,
+}));
+const { WebRateLimits } = await import("@/lib/rate-limit");
+const warn = vi.fn();
+const limitsOf = (settings: Partial<Record<RateLimitSetting, string>>, store = new InMemoryRateLimitStore()) =>
+  new WebRateLimits(store, { ...RATE_LIMIT_DEFAULTS, ...settings, SESSION_SECRET: "x".repeat(32) }, { warn });
 
 const { POST: startAnalysis, GET: getAnalysis } = await import(
   "@/app/api/properties/[propertyId]/assets/[assetId]/analysis/route"
@@ -104,6 +119,7 @@ class MapStorage implements ObjectStorage {
 
 interface Ctx {
   ownerId: string;
+  adminId: string;
   viewerId: string;
   billingId: string;
   outsiderId: string;
@@ -159,14 +175,19 @@ const getReq = (organizationId: string) =>
 
 beforeEach(async () => {
   const deps = createTestDeps();
+  identity.value = { deps };
+  limits.value = limitsOf({});
+  warn.mockReset();
   const auth = new AuthService(deps, { sessionTtlSeconds: 3600 });
   const orgs = new OrganizationService(deps);
   const owner = await auth.register({ email: "o@e.com", password: PASSWORD, name: "Owner" });
+  const admin = await auth.register({ email: "a@e.com", password: PASSWORD, name: "Admin" });
   const viewer = await auth.register({ email: "v@e.com", password: PASSWORD, name: "Viewer" });
   const billing = await auth.register({ email: "b@e.com", password: PASSWORD, name: "Billing" });
   const outsider = await auth.register({ email: "x@e.com", password: PASSWORD, name: "Out" });
   const { organization: org } = await orgs.createOrganization(owner.id, { name: "Acme" });
   const { organization: other } = await orgs.createOrganization(owner.id, { name: "Other" });
+  await deps.repos.memberships.create({ organizationId: org.id, userId: admin.id, role: "ADMIN" });
   await deps.repos.memberships.create({
     organizationId: org.id,
     userId: viewer.id,
@@ -218,6 +239,7 @@ beforeEach(async () => {
   currentUser.value = { user: { id: owner.id } };
   ctx = {
     ownerId: owner.id,
+    adminId: admin.id,
     viewerId: viewer.id,
     billingId: billing.id,
     outsiderId: outsider.id,
@@ -356,5 +378,89 @@ describe("response hygiene", () => {
     expect(review.status).toBe("UNREVIEWED");
     expect(review.reviewedBy).toBeNull();
     expect(raw).not.toContain("@example.com");
+  });
+});
+
+describe("the analysis routes' limit per account (ADR-0173)", () => {
+  const analyses = () => vi.spyOn(analysisService.value as AnalysisService, "analyzeAsset");
+  /** A response as a member sees it, without the per-request id. */
+  async function seen(res: Response): Promise<{ status: number; body: unknown }> {
+    const body = (await res.json()) as { error?: { requestId?: string } };
+    if (body.error) delete body.error.requestId;
+    return { status: res.status, body };
+  }
+
+  it("counts analyses and refreshes together, and refuses the next with the JSON answer, calling nothing", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_ANALYSIS: "2/3600" });
+    expect((await startAnalysis(postReq(ctx.orgId), params())).status).toBe(200);
+    expect((await refreshAnalysis(postReq(ctx.orgId), params())).status).toBe(200);
+    const calls = analyses();
+    for (const call of [refreshAnalysis, startAnalysis]) {
+      const refused = await call(postReq(ctx.orgId), params());
+      expect([refused.status, refused.headers.get("retry-after"), refused.headers.get("cache-control")]).toEqual([
+        429,
+        "3600",
+        "no-store",
+      ]);
+      expect(await seen(refused)).toEqual({
+        status: 429,
+        body: {
+          error: {
+            code: "RATE_LIMITED",
+            message: "Too many analysis requests. Try again in 60 minutes.",
+            details: { retryAfterSeconds: 3600 },
+          },
+        },
+      });
+    }
+    // Reading an analysis is not counted; the account's count holds in its other organization too.
+    expect((await getAnalysis(getReq(ctx.orgId), params())).status).toBe(200);
+    expect((await listAnalyses(getReq(ctx.orgId), params())).status).toBe(200);
+    expect((await startAnalysis(postReq(ctx.otherOrgId), params("ast_foreign", "prp_foreign"))).status).toBe(429);
+    expect(calls).not.toHaveBeenCalled();
+    expect(ctx.provider.calls).toBe(2);
+    expect(warn.mock.calls).toEqual([
+      ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "ANALYSIS", dimension: "user" }],
+      ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "ANALYSIS", dimension: "user" }],
+      ["An attempt was refused by a rate limit", { code: "RATE_LIMITED", action: "ANALYSIS", dimension: "user" }],
+    ]);
+    // Another member of the same organization has a count of their own: no key holds the organization.
+    currentUser.value = { user: { id: ctx.adminId } };
+    expect((await refreshAnalysis(postReq(ctx.orgId), params())).status).toBe(200);
+    expect(ctx.provider.calls).toBe(3);
+  });
+
+  it("counts only after the session and the body are checked, a photo that is not found included", async () => {
+    limits.value = limitsOf({ RATE_LIMIT_ANALYSIS: "1/3600" });
+    for (const call of [startAnalysis, refreshAnalysis]) {
+      expect((await call(postReq(undefined), params())).status).toBe(422);
+      expect((await call(new Request("http://t/a", { method: "POST", body: "{" }), params())).status).toBe(422);
+    }
+    currentUser.value = null;
+    expect((await startAnalysis(postReq(ctx.orgId), params())).status).toBe(401);
+    currentUser.value = { user: { id: ctx.ownerId } };
+    for (const call of [startAnalysis, refreshAnalysis]) {
+      limits.value = limitsOf({ RATE_LIMIT_ANALYSIS: "1/3600" });
+      expect((await call(postReq(ctx.orgId), params("ast_nope"))).status).toBe(404);
+      expect((await call(postReq(ctx.orgId), params())).status).toBe(429);
+    }
+    expect(ctx.provider.calls).toBe(0);
+  });
+
+  it("fails closed with the route's own 500, never the limiter's text, and analyzes nothing", async () => {
+    const broken = new InMemoryRateLimitStore();
+    broken.hit = () => Promise.reject(new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row"));
+    const calls = analyses();
+    for (const value of [limitsOf({}, broken), undefined]) {
+      limits.value = value;
+      for (const call of [startAnalysis, refreshAnalysis]) {
+        expect(await seen(await call(postReq(ctx.orgId), params()))).toEqual({
+          status: 500,
+          body: { error: { code: "INTERNAL_ERROR", message: "Unexpected error", details: {} } },
+        });
+      }
+    }
+    expect(calls).not.toHaveBeenCalled();
+    expect(ctx.provider.calls).toBe(0);
   });
 });

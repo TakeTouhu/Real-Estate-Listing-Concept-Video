@@ -16,8 +16,9 @@ export const ANALYSIS_ERRORS = {
 
 /**
  * Turn a failed analysis request into one sentence, as `mapDecisionError`
- * does: transport outcomes by status, and a `422`'s own message, written for a
- * person, shown as it is.
+ * does: transport outcomes by status, and the own message of a `422` or of a
+ * limit's `429`, written for a person and naming the wait, shown as it is
+ * (ADR-0173 Decision 7).
  *
  * @param status HTTP status, or null when the request never produced one.
  * @param message `error.message` from the envelope, or null when absent or unparseable.
@@ -26,7 +27,7 @@ export function mapAnalysisError(status: number | null, message: string | null):
   if (status === 401) return ANALYSIS_ERRORS.signIn;
   if (status === 403) return ANALYSIS_ERRORS.permission;
   if (status === 404) return ANALYSIS_ERRORS.reload;
-  if (status === 422 && message) return message;
+  if ((status === 422 || status === 429) && message) return message;
   return ANALYSIS_ERRORS.generic;
 }
 

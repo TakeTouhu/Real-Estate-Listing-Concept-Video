@@ -22,6 +22,7 @@ export const RATE_LIMIT_POLICY_NAMES = [
   "sign-up.client",
   "upload.user",
   "invitation.user",
+  "analysis.user",
 ] as const;
 
 export type RateLimitPolicyName = (typeof RATE_LIMIT_POLICY_NAMES)[number];
@@ -64,5 +65,6 @@ export function rateLimitPolicies(settings: Readonly<Record<RateLimitSetting, st
     "sign-up.client": policyOf("sign-up.client", settings.RATE_LIMIT_SIGN_UP_PER_IP, false),
     "upload.user": policyOf("upload.user", settings.RATE_LIMIT_UPLOAD, false),
     "invitation.user": policyOf("invitation.user", settings.RATE_LIMIT_INVITATION, false),
+    "analysis.user": policyOf("analysis.user", settings.RATE_LIMIT_ANALYSIS, false),
   });
 }

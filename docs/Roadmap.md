@@ -1341,6 +1341,18 @@ nothing saved. Another member of the organization keeps its own count.
 Planned, not done: RD-8d analysis; RD-8e downloads; RD-8f generation
 start; RD-8g Unit purchase and the records that close RD-8.
 
+**RD-8d — analyses are limited per account** (ADR-0173, no migration):
+a photo's analysis and its refresh share one count per signed-in
+account, 300 an hour by default, failed ones included, taken after the
+session and body checks and before the photo is looked up, so a refused
+one reads no photo and calls no analyzer. A refusal answers 429 with
+`Retry-After`; the review page's analyze button stops its run and shows
+"Too many analysis requests." with the wait once, and the photos left
+stay offered. A limiter that cannot answer refuses with the route's own
+error. Another member of the organization keeps its own count.
+Planned, not done: RD-8e downloads; RD-8f generation start; RD-8g Unit
+purchase and the records that close RD-8.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
