@@ -76,13 +76,17 @@ const HOST_NAME =
   /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
 
 /**
- * Whether `value` can name a ClamAV daemon's host: a DNS name, an IPv4 address or an IPv6 address without
- * brackets, and nothing else, so no port, path or user rides along. The one rule the adapter and the
- * environment share (ADR-0163, ADR-0164).
+ * Whether `value` can name a server's host: a DNS name, an IPv4 address or an IPv6 address without brackets, and
+ * nothing else, so no port, path or user rides along. The rule each network adapter and the environment share.
  */
-export function isClamAvHost(value: string): boolean {
+export function isNetworkHost(value: string): boolean {
   if (HOST_NAME.test(value)) return true;
   return value.includes(":") && !/[[\]/%@\s]/.test(value) && URL.canParse(`tcp://[${value}]`);
+}
+
+/** Whether `value` can name a ClamAV daemon's host: {@link isNetworkHost} (ADR-0163, ADR-0164). */
+export function isClamAvHost(value: string): boolean {
+  return isNetworkHost(value);
 }
 
 /**

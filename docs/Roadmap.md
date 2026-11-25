@@ -1210,6 +1210,15 @@ arrived is sent the file again through the same photo's new link. A
 quarantined or rejected photo is offered no Retry. A failed photo, which
 holds no place, is tried again only where the Property has one left.
 
+**RD-6a — the SMTP email sender** (ADR-0166, no migration): an email
+sender that hands each email to an SMTP server through nodemailer, one
+connection per email, encrypted from the first byte or by STARTTLS
+required before logging in, the server's certificate always checked.
+No send is pooled or retried, nothing is logged; a failure names one code
+and never the server's reply. The library's own limits end a connection
+that cannot connect, is not greeted or goes quiet. Nothing builds the
+sender yet: RD-6c gives it to the web app.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
