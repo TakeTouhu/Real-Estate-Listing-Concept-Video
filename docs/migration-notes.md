@@ -3267,3 +3267,24 @@ count.
 **Rolling back.** To RD-8f's build: safe, even with the new setting set,
 which that build's schema does not know and ignores. Purchase approvals
 are no longer limited, and the table's rows for them are left unread.
+
+## RD-9a — the origin check compares with `APP_BASE_URL`
+
+**No migration** (ADR-0174). Migration 35 stays the last.
+
+**What changes at deploy.** `APP_BASE_URL` must be the exact public
+origin customers open: `https`, the domain, no port. The 20 routes that
+already check their origin now accept only that origin's posts; a
+wrong value refuses every one of them with `403`, and reaching the
+service at another address or over `http` refuses them there. Redirect
+those at the front. A production server without the setting refuses
+every checked change, the start that skips the start check included.
+Each refusal is logged at `warn` as `ORIGIN_REFUSED` with its reason.
+
+**On a development machine.** Without `APP_BASE_URL`, the host you open
+is accepted, as before. With it, open the web app at exactly that
+address: `127.0.0.1` for `localhost`, or another port, is refused. Run
+`pnpm test` without `APP_BASE_URL` in the shell.
+
+**Rolling back.** To RD-8g's build: safe. The host rule returns
+everywhere, and nothing was stored.

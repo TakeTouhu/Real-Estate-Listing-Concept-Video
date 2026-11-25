@@ -34,6 +34,7 @@ import { readDevelopmentEmailOutbox } from "@app/storage";
 const PASSWORD = "password-123456";
 const MFA_KEY = "77".repeat(32);
 const BASE = "http://localhost:3210";
+// The address the server was reached at; the browser's page is on BASE, the only origin accepted (ADR-0174).
 const SITE = "https://app.vtavision.test";
 
 const cookie = vi.hoisted(() => ({ value: undefined as string | undefined }));
@@ -144,7 +145,7 @@ async function signInAs(role: Role): Promise<void> {
   cookie.value = token;
 }
 
-function post(path: string, fields: Record<string, string>, headers: Record<string, string> = { origin: SITE }) {
+function post(path: string, fields: Record<string, string>, headers: Record<string, string> = { origin: BASE }) {
   return new Request(`${SITE}${path}`, {
     method: "POST",
     headers: { host: "app.vtavision.test", "content-type": "application/x-www-form-urlencoded", ...headers },
@@ -231,7 +232,10 @@ describe("inviting", () => {
 
   it("writes nothing when invitations cannot be mailed here", async () => {
     env.value = { ...env.value, APP_BASE_URL: undefined };
-    expect(landing(await inviting({ email: "a@example.com", role: "VIEWER" }))).toBe("error=unavailable");
+    // Unset, outside production, the origin check compares the host the request reached.
+    expect(landing(await inviting({ email: "a@example.com", role: "VIEWER" }, { origin: SITE }))).toBe(
+      "error=unavailable",
+    );
     env.value = { ...env.value, APP_BASE_URL: BASE, EMAIL_OUTBOX_DIR: undefined };
     expect(landing(await inviting({ email: "a@example.com", role: "VIEWER" }))).toBe("error=unavailable");
     expect(await pending()).toEqual([]);
@@ -275,6 +279,7 @@ describe("inviting", () => {
     ["no origin", {}],
     ["another site", { origin: "https://evil.example.net" }],
     ["another origin of the same site", { origin: "https://files.vtavision.test" }],
+    ["the host it reached, not the configured origin", { origin: SITE }],
   ])("refuses a post from %s before reading anything", async (_what, headers) => {
     const response = await inviting({ email: "a@example.com", role: "VIEWER" }, headers);
     expect(response.status).toBe(403);

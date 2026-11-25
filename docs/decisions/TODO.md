@@ -361,6 +361,10 @@ Per `CLAUDE.md`: do not invent missing business rules — record them here.
       with a mutating handler check it
       (`docs/production-readiness-gap-analysis.md`). RD-9 is planned to close
       this entry.*
+      *Amended in RD-9a (ADR-0174): the check compares `Origin` with
+      `APP_BASE_URL`'s origin where it is set, and refuses in production
+      where it is not; a test of every route file names the routes still
+      unchecked.*
 - [ ] **Decide whether analysis should run in the request or on the queue.**
       Phase 3A-3 runs it synchronously, which is fine for the offline
       deterministic adapter but not for a real vision vendor. Settle this before
@@ -1685,6 +1689,12 @@ blocks activation. The production email service is tracked below, under
       readiness reads `503` with such an address and logs its code
       (ADR-0155); what the routes log of an error they do not know is as
       open as before.
+      *Amended in RD-9a: still open, and not RD-9's. Since RD-7d a limiter
+      that cannot answer ends in the route's own failure, and since RD-8a
+      it is rethrown as a plain error (`withoutLimiterText`) and logged
+      nowhere, so a database outage on the limiter refuses sign-ins and
+      uploads with nothing in the log; the answer's `requestId` is logged
+      nowhere either.*
 - [x] **Have the reading of the rule on timers confirmed.** ADR-0153
       Decision 1 reads CLAUDE.md's rule on timers as not reaching a
       deadline a client keeps for its own question. The reading was the
@@ -1721,6 +1731,9 @@ blocks activation. The production email service is tracked below, under
       the scanner and email as refused until RD-5 and RD-6.*
       *Amended in RD-6d (ADR-0168): readiness's `start` check no longer
       reads email as refused for an environment with `SMTP_HOST`.*
+      *Amended in RD-9a (ADR-0174): such a server without `APP_BASE_URL`
+      refuses every checked change, since the same-origin check never falls
+      back to `Host` in production.*
 
 ## Found after RD-2d — two CI jobs that failed now and then
 
@@ -2022,6 +2035,16 @@ into on 2026-11-17.
       where the web app keeps its photos. It refuses both stores together.
       CI's `database` job runs the pipeline's suite on both stores.*
 
+## Open in RD-9 — what the origin check and the headers leave open
+
+- [ ] **Redirects built from `request.url` name the server's bind
+      address behind a proxy**: `next start` builds it on
+      `localhost:<port>` (`resolve-routes.js:103-105`), and 88 lines in
+      route files use it (RD-9a). RD-10 or RD-11 is to measure and fix it; RD-11
+      must reach the image by a host name other than `localhost`, or the
+      test cannot see it. Under RD-9e's `form-action 'self'` the symptom
+      becomes a CSP refusal.
+
 ## Open in RD-8 — what the work limits leave open
 
 - [ ] **A signed-in flood can hold the signed-in limiter client**; an
@@ -2035,6 +2058,10 @@ into on 2026-11-17.
 - [ ] **Page renders sign and audit a link per photo and the video
       preview per render, unlimited** (`thumbnails.ts:20-36`); a download
       link may be fetched with ranges for its 300 s.
+      *Amended in RD-9a (ADR-0174): `GET /api/assets/{id}/download-url`
+      also counts and audits, and a `Lax` cookie rides another site's
+      top-level link to it; it is not a change, so the origin check does not
+      cover it. `Sec-Fetch-Site` would.*
 - [ ] **No organization key exists**; reconsider with the storage quota
       and measured traffic.
 - [ ] **The start route's form size is not bounded**:
@@ -2103,6 +2130,9 @@ into on 2026-11-17.
       restrict ingress to the load balancer, before production.** Reaching
       the service's own URL bypasses the client-address key whatever the
       value; too low a value puts every client under one key. Part 2.
+      *Amended in RD-9a (ADR-0174): reaching the service's own URL or
+      `http` also refuses every form and JSON change there, since only
+      `APP_BASE_URL`'s origin is accepted; redirect them at the front.*
 - [ ] **Tune the per-address and per-IP values from measurement.** Five
       failures per 15 minutes per IP will catch people behind one carrier
       or office address; the IP key is idle until the setting is set.
