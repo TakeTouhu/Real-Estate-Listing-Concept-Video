@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expect, test } from "./support/csp-guard";
 import { E2E_BASE_URL } from "./support/environment";
 import { pageAlert } from "./support/hydration";
 import { passwordResetLink } from "./support/outbox";

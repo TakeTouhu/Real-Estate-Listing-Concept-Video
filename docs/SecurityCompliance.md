@@ -170,6 +170,11 @@ release and **is not activated** (ADR-0054 Decision 2).
   `Origin` against `APP_BASE_URL` first, beside the `SameSite=Lax`
   session cookie; the token-authorized upload `PUT` is the one exception.*
 - CSP, secure headers, and dependency scanning
+  *Secure headers since RD-9d and a Content Security Policy with a
+  per-request nonce on every page since RD-9e (ADR-0174); the browser
+  test proves the development policy, and RD-11 is to prove the
+  production one. Dependency scanning is not part 1's: CI has no audit,
+  CodeQL or Dependabot step.*
 - **Defense-in-depth rate limiting** across account, organization, IP and
   endpoint/action dimensions, covering login, password reset, MFA recovery,
   uploads, generation, downloads and billing. Login failures use progressive
@@ -306,6 +311,10 @@ Audit metadata must be sanitized and tamper-evident. Do not store full secrets o
   codes and the reset and verification emails since RD-7; sign-up and the
   signed-in work since RD-8; what is left is in `TODO.md`, "Open in
   RD-8"*)
+- Every cookie-based change checks its origin; security headers and a
+  Content Security Policy in place (*since RD-9, ADR-0174; the
+  production policy is proved in a browser by RD-11; what is left is in
+  `TODO.md`, "Open in RD-9"*)
 - Privileged support access time-limited, audited, and without generic
   impersonation
 - Privacy policy, terms, subprocessor list, Mode C consent wording and AI

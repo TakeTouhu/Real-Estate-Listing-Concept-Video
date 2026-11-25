@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./support/csp-guard";
 import { runPipelineMakingNoClip } from "./support/clipless-pipeline";
 import { provisionPremiumPlan, signUpOwner } from "./support/owner";
 import { makePhotos } from "./support/photos";

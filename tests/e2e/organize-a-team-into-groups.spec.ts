@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./support/csp-guard";
 import { pageAlert } from "./support/hydration";
 import { signUpOwner } from "./support/owner";
 

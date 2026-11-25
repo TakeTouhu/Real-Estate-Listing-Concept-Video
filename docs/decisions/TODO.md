@@ -2052,6 +2052,8 @@ into on 2026-11-17.
       must reach the image by a host name other than `localhost`, or the
       test cannot see it. Under RD-9e's `form-action 'self'` the symptom
       becomes a CSP refusal.
+      *Amended in RD-9e (ADR-0174): every page sends `form-action 'self'`
+      since RD-9e, so such a redirect is now refused by the browser.*
 - [ ] **A browser that sends no `Origin` on a form post cannot sign
       in.** No supported-browser statement exists; the refusal log
       (`NO_ORIGIN`) will show whether it happens.
@@ -2061,6 +2063,27 @@ into on 2026-11-17.
 - [ ] **RD-10's image build must run `next build` with `NODE_ENV` unset
       or `production`**, or production sends no HSTS: `next build` only
       defaults it (ADR-0174 Decision 8).
+- [ ] **The production CSP is not proved in a browser before RD-11**:
+      the browser test runs `next dev`, whose policy adds `'unsafe-eval'`
+      and `ws: wss:`; RD-11 runs the same violation guard
+      (`tests/e2e/support/csp-guard.ts`) against the production build
+      (RD-9e, ADR-0174 Decision 10).
+- [ ] **No CSP violation report endpoint**: it would be a new
+      unauthenticated `POST`; reconsider with part 2's observability.
+      A refusal in a customer's browser is seen by no one until then.
+- [ ] **`style-src` allows `'unsafe-inline'`** for Next.js's own
+      fallback pages, which render an inline `<style>` without a nonce;
+      tighten when Next.js nonces them.
+- [ ] **The prerendered `/_not-found` carries no nonce**, so from
+      `next start` an unknown address's scripts are refused and only its
+      static text shows (measured in RD-9e); `next dev` renders it per
+      request, with the nonce. `/favicon.ico`, which the app does not
+      have, and an unknown `/_next/<path>` outside `/_next/static` get
+      the same page with no page policy at all, since the middleware
+      does not run there (measured from `next start` in RD-9e).
+- [ ] **A third-party script, frame or connection** (Stripe.js when
+      billing goes live, analytics, chat, web fonts) needs a reviewed
+      change to the page policy in `apps/web/src/lib/security-headers.ts`.
 
 ## Open in RD-8 — what the work limits leave open
 

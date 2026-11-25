@@ -1,5 +1,6 @@
 import { basename } from "node:path";
-import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
+import type { Browser, Locator, Page } from "@playwright/test";
+import { expect, test } from "./support/csp-guard";
 import { E2E_BASE_URL } from "./support/environment";
 import { hydrated, pageAlert } from "./support/hydration";
 import { invitationLink, verificationLink } from "./support/outbox";

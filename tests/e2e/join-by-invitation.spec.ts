@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./support/csp-guard";
 import { E2E_BASE_URL } from "./support/environment";
 import { invitationLink, verificationLink } from "./support/outbox";
 import { newEmail, newPassword, provisionPremiumPlan, signUpOwner } from "./support/owner";

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { expect, test } from "@playwright/test";
+import type { APIResponse, Response } from "@playwright/test";
 import { createSharedFolderStorage } from "@app/storage";
+import { expect, test } from "./support/csp-guard";
 import { E2E_BASE_URL, E2E_SHARED_STORAGE_DIR, E2E_STORAGE_SIGNING_SECRET } from "./support/environment";
 
 /** The fixed headers every answer carries (RD-9d, ADR-0174 Decision 8). */
@@ -15,6 +16,19 @@ const EVERY_ANSWER = {
 
 /** The API policy (Decision 9): the download route's own `default-src 'none'; sandbox`, and no framing. */
 const API_POLICY = "default-src 'none'; frame-ancestors 'none'; sandbox";
+
+/** `next dev`'s page policy (Decision 10), which serves this test, for a nonce. */
+const devPagePolicy = (nonce: string): string =>
+  `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'; ` +
+  "style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; " +
+  "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'; " +
+  "frame-ancestors 'none'";
+
+/** Every `Content-Security-Policy` an answer carries: one source of headers each, never two (RD-9e). */
+async function policiesOf(answer: Response | APIResponse): Promise<string[]> {
+  const headers = await answer.headersArray();
+  return headers.filter(({ name }) => name.toLowerCase() === "content-security-policy").map(({ value }) => value);
+}
 
 /** The fixed headers, and neither HSTS, which only a production build sends, nor `X-Powered-By`. */
 function expectFixedHeaders(headers: Record<string, string>): void {
@@ -37,12 +51,13 @@ test("pages, the API and a signed download link carry the fixed security headers
   const pageHeaders = await login.allHeaders();
   expectFixedHeaders(pageHeaders);
   // The API policy forbids scripts: it is never a page's.
-  expect(pageHeaders["content-security-policy"] ?? "").not.toContain("sandbox");
+  expect(await policiesOf(login)).toEqual([expect.not.stringContaining("sandbox")]);
 
   const health = await request.get("/api/health");
   expect(health.status()).toBe(200);
   expectFixedHeaders(health.headers());
-  expect(health.headers()["content-security-policy"]).toBe(API_POLICY);
+  // The middleware never runs for the API: the configuration's policy is the only one.
+  expect(await policiesOf(health)).toEqual([API_POLICY]);
 
   // A link the web app's own signer makes, to an object in its shared folder. It is asked from Node, outside
   // Playwright's recorded steps, and only its answer is read: the link is never printed (ADR-0121 Decision 1).
@@ -80,4 +95,34 @@ test("pages, the API and a signed download link carry the fixed security headers
   expectFixedHeaders(refused.headers());
   expect(refused.headers()["content-security-policy"]).toBe(API_POLICY);
   expect(refused.headers()["cache-control"]).toBe("private, no-store");
+});
+
+/**
+ * The page policy (RD-9e, ADR-0174 Decision 10): the middleware sends it with a
+ * new nonce on every load, Next.js puts that nonce on every script of the page,
+ * and the scripts run. `next dev` serves this test, so it is `next dev`'s
+ * policy; the guard every spec runs fails on anything it refuses.
+ */
+test("a page carries the page policy, with a new nonce on every script of each load", async ({ page }) => {
+  const nonces: string[] = [];
+  for (const address of ["/login", "/login", "/no-such-page"]) {
+    const answer = await page.goto(address);
+    if (answer === null) throw new Error(`${address} gave no answer`);
+    expect(answer.status()).toBe(address === "/no-such-page" ? 404 : 200);
+    const policies = await policiesOf(answer);
+    expect(policies).toHaveLength(1);
+    const nonce = /'nonce-([^']+)'/.exec(policies[0] ?? "")?.[1] ?? "";
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]{22}==$/);
+    expect(policies[0]).toBe(devPagePolicy(nonce));
+    nonces.push(nonce);
+
+    const scripts = (await answer.text()).match(/<script\b[^>]*>/g) ?? [];
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const script of scripts) expect(script).toContain(` nonce="${nonce}"`);
+    // Next.js's inline scripts ran and loaded its chunks: the client router started.
+    await expect
+      .poll(() => page.evaluate(() => typeof (globalThis as { next?: { version?: unknown } }).next?.version))
+      .toBe("string");
+  }
+  expect(new Set(nonces).size).toBe(nonces.length);
 });
