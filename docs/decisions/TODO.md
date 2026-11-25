@@ -2000,6 +2000,16 @@ into on 2026-11-17.
       5). Its helpers would need a second server or run. RD-11's
       production-mode test or part 2 is to decide.
 
+## Open in RD-6c — what the SMTP settings leave open
+
+- [ ] **Decide whether to refuse the settings that widen what Node.js
+      trusts** (ADR-0167): `NODE_EXTRA_CA_CERTS`, `NODE_OPTIONS` (which
+      can carry `--use-openssl-ca` or a CA flag), `SSL_CERT_FILE`,
+      `SSL_CERT_DIR` and `OPENSSL_CONF` add authorities rather than
+      turning the check off, and a deployment may need one; which a
+      production start refuses, or reports, is part 2's, with the
+      deployment's layout.
+
 ## Open in RD-6a — what the SMTP email sender leaves open
 
 - [ ] **Decide whether a send has a deadline of its own** (ADR-0166
@@ -2017,10 +2027,12 @@ into on 2026-11-17.
 - [ ] **Set the library's limits from the chosen service's numbers**
       (ADR-0166 Decision 5): 10 s to connect, 10 s for the greeting and
       for DNS, 30 s idle are provisional, part 2's.
-- [ ] **Refuse `NODE_TLS_REJECT_UNAUTHORIZED` in production** (RD-6c):
+- [x] **Refuse `NODE_TLS_REJECT_UNAUTHORIZED` in production** (RD-6c):
       set to `0`, it turns off the certificate check of every connection
       that does not set its own; the SMTP sender sets its own, but the
       start check should refuse it as it refuses `NODE_DEBUG`.
+      *Amended in RD-6c (ADR-0167 Decision 2): done; the schema refuses
+      any non-empty value in production, as `NODE_DEBUG`.*
 
 ## Open in RD-5a — what the ClamAV scanner leaves open
 

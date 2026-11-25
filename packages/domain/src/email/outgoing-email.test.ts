@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import * as shared from "@app/shared";
 import { AppError } from "@app/shared";
+import { normalizeEmail } from "../identity/util";
 import {
+  EMAIL_ADDRESS_MAX_LENGTH,
   EMAIL_KINDS,
+  EMAIL_LOCAL_PART_MAX_LENGTH,
   EMAIL_SUBJECT_MAX_LENGTH,
   EMAIL_TEXT_MAX_LENGTH,
   isDeliverableEmailAddress,
@@ -84,6 +88,18 @@ describe("the recipient", () => {
   it("is normalized as the product stores an address", () => {
     expect(outgoingEmail({ ...VALID, to: "  Owner@Example.TEST " }).to).toBe("owner@example.test");
     expect(isDeliverableEmailAddress("  Owner@Example.TEST ")).toBe(true);
+  });
+
+  it("is the rule the environment judges the sender by, normalized as stored (ADR-0167)", () => {
+    expect(isDeliverableEmailAddress).toBe(shared.isDeliverableEmailAddress);
+    expect([EMAIL_ADDRESS_MAX_LENGTH, EMAIL_LOCAL_PART_MAX_LENGTH]).toEqual([
+      shared.EMAIL_ADDRESS_MAX_LENGTH,
+      shared.EMAIL_LOCAL_PART_MAX_LENGTH,
+    ]);
+    const mixed = ["  Owner@Example.TEST ", "\towner@example.test\n", "First.Last+Tag@Mail.Example.CO.JP"];
+    for (const address of [...mixed, "ÅSA@EXAMPLE.TEST", "ｆｕｌｌ@example.test", "a.b.c+d@example.test"]) {
+      expect(normalizeEmail(address)).toBe(shared.normalizeEmailAddress(address));
+    }
   });
 });
 

@@ -32,7 +32,7 @@ production scheduler activation and live Stripe charges stay BLOCKED
 | Choosing the web app's adapters | each service picks its own, in four files (*one place since RD-1, ADR-0150*) | `apps/web/src/lib/property.ts`, `mailer.ts`, `storyboard.ts`, `analysis.ts` |
 | Object storage | in-memory (ADR-0008) or the development shared folder (ADR-0085), both refused in production; no Google Cloud Storage adapter (*one is written, not yet used, since RD-3a, ADR-0156; the web app uses it since RD-3d, ADR-0159*) | `@app/storage` |
 | Malware scanning | `PassthroughMalwareScanner`, which knows only the EICAR test file, refused in production (ADR-0054 Decision 5) (*a ClamAV scanner is written, not yet used, since RD-5a, ADR-0163; the web app uses it when `CLAMAV_HOST` is set since RD-5b, ADR-0164*) | `@app/storage` `scanner.ts` |
-| Email | the development outbox (ADR-0126), refused in production; with none, sign-up cannot send its verification link (ADR-0129) (*an SMTP sender is written, not yet used, since RD-6a, ADR-0166*) | `apps/web/src/lib/mailer.ts` |
+| Email | the development outbox (ADR-0126), refused in production; with none, sign-up cannot send its verification link (ADR-0129) (*an SMTP sender is written, not yet used, since RD-6a, ADR-0166; its settings are checked since RD-6c, ADR-0167*) | `apps/web/src/lib/mailer.ts` |
 | Rate limiting | none, beyond locking an MFA sign-in after five wrong codes | |
 | Start-up checks | the environment schema refuses the development folders in production; an adapter refuses only when first built; `MFA_SECRET_KEY` is optional (*a production start is checked since RD-2a, ADR-0151*) | `@app/shared` `env.ts` |
 | Readiness | a provider self-check and whether the MFA key is set; not the database or storage (*both are asked since RD-2b, ADR-0152, and the database within a limit since RD-2c, ADR-0153; what the start check refuses is given since RD-2d, ADR-0154; the web app's own database client is asked to connect since RD-2e, ADR-0155*) | `apps/web/src/lib/health.ts` |
@@ -54,7 +54,7 @@ changed lines.
 | RD-3 | Google Cloud Storage adapter for the web storage port, tested on an emulator (*its objects over the JSON API, and the emulator in CI: RD-3a, ADR-0156; its streamed read: RD-3b, ADR-0157; its credential and its own connections: RD-3c, ADR-0158; in the web app: RD-3d, ADR-0159*) | none |
 | RD-4 | Google Cloud Storage for the worker's copy and deliverable writes (*the worker's reads and first-wins writes: RD-4a, ADR-0160; the staging sink's upload: RD-4b, ADR-0161; the development pipeline beside the emulator: RD-4c, ADR-0162*) | none |
 | RD-5 | ClamAV scanner, with ClamAV in CI (*the scanner, ClamAV in CI and the upload going on only on a clean verdict: RD-5a, ADR-0163; in the web app: RD-5b, ADR-0164; the upload panel's Retry: RD-5c, ADR-0165*) | none |
-| RD-6 | SMTP email adapter, tested with a mail catcher (*the sender: RD-6a, ADR-0166; proved against Mailpit in CI: RD-6b*) | none |
+| RD-6 | SMTP email adapter, tested with a mail catcher (*the sender: RD-6a, ADR-0166; proved against Mailpit in CI: RD-6b; its settings: RD-6c, ADR-0167*) | none |
 | RD-7 | Rate limiter in PostgreSQL; sign-in, reset, verification resend, MFA | 1 |
 | RD-8 | Rate limits on invitations, uploads, analysis, generation start, downloads, Unit purchase | none |
 | RD-9 | Same-origin on every cookie-based change; security headers | none |

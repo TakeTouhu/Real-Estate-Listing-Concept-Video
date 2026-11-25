@@ -2987,3 +2987,20 @@ run: start Mailpit on `127.0.0.1` and name its ports in
 (`docs/local-setup.md`, section 5).
 
 **Rolling back.** To RD-6a's build: safe. Nothing stores anything new.
+
+## RD-6c — the SMTP settings
+
+**No migration** (ADR-0167). Migration 34 stays the last.
+
+**What changes at deploy.** Eight optional settings. The schema checks
+the seven SMTP ones, and nothing uses them yet, so the web app still
+mails through the outbox or not at all, and a production start is still
+refused for email. A production deployment that sets
+`NODE_TLS_REJECT_UNAUTHORIZED`, to any non-empty value, no longer starts.
+
+**On a development machine.** Nothing changes unless an SMTP setting is
+set: then all seven are required, never beside `EMAIL_OUTBOX_DIR`. The
+browser test refuses every one.
+
+**Rolling back.** To RD-6b's build: safe. The settings are no longer
+checked, and nothing stores anything new.

@@ -1230,6 +1230,14 @@ is not trusted or carries another name, or when the sender is told to
 speak TLS from the first byte to a server that speaks STARTTLS. No
 setting or behaviour of the product changes.
 
+**RD-6c — the SMTP settings** (ADR-0167, no migration): seven settings
+name an SMTP server and what the web app gives it, all or none, never
+beside the outbox folder, each refused by a message that repeats no
+value. Production refuses `NODE_TLS_REJECT_UNAUTHORIZED`. The address
+rule moves to `@app/shared`, so the settings and the sender judge an
+address alike. The browser test refuses every SMTP setting. Nothing uses
+the settings yet: RD-6d gives the web app the SMTP sender.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
