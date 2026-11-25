@@ -1472,6 +1472,15 @@ serves liveness with HSTS and a page with a nonce; readiness answers
 A pull request shows 12 checks. Planned, not done: RD-10b redirects to
 a path; RD-10c the worker image and the records that close RD-10.
 
+**Next.js 15.5.28** (added by the CTO after RD-10a, no migration):
+`next` 15.5.22 → 15.5.28 fixes six of its nine advisories, the three
+critical among them, and `images: { unoptimized: true }` turns off the
+image optimizer, which the app never used; the image's smoke now checks
+that `/_next/image` answers `404`. Not 15.5.29: it drops a route
+handler's `Content-Length` (ADR-0115 Decision 3), and the three
+advisories fixed only there do not apply. `sharp`, `zod` and the
+`postcss` that `next` pins stay open in `TODO.md`.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

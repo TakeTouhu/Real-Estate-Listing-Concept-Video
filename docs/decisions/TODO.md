@@ -2081,6 +2081,19 @@ into on 2026-11-17.
       --prod` on 2026-11-25: 22, three critical in `next` 15.5.22, high
       ones in `sharp` 0.33.5 (fixed from 0.35.5) and `zod` 3.25.76
       (fixed in 4.6.6, a major version).
+      *Amended in the Next.js 15.5.28 PR: 15.5.22 → 15.5.28 and
+      `images: { unoptimized: true }` fix six of `next`'s nine: the
+      three critical, the high one and two moderate. `pnpm audit
+      --prod` on 2026-11-25: 22 before (3 critical, 12 high, 7
+      moderate), 16 after (11 high, 5 moderate). Open: `sharp` and
+      `zod` as above; the `postcss` 8.4.31 that `next` pins, with its
+      `nanoid` 3.3.16 and `source-map-js` 1.2.1, whose fixes (3.3.18,
+      1.2.2) are patch releases inside `postcss`'s ranges; and three
+      moderate `next` advisories fixed only in 15.5.29, which do not
+      apply here (`docs/api-changes-next-15-5-28.md`). 15.5.29 drops
+      a route handler's `Content-Length`, so a move to 15.5.29 or
+      later first decides how downloads keep their length (ADR-0115
+      Decision 3).*
 - [ ] **Decide how migrations run in production.** The web image holds
       no Prisma CLI; RD-11 applies them from the runner. Part 2.
 - [ ] **Set the server's keep-alive against the load balancer's.**

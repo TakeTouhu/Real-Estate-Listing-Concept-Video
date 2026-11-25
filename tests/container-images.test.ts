@@ -331,6 +331,17 @@ describe("the web image", () => {
     expect(runs.filter((l) => l.includes("NODE_ENV="))).toEqual([]);
   });
 
+  it("has its smoke check that the image optimizer is off", () => {
+    expect(raw("apps/web/next.config.mjs")).toMatch(/^\s*images: \{ unoptimized: true \},$/m);
+    const ci = raw(WORKFLOW);
+    const job = readJob(ci, "web-image");
+    const lines = ci.split(/\r?\n/).slice(job.first, job.last);
+    expect(lines.filter((line) => line.includes("/_next/image")).map((line) => line.trim())).toEqual([
+      "const image = await fetch(`${base}/_next/image?url=%2Ffavicon.ico&w=64&q=75`);",
+      "check(image.status === 404, `/_next/image answers ${image.status}`);",
+    ]);
+  });
+
   it("installs from the lockfile alone, offline after fetching it", () => {
     const installs = ofKind(instructions(file), "RUN").filter((l) =>
       /\b(?:pnpm|npm|yarn)\b (?:i|install|add|fetch)\b/.test(l),
