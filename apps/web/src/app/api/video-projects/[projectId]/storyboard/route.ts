@@ -33,7 +33,7 @@ export async function GET(
     );
     return NextResponse.json(toStoryboardReadDto(view));
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "GET /api/video-projects/[projectId]/storyboard");
   }
 }
 
@@ -73,6 +73,6 @@ export async function POST(
     );
     return NextResponse.json(toStoryboardReadDto({ ...composed, fresh: true }));
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "POST /api/video-projects/[projectId]/storyboard");
   }
 }

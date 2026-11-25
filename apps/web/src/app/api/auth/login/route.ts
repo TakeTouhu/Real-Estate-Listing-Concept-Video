@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { signInStep } from "@app/domain";
 import { AppError } from "@app/shared";
 import { SESSION_COOKIE, nextPageFor, sessionCookieOptions } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getIdentityServices } from "@/lib/identity";
 import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { getRateLimiter, withoutLimiterText } from "@/lib/rate-limit";
@@ -34,6 +35,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions());
     return response;
   } catch (error) {
+    logRequestFailure(error, "POST /api/auth/login");
     const message = error instanceof AppError ? error.message : "Sign in failed";
     return redirectWithError("/login", message);
   }

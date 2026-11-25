@@ -1,16 +1,21 @@
 import { NextResponse } from "next/server";
 import { AppError, toErrorEnvelope } from "@app/shared";
+import { logRequestFailure } from "./failure-log";
 import { pathWithQuery, seeOther } from "./redirect";
 
 /**
  * Map an error to a JSON error envelope response (never leaks internals). A
  * rate limit's refusal, with its whole seconds to wait, also answers
- * `Retry-After` and `Cache-Control: no-store` (ADR-0173 Decision 7).
+ * `Retry-After` and `Cache-Control: no-store` (ADR-0173 Decision 7). An error
+ * the app does not know, or a 5xx `AppError`, is logged first under `route`
+ * (`POST /api/assets/[assetId]/retry`) with the id the envelope answers
+ * (ADR-0177 Decision 4).
  */
-export function appErrorToResponse(error: unknown): NextResponse {
+export function appErrorToResponse(error: unknown, route?: string): NextResponse {
+  const requestId = logRequestFailure(error, route ?? "UNNAMED");
   const appError =
     error instanceof AppError ? error : new AppError("INTERNAL_ERROR", "Unexpected error");
-  const response = NextResponse.json(toErrorEnvelope(appError, crypto.randomUUID()), {
+  const response = NextResponse.json(toErrorEnvelope(appError, requestId), {
     status: appError.httpStatus,
   });
   const seconds = appError.details?.retryAfterSeconds;

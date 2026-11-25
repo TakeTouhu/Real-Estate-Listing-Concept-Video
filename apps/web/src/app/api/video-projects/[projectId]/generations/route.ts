@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { StartGenerationOutcome } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { countGenerationStart, getGenerationStartLogger, getGenerationStartService } from "@/lib/generation-start";
 import {
   NOT_USABLE,
@@ -64,6 +65,7 @@ export async function POST(
   try {
     outcome = await starts.start(current.user.id, input);
   } catch (error) {
+    logRequestFailure(error, "POST /api/video-projects/[projectId]/generations");
     if (!(error instanceof AppError)) throw error;
     return redirectWithError(pages.start, failureMessage(error));
   }

@@ -25,6 +25,6 @@ export async function GET(
     );
     return NextResponse.json({ analyses: analyses.map(toAnalysisDto) });
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "GET /api/properties/[propertyId]/analyses");
   }
 }

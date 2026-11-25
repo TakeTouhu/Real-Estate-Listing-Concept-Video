@@ -354,6 +354,20 @@ describe("the sign-up limit (ADR-0173)", () => {
     expect(await deps.repos.users.findByEmail("new@example.com")).toBeNull();
     expect(await readDevelopmentEmailOutbox(outbox)).toEqual([]);
   });
+
+  it("logs one line for a limiter that cannot answer sign-up, naming its route (ADR-0177)", async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((line: string) => void lines.push(line));
+    limitWith(failing(new Error("down")), "1");
+    const refused = await register(from("203.0.113.7", "typed-canary@example.com"));
+    expect(location(refused).error).toBe("Registration failed");
+    const failures = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(failures.map((line) => [line.component, line.route, line.errorName, line.code])).toEqual([
+      ["request", "POST /api/auth/register", "Error", "UNEXPECTED"],
+    ]);
+    expect(lines.join("\n")).not.toContain("typed-canary");
+    expect(lines.join("\n")).not.toContain("203.0.113.7");
+  });
 });
 
 describe("the origin check (ADR-0174)", () => {

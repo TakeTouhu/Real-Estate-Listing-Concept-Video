@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getIdentityServices } from "@/lib/identity";
 import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { seeOther } from "@/lib/redirect";
@@ -30,6 +31,7 @@ export async function POST(
   try {
     await getIdentityServices().organizations.setMfaRequirement(current.user.id, organizationId, required === "true");
   } catch (error) {
+    logRequestFailure(error, "POST /api/organizations/[organizationId]/mfa-requirement");
     const message = error instanceof AppError ? error.message : "Could not change the MFA requirement";
     return redirectWithError("/", message);
   }

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { MIN_STORYBOARD_SCENES } from "@app/domain";
 import { getAnalysisService } from "@/lib/analysis";
 import { getCurrentUser } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getGenerationStartService } from "@/lib/generation-start";
 import { startOnProjectPage } from "@/lib/generation-start-form";
 import { getIdentityServices } from "@/lib/identity";
@@ -54,7 +55,8 @@ export default async function StoryboardPage({
     let property;
     try {
       property = await services.properties.get(current.user.id, organization.id, propertyId);
-    } catch {
+    } catch (error) {
+      logRequestFailure(error, "GET /properties/[propertyId]/video-projects/[projectId]");
       continue;
     }
 

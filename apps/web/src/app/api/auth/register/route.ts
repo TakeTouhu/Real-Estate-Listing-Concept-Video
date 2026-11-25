@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { SESSION_COOKIE, sessionCookieOptions } from "@/lib/auth";
 import { sendLimitedVerificationLinkTo, verifyEmailPage } from "@/lib/email-verification";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getIdentityServices } from "@/lib/identity";
 import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { getRateLimiter } from "@/lib/rate-limit";
@@ -31,7 +32,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     const attempt = await getRateLimiter().signUp(request.headers, services.deps.clock.now());
     if (!attempt.allowed) return redirectWithError("/login", attempt.message);
-  } catch {
+  } catch (error) {
+    logRequestFailure(error, "POST /api/auth/register");
     return redirectWithError("/login", REGISTRATION_FAILED);
   }
   const form = await request.formData();
@@ -44,6 +46,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     const { user, token } = await services.auth.login(email, password);
     signedIn = { user, token };
   } catch (error) {
+    logRequestFailure(error, "POST /api/auth/register");
     const message = error instanceof AppError ? error.message : REGISTRATION_FAILED;
     return redirectWithError("/login", message);
   }

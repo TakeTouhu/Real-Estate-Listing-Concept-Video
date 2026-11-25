@@ -68,7 +68,7 @@ export async function POST(
     );
     return NextResponse.json(toVideoProjectDto(project), { status: 201 });
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "POST /api/properties/[propertyId]/video-projects");
   }
 }
 
@@ -100,6 +100,6 @@ export async function GET(
     );
     return NextResponse.json({ projects: projects.map(toVideoProjectDto) });
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "GET /api/properties/[propertyId]/video-projects");
   }
 }

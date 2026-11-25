@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { SESSION_COOKIE, getSignIn, nextPageFor } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { getIdentityServices } from "@/lib/identity";
 import { getMfaService } from "@/lib/mfa";
@@ -37,6 +38,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     await withoutLimiterText(attempt.succeeded());
     return seeOther("/");
   } catch (error) {
+    logRequestFailure(error, "POST /api/auth/mfa");
     if (!(error instanceof AppError)) return redirectWithError("/login/mfa", "Sign in failed");
     if (error.code === "UNAUTHENTICATED") return backToPassword(error.message);
     const left = error.details?.attemptsLeft;

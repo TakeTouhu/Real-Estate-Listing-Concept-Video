@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import type { MfaStatus } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getSignIn, nextPageFor } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getMfaService } from "@/lib/mfa";
 import { MfaPanel } from "./mfa-panel";
 
@@ -57,6 +58,7 @@ async function mfaStatus(userId: string): Promise<MfaStatus | null> {
   try {
     return await getMfaService().status(userId);
   } catch (error) {
+    logRequestFailure(error, "GET /security");
     if (error instanceof AppError && error.code === "CONFIGURATION_ERROR") return null;
     throw error;
   }

@@ -25,6 +25,7 @@ import {
 } from "@app/shared";
 import { clientAddressKey } from "./client-address";
 import { getServerEnv } from "./env";
+import { failureName, probeFailureCode } from "./failure-log";
 
 /**
  * How many connections each of the limiter's own database clients keeps
@@ -302,11 +303,17 @@ export class WebRateLimits {
 /**
  * The limiter's answer, or its failure as a plain `Error`, so a route that
  * shows an `AppError`'s text answers its own failure instead of the limiter's
- * (ADR-0173 Decision 9, as ADR-0171 Decision 8 intends).
+ * (ADR-0173 Decision 9, as ADR-0171 Decision 8 intends). The error is named
+ * `RateLimiterUnavailable` and keeps the original's filtered code and name,
+ * never its message or the original itself (ADR-0177 Decision 3).
  */
 export function withoutLimiterText<T>(answer: Promise<T>): Promise<T> {
-  return answer.catch(() => {
-    throw new Error("The rate limiter could not answer");
+  return answer.catch((original: unknown) => {
+    throw Object.assign(new Error("The rate limiter could not answer"), {
+      name: "RateLimiterUnavailable",
+      code: probeFailureCode(original),
+      causeName: failureName(original),
+    });
   });
 }
 

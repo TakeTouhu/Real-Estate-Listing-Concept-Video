@@ -316,6 +316,29 @@ describe("a limiter's failure", () => {
     expect(String(caught)).not.toContain("no row");
     expect(await withoutLimiterText(Promise.resolve("answer"))).toBe("answer");
   });
+
+  it("is named, and keeps the original's filtered code and name, never the original (ADR-0177)", async () => {
+    const outage = Object.assign(new Error("Can't reach database server at postgresql://u:CANARY@h:1"), {
+      name: "PrismaClientInitializationError",
+      errorCode: undefined,
+    });
+    const internal = new AppError("INTERNAL_ERROR", "The rate-limit hit returned no row CANARY");
+    const seen: unknown[][] = [];
+    for (const original of [outage, internal, "a thrown CANARY string"]) {
+      const answer = withoutLimiterText(Promise.reject(original));
+      const caught = (await answer.catch((error: unknown) => error)) as Error & { code?: unknown; causeName?: unknown };
+      expect(caught).not.toBeInstanceOf(AppError);
+      expect(caught.message).toBe("The rate limiter could not answer");
+      expect("cause" in caught).toBe(false);
+      expect(`${String(caught)} ${caught.stack ?? ""}`).not.toContain("CANARY");
+      seen.push([caught.name, caught.code, caught.causeName]);
+    }
+    expect(seen).toEqual([
+      ["RateLimiterUnavailable", "UNEXPECTED", "PrismaClientInitializationError"],
+      ["RateLimiterUnavailable", "INTERNAL_ERROR", "AppError"],
+      ["RateLimiterUnavailable", "UNEXPECTED", "UNNAMED"],
+    ]);
+  });
 });
 
 describe("the process's limits", () => {

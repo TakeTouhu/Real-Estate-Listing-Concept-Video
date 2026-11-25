@@ -41,7 +41,7 @@ export async function POST(
     );
     return NextResponse.json(toAnalysisDto(analysis));
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "POST /api/properties/[propertyId]/assets/[assetId]/analysis");
   }
 }
 
@@ -64,6 +64,6 @@ export async function GET(
     );
     return NextResponse.json(toAnalysisDto(analysis));
   } catch (error) {
-    return appErrorToResponse(error);
+    return appErrorToResponse(error, "GET /api/properties/[propertyId]/assets/[assetId]/analysis");
   }
 }

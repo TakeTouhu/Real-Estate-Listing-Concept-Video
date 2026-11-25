@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { getIdentityServices } from "@/lib/identity";
 import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { seeOther } from "@/lib/redirect";
@@ -21,6 +22,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   try {
     await getIdentityServices().organizations.createOrganization(current.user.id, { name });
   } catch (error) {
+    logRequestFailure(error, "POST /api/organizations");
     const message = error instanceof AppError ? error.message : "Could not create organization";
     return redirectWithError("/", message);
   }

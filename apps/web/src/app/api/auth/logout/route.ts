@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { SESSION_COOKIE } from "@/lib/auth";
+import { logRequestFailure } from "@/lib/failure-log";
 import { appErrorToResponse } from "@/lib/http";
 import { getIdentityServices } from "@/lib/identity";
 import { seeOther } from "@/lib/redirect";
@@ -18,8 +19,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (token) {
     try {
       await getIdentityServices().auth.logout(token);
-    } catch {
+    } catch (error) {
       // Best-effort revocation; always clear the cookie below.
+      logRequestFailure(error, "POST /api/auth/logout");
     }
   }
   const response = seeOther("/login");
