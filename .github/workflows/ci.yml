@@ -423,6 +423,7 @@ jobs:
             sleep 1
           done
           cat > "$RUNNER_TEMP/probe.mjs" <<'EOF'
+          import { request } from "node:http";
           const base = "http://127.0.0.1:3000";
           const check = (ok, what) => {
             console.log(`${ok ? "ok" : "FAILED"}: ${what}`);
@@ -445,13 +446,17 @@ jobs:
             headers: { authorization: `Bearer ${process.env.HEALTHCHECK_API_TOKEN}` },
           });
           check(ready.status === 503, `readiness with the token answers ${ready.status}`);
-          const logout = await fetch(`${base}/api/auth/logout`, {
-            method: "POST",
-            redirect: "manual",
-            headers: { origin: "https://app.rd10.test" },
+          // Asked through another host name (fetch would send its own Host): the answer is a path, never the
+          // bind address the server builds request.url on (ADR-0175 Decision 7, RD-10b).
+          const logout = await new Promise((resolve, reject) => {
+            const headers = { host: "app.rd10.test", origin: "https://app.rd10.test" };
+            request(`${base}/api/auth/logout`, { method: "POST", headers }, resolve).on("error", reject).end();
           });
-          // Recorded, not checked: RD-10b makes it a path.
-          console.log(`logout: ${logout.status}, Location: ${logout.headers.get("location")}`);
+          logout.resume();
+          check(logout.statusCode === 303, `sign-out answers ${logout.statusCode}`);
+          check(logout.headers.location === "/login", `sign-out's Location is ${logout.headers.location}`);
+          const cookie = String(logout.headers["set-cookie"] ?? "");
+          check(/^rev_session=;/.test(cookie), "sign-out deletes the session cookie");
           EOF
           docker exec -i web node --input-type=module - < "$RUNNER_TEMP/probe.mjs"
           test "$(docker exec web id -u)" = "1000"

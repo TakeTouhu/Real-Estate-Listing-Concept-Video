@@ -3,6 +3,7 @@ import type { UnitPurchaseOutcome } from "@app/domain";
 import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse, redirectWithError } from "@/lib/http";
+import { pathWithQuery, seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 import {
   CANCELLED_SINCE,
@@ -30,7 +31,7 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "A purchase must be approved from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId } = await context.params;
   const unitsPage = `/organizations/${encodeURIComponent(organizationId)}/units`;
   const buyPage = `${unitsPage}/buy`;
@@ -40,30 +41,28 @@ export async function POST(
     form = await request.formData();
   } catch {
     // A body that is not a form is answered as unusable, and not counted.
-    return redirectWithError(request.url, buyPage, NOT_USABLE);
+    return redirectWithError(buyPage, NOT_USABLE);
   }
   const input = readUnitPurchaseForm(organizationId, form);
-  if (input === null) return redirectWithError(request.url, buyPage, NOT_USABLE);
+  if (input === null) return redirectWithError(buyPage, NOT_USABLE);
 
   // Counted once the session and the form are checked, before the purchase service checks the permission, audits a
   // refusal or buys anything, and never given back (ADR-0173 Decisions 3, 4 and 9).
   const refused = await countUnitPurchase(current.user.id, getUnitPurchaseLogger());
-  if (refused !== null) return redirectWithError(request.url, buyPage, refused);
+  if (refused !== null) return redirectWithError(buyPage, refused);
 
   let outcome: UnitPurchaseOutcome;
   try {
     outcome = await getUnitPurchaseService().approve(current.user.id, input);
   } catch (error) {
     if (!(error instanceof AppError)) throw error;
-    return redirectWithError(request.url, buyPage, failureMessage(error));
+    return redirectWithError(buyPage, failureMessage(error));
   }
-  if (outcome.kind === "REFUSED") return redirectWithError(request.url, buyPage, refusalMessage(outcome.reason));
+  if (outcome.kind === "REFUSED") return redirectWithError(buyPage, refusalMessage(outcome.reason));
   if (outcome.kind === "ALREADY_APPROVED" && outcome.purchase.cancelledAt !== null) {
-    return redirectWithError(request.url, buyPage, CANCELLED_SINCE);
+    return redirectWithError(buyPage, CANCELLED_SINCE);
   }
 
   // A replay of the same approval lands where the approval did: it bought once.
-  const done = new URL(unitsPage, request.url);
-  done.searchParams.set("purchased", "1");
-  return NextResponse.redirect(done, { status: 303 });
+  return seeOther(pathWithQuery(unitsPage, { purchased: "1" }));
 }

@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse } from "@/lib/http";
 import { cancelMemberInvitation, membersPage } from "@/lib/members";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -21,8 +22,8 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "An invitation must be cancelled from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId, invitationId } = await context.params;
   const outcome = await cancelMemberInvitation(current.user.id, organizationId, invitationId);
-  return NextResponse.redirect(membersPage(request.url, organizationId, outcome), { status: 303 });
+  return seeOther(membersPage(organizationId, outcome));
 }

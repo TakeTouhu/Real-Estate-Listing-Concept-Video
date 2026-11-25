@@ -1481,6 +1481,19 @@ handler's `Content-Length` (ADR-0115 Decision 3), and the three
 advisories fixed only there do not apply. `sharp`, `zod` and the
 `postcss` that `next` pins stay open in `TODO.md`.
 
+**RD-10b — route handlers redirect to a path** (ADR-0175 Decision 7,
+no migration): RD-10a's CI measured sign-out redirecting to
+`http://0.0.0.0:3000/login`, not the `Host` it was asked on, which a
+browser refuses after a form post under `form-action 'self'`. The 30
+route files that redirect now send a path through one helper,
+`apps/web/src/lib/redirect.ts`, which answers `303` and refuses a path
+that resolves to `//`, except the download route's adapter-signed
+storage link, which must be `https:`; no status changed. A guard test
+holds that no source file passes `request.url` to a redirect and that
+every redirect goes through the helper, and CI asks the image through
+another host name and requires `Location: /login`. Planned, not done: RD-10c the
+worker image and the records that close RD-10.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

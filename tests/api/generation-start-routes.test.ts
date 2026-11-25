@@ -7,6 +7,7 @@ import type {
 } from "@app/domain";
 import { InMemoryRateLimitStore } from "@app/domain/testing";
 import { AppError, RATE_LIMIT_DEFAULTS, type AppErrorCode, type RateLimitSetting } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * The start route (GS-10c, ADR-0111): what it reads from the start page's
@@ -148,8 +149,7 @@ function post(
 /** Where a 303 sends the customer, and what it carries. */
 function landing(response: Response): { path: string; error: string | null; started: string | null } {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location") ?? "");
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   return { path: url.pathname, error: url.searchParams.get("error"), started: url.searchParams.get("started") };
 }
 

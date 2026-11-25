@@ -85,13 +85,10 @@ describe("the links and pages", () => {
     }
   });
 
-  it("sends a redirect to the verify page on the request's own address", () => {
-    expect(verifyEmailPage("http://localhost:3000/api/auth/register").toString()).toBe(
-      "http://localhost:3000/verify-email",
-    );
-    expect(verifyEmailPage("http://localhost:3000/api/auth/register?x=1", "not-sent").toString()).toBe(
-      "http://localhost:3000/verify-email?notice=not-sent",
-    );
+  it("sends a redirect to the verify page's path, never an address", () => {
+    expect(verifyEmailPage()).toBe("/verify-email");
+    expect(verifyEmailPage("not-sent")).toBe("/verify-email?notice=not-sent");
+    expect(verifyEmailPage("limited", 3)).toBe("/verify-email?notice=limited&retry=3");
   });
 });
 

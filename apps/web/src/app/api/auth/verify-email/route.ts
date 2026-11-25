@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { getEmailVerificationService, verifyEmailPage } from "@/lib/email-verification";
 import { appErrorToResponse, formString } from "@/lib/http";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -18,5 +19,5 @@ export async function POST(request: Request): Promise<NextResponse> {
   const form = await request.formData();
   const outcome = await getEmailVerificationService().verifyEmail(formString(form, "token"));
   const notice = outcome === "INVALID" ? "invalid" : "verified";
-  return NextResponse.redirect(verifyEmailPage(request.url, notice), { status: 303 });
+  return seeOther(verifyEmailPage(notice));
 }

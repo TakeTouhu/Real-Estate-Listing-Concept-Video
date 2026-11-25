@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { AppError, toErrorEnvelope } from "@app/shared";
+import { pathWithQuery, seeOther } from "./redirect";
 
 /**
  * Map an error to a JSON error envelope response (never leaks internals). A
@@ -21,11 +22,9 @@ export function appErrorToResponse(error: unknown): NextResponse {
   return response;
 }
 
-/** Redirect (303) back to a form page with a sanitized error message. */
-export function redirectWithError(requestUrl: string, path: string, message: string): NextResponse {
-  const url = new URL(path, requestUrl);
-  url.searchParams.set("error", message);
-  return NextResponse.redirect(url, { status: 303 });
+/** Redirect (303) back to a form page's path with a sanitized error message. */
+export function redirectWithError(path: string, message: string): NextResponse {
+  return seeOther(pathWithQuery(path, { error: message }));
 }
 
 /** The request's form, or an empty one when its body is not a form, so a route answers as for missing fields. */

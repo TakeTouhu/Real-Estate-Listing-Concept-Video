@@ -13,6 +13,7 @@ import {
   startPages,
 } from "@/lib/generation-start-form";
 import { appErrorToResponse, redirectWithError } from "@/lib/http";
+import { pathWithQuery, seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "A video must be started from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { projectId } = await context.params;
 
   let form: FormData;
@@ -52,25 +53,23 @@ export async function POST(
   }
   const pages = startPages(propertyId, projectId);
   const input = readGenerationStartForm(projectId, form);
-  if (input === null) return redirectWithError(request.url, pages.start, NOT_USABLE);
+  if (input === null) return redirectWithError(pages.start, NOT_USABLE);
 
   // Counted once the session and the form are checked, before the start reserves a Unit or writes a job, and never
   // given back (ADR-0173 Decisions 3, 4 and 9).
   const refused = await countGenerationStart(current.user.id, getGenerationStartLogger());
-  if (refused !== null) return redirectWithError(request.url, pages.start, refused);
+  if (refused !== null) return redirectWithError(pages.start, refused);
 
   let outcome: StartGenerationOutcome;
   try {
     outcome = await starts.start(current.user.id, input);
   } catch (error) {
     if (!(error instanceof AppError)) throw error;
-    return redirectWithError(request.url, pages.start, failureMessage(error));
+    return redirectWithError(pages.start, failureMessage(error));
   }
   const landing = landingFor(outcome);
-  if (landing.to === "START") return redirectWithError(request.url, pages.start, landing.message);
+  if (landing.to === "START") return redirectWithError(pages.start, landing.message);
 
   // A replay of the same confirmation lands where the start did: it started once.
-  const started = new URL(pages.project, request.url);
-  started.searchParams.set("started", "1");
-  return NextResponse.redirect(started, { status: 303 });
+  return seeOther(pathWithQuery(pages.project, { started: "1" }));
 }

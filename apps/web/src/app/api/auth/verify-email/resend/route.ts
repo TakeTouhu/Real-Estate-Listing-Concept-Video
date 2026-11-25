@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getSignIn, nextPageFor } from "@/lib/auth";
 import { sendLimitedVerificationLinkTo, verifyEmailPage } from "@/lib/email-verification";
 import { appErrorToResponse } from "@/lib/http";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -18,14 +19,14 @@ export async function POST(request: Request): Promise<NextResponse> {
     return appErrorToResponse(new AppError("FORBIDDEN", "A verification link must be asked for from this site"));
   }
   const signIn = await getSignIn();
-  if (!signIn) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!signIn) return seeOther("/login");
   if (signIn.step !== "EMAIL_VERIFICATION_REQUIRED") {
-    return NextResponse.redirect(new URL(nextPageFor(signIn.step), request.url), { status: 303 });
+    return seeOther(nextPageFor(signIn.step));
   }
   const sent = await sendLimitedVerificationLinkTo(signIn.user);
-  if (sent === "ALREADY_VERIFIED") return NextResponse.redirect(new URL("/", request.url), { status: 303 });
+  if (sent === "ALREADY_VERIFIED") return seeOther("/");
   if (typeof sent === "object") {
-    return NextResponse.redirect(verifyEmailPage(request.url, "limited", sent.waitMinutes), { status: 303 });
+    return seeOther(verifyEmailPage("limited", sent.waitMinutes));
   }
-  return NextResponse.redirect(verifyEmailPage(request.url, sent === "SENT" ? "sent" : "not-sent"), { status: 303 });
+  return seeOther(verifyEmailPage(sent === "SENT" ? "sent" : "not-sent"));
 }

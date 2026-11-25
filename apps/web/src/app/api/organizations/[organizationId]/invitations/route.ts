@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse, formOf, formString } from "@/lib/http";
 import { countInvitation, invitationFormRefusal, inviteMember, membersPage } from "@/lib/members";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +26,7 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "An invitation must be sent from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId } = await context.params;
   const form = await formOf(request);
   const invitation = { email: formString(form, "email"), role: formString(form, "role") };
@@ -35,5 +36,5 @@ export async function POST(
     invitationFormRefusal(invitation) ??
     (await countInvitation(current.user.id)) ??
     (await inviteMember(current.user.id, organizationId, invitation));
-  return NextResponse.redirect(membersPage(request.url, organizationId, outcome), { status: 303 });
+  return seeOther(membersPage(organizationId, outcome));
 }

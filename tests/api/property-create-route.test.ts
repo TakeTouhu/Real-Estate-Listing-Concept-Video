@@ -18,6 +18,7 @@ import {
   type TestDeps,
 } from "@app/domain/testing";
 import { hotp } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for creating a Property from the home page with its responsible
@@ -147,8 +148,7 @@ const created = async () =>
 /** Where a 303 lands: the new Property's page, or the home page with an error. */
 function landing(response: Response): string {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   return `${url.pathname}${url.search ? ` ${url.searchParams.get("error")}` : ""}`;
 }
 
@@ -246,7 +246,7 @@ describe("creating a Property with its assignment", () => {
 
   it("sends a signed-out visitor to sign in, creating nothing", async () => {
     cookie.value = undefined;
-    expect(new URL((await creating()).headers.get("location")!).pathname).toBe("/login");
+    expect((await creating()).headers.get("location")).toBe("/login");
     expect(await created()).toEqual([]);
   });
 });

@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { groupsPage, renameGroup } from "@/lib/groups";
 import { appErrorToResponse, formOf, formString } from "@/lib/http";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -22,12 +23,12 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "A group must be renamed from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId, groupId } = await context.params;
   const form = await formOf(request);
   const outcome = await renameGroup(current.user.id, organizationId, groupId, {
     name: formString(form, "name"),
     from: formString(form, "from"),
   });
-  return NextResponse.redirect(groupsPage(request.url, organizationId, outcome), { status: 303 });
+  return seeOther(groupsPage(organizationId, outcome));
 }

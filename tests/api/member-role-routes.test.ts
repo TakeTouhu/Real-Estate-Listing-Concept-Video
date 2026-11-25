@@ -10,6 +10,7 @@ import {
 } from "@app/domain";
 import { InMemoryUnitsReader, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { hotp } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for changing a member's role from the members page (AT-8a,
@@ -130,8 +131,7 @@ const changing = (
 /** Where a 303 lands: the members page with one code, and nothing else in the address. */
 function landing(response: Response, organizationId = orgId): string {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   expect(url.pathname).toBe(`/organizations/${organizationId}/members`);
   const entries = [...url.searchParams.entries()];
   expect(entries).toHaveLength(1);
@@ -300,7 +300,7 @@ describe("changing a member's role", () => {
     cookie.value = undefined;
     const response = await changing(ids.VIEWER!, { role: "ADMIN", from: "VIEWER" });
     expect(response.status).toBe(303);
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await roleOf(ids.VIEWER!)).toBe("VIEWER");
   });
 });

@@ -13,6 +13,7 @@ import {
 import { InMemoryRateLimitStore, createTestDeps, type TestDeps } from "@app/domain/testing";
 import { AppError, RATE_LIMIT_DEFAULTS, hotp } from "@app/shared";
 import { readDevelopmentEmailOutbox } from "@app/storage";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for email verification (AT-3b, ADR-0129): sign-up mails a link
@@ -91,7 +92,7 @@ const SITE = { host: "localhost:3210", origin: BASE };
 const form = (fields: Record<string, string>, headers: Record<string, string> = SITE) =>
   new Request("http://localhost/api/auth", { method: "POST", headers, body: new URLSearchParams(fields) });
 const location = (response: Response) => {
-  const url = new URL(response.headers.get("location")!);
+  const url = pathOf(response);
   // A redirect carries a notice, its wait or an error and nothing else: never a token, never a fragment.
   expect([...url.searchParams.keys()].filter((key) => !["notice", "retry", "error"].includes(key))).toEqual([]);
   expect(url.hash).toBe("");
@@ -249,7 +250,7 @@ describe("sending the link again", () => {
 });
 
 describe("the verification email limit (ADR-0172)", () => {
-  const retry = (response: Response) => new URL(response.headers.get("location")!).searchParams.get("retry");
+  const retry = (response: Response) => pathOf(response).searchParams.get("retry");
   const limitWith = (store: ConstructorParameters<typeof WebRateLimits>[0]) => {
     const settings = { ...RATE_LIMIT_DEFAULTS, SESSION_SECRET: "x".repeat(32) };
     limits.value = new WebRateLimits(store, settings, { warn: () => undefined });

@@ -20,6 +20,7 @@ import {
 } from "@app/domain/testing";
 import { AppError, hotp, RATE_LIMIT_DEFAULTS, type RateLimitSetting } from "@app/shared";
 import { readDevelopmentEmailOutbox } from "@app/storage";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for inviting and cancelling from the members page (AT-6b,
@@ -166,8 +167,7 @@ const cancelling = (invitationId: string, organizationId = orgId, headers?: Reco
 /** Where a 303 lands: the members page and the whole of its query, a code and, for a refusal, its wait. */
 function landing(response: Response): string {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   expect(url.pathname).toBe(`/organizations/${orgId}/members`);
   return [...url.searchParams.entries()].map(([key, value]) => `${key}=${value}`).join("&");
 }
@@ -290,7 +290,7 @@ describe("inviting", () => {
     cookie.value = undefined;
     const response = await inviting({ email: "a@example.com", role: "VIEWER" });
     expect(response.status).toBe(303);
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await pending()).toEqual([]);
   });
 });
@@ -325,7 +325,7 @@ describe("the invitation limit per account (ADR-0173)", () => {
     const token = cookie.value;
     cookie.value = undefined;
     const signedOut = await inviting({ email: "a@example.com", role: "VIEWER" });
-    expect(new URL(signedOut.headers.get("location")!).pathname).toBe("/login");
+    expect(signedOut.headers.get("location")).toBe("/login");
     cookie.value = token;
     // A typed address is checked after the count, so a typo counts.
     expect(landing(await inviting({ email: "not-an-address", role: "VIEWER" }))).toBe("error=email");
@@ -404,7 +404,7 @@ describe("cancelling", () => {
       { name: "Elsewhere" },
     );
     const elsewhere = await cancelling(other, organization.id);
-    expect(new URL(elsewhere.headers.get("location")!).searchParams.get("error")).toBe("gone");
+    expect(pathOf(elsewhere).searchParams.get("error")).toBe("gone");
     expect(await pending()).toEqual(["b@example.com VIEWER"]);
   });
 
@@ -437,7 +437,7 @@ describe("cancelling", () => {
     cookie.value = undefined;
     const response = await cancelling(id);
     expect(response.status).toBe(303);
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await pending()).toEqual(["a@example.com VIEWER"]);
   });
 });

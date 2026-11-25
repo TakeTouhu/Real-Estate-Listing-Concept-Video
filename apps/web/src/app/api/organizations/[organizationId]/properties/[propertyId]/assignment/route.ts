@@ -3,6 +3,7 @@ import { AppError } from "@app/shared";
 import { getCurrentUser } from "@/lib/auth";
 import { appErrorToResponse, formOf, formString } from "@/lib/http";
 import { assignProperty, propertyPage } from "@/lib/property-assignment";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ export async function POST(
     return appErrorToResponse(new AppError("FORBIDDEN", "A Property's assignment must be changed from this site"));
   }
   const current = await getCurrentUser();
-  if (!current) return NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  if (!current) return seeOther("/login");
   const { organizationId, propertyId } = await context.params;
   const form = await formOf(request);
   const outcome = await assignProperty(current.user.id, organizationId, propertyId, {
@@ -32,5 +33,5 @@ export async function POST(
     shownResponsibleUserId: formString(form, "shownResponsibleUserId"),
     shownGroupId: formString(form, "shownGroupId"),
   });
-  return NextResponse.redirect(propertyPage(request.url, propertyId, outcome), { status: 303 });
+  return seeOther(propertyPage(propertyId, outcome));
 }

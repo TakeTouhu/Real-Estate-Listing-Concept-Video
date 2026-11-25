@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { AppError } from "@app/shared";
 import { appErrorToResponse, formOf, formString } from "@/lib/http";
 import { resetPasswordPage, resetPasswordWith } from "@/lib/password-reset";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -18,5 +19,5 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   const form = await formOf(request);
   const notice = await resetPasswordWith(formString(form, "token"), formString(form, "password"));
-  return NextResponse.redirect(resetPasswordPage(request.url, notice), { status: 303 });
+  return seeOther(resetPasswordPage(notice));
 }

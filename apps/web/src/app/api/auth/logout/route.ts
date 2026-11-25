@@ -4,6 +4,7 @@ import { AppError } from "@app/shared";
 import { SESSION_COOKIE } from "@/lib/auth";
 import { appErrorToResponse } from "@/lib/http";
 import { getIdentityServices } from "@/lib/identity";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +22,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       // Best-effort revocation; always clear the cookie below.
     }
   }
-  const response = NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+  const response = seeOther("/login");
   response.cookies.delete(SESSION_COOKIE);
   return response;
 }

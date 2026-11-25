@@ -5,6 +5,7 @@ import { sendLimitedVerificationLinkTo, verifyEmailPage } from "@/lib/email-veri
 import { getIdentityServices } from "@/lib/identity";
 import { appErrorToResponse, formString, redirectWithError } from "@/lib/http";
 import { getRateLimiter } from "@/lib/rate-limit";
+import { seeOther } from "@/lib/redirect";
 import { isSameOriginPost } from "@/lib/same-origin";
 
 export const dynamic = "force-dynamic";
@@ -29,9 +30,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   // refuses through this route's own answer, never its own text (ADR-0173 Decisions 2 and 9).
   try {
     const attempt = await getRateLimiter().signUp(request.headers, services.deps.clock.now());
-    if (!attempt.allowed) return redirectWithError(request.url, "/login", attempt.message);
+    if (!attempt.allowed) return redirectWithError("/login", attempt.message);
   } catch {
-    return redirectWithError(request.url, "/login", REGISTRATION_FAILED);
+    return redirectWithError("/login", REGISTRATION_FAILED);
   }
   const form = await request.formData();
   const email = formString(form, "email");
@@ -44,14 +45,14 @@ export async function POST(request: Request): Promise<NextResponse> {
     signedIn = { user, token };
   } catch (error) {
     const message = error instanceof AppError ? error.message : REGISTRATION_FAILED;
-    return redirectWithError(request.url, "/login", message);
+    return redirectWithError("/login", message);
   }
   const sent = await sendLimitedVerificationLinkTo(signedIn.user);
   const next =
     typeof sent === "object"
-      ? verifyEmailPage(request.url, "limited", sent.waitMinutes)
-      : verifyEmailPage(request.url, sent === "NOT_SENT" ? "not-sent" : undefined);
-  const response = NextResponse.redirect(next, { status: 303 });
+      ? verifyEmailPage("limited", sent.waitMinutes)
+      : verifyEmailPage(sent === "NOT_SENT" ? "not-sent" : undefined);
+  const response = seeOther(next);
   response.cookies.set(SESSION_COOKIE, signedIn.token, sessionCookieOptions());
   return response;
 }

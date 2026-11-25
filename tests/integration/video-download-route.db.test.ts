@@ -210,7 +210,7 @@ describe.skipIf(!HAS_DB)("the download route through the web app's composition, 
     const response = await post(org);
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(
-      `${SITE}/properties/${PROP_A}/video-projects/${PROJECT_A}?download=forbidden`,
+      `/properties/${PROP_A}/video-projects/${PROJECT_A}?download=forbidden`,
     );
     expect(await downloadsAudited()).toEqual([]);
   });
@@ -220,7 +220,7 @@ describe.skipIf(!HAS_DB)("the download route through the web app's composition, 
 
     const response = await post(ORG_A);
     expect(response.headers.get("location")).toBe(
-      `${SITE}/properties/${PROP_A}/video-projects/${PROJECT_A}?download=none`,
+      `/properties/${PROP_A}/video-projects/${PROJECT_A}?download=none`,
     );
     expect(await downloadsAudited()).toEqual([]);
   });
@@ -233,7 +233,7 @@ describe.skipIf(!HAS_DB)("the download route through the web app's composition, 
 
     const response = await post(ORG_A);
     expect(response.headers.get("location")).toBe(
-      `${SITE}/properties/${PROP_A}/video-projects/${PROJECT_A}?download=limited&retry=60`,
+      `/properties/${PROP_A}/video-projects/${PROJECT_A}?download=limited&retry=60`,
     );
     expect(await downloadsAudited()).toHaveLength(1);
   });

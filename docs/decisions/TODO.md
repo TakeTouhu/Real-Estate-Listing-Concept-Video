@@ -2101,10 +2101,17 @@ into on 2026-11-17.
       Part 2, with the deployment.
 - [ ] **Give liveness a build revision.** It reports version `0.0.0`
       in the image; the revision is only an image label.
+- [ ] **Widen `form-action` before a store signs download links.** The
+      download form posts, then is sent to the signed link. Every
+      adapter signs a link on the app today
+      (`packages/storage/src/signing.ts`), so `form-action 'self'`
+      (RD-9e) lets it through. A link on the store's own address would
+      be refused after the post, so a change to store-signed links must
+      widen `form-action` or change the download form.
 
 ## Open in RD-9 — what the origin check and the headers leave open
 
-- [ ] **Redirects built from `request.url` name the server's bind
+- [x] **Redirects built from `request.url` name the server's bind
       address behind a proxy**: `next start` builds it on
       `localhost:<port>` (`resolve-routes.js:103-105`), and 88 lines in
       route files use it (RD-9a). RD-10 or RD-11 is to measure and fix it; RD-11
@@ -2113,6 +2120,12 @@ into on 2026-11-17.
       becomes a CSP refusal.
       *Amended in RD-9e (ADR-0174): every page sends `form-action 'self'`
       since RD-9e, so such a redirect is now refused by the browser.*
+      *Done in RD-10b (ADR-0175 Decision 7): measured on the image in
+      RD-10a, the logout redirect named `0.0.0.0:3000` whatever `Host`
+      said. Route handlers now answer a path, built by one helper that
+      refuses a path starting `//`; a guard test holds that no route file
+      passes `request.url` to a redirect, and CI asks the image through
+      another host name.*
 - [ ] **A browser that sends no `Origin` on a form post cannot sign
       in.** No supported-browser statement exists; the refusal log
       (`NO_ORIGIN`) will show whether it happens.

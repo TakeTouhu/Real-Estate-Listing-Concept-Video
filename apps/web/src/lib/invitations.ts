@@ -4,6 +4,7 @@ import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { getServerEnv } from "./env";
 import { getMembershipService } from "./members";
+import { pathWithQuery } from "./redirect";
 
 /**
  * The cookie an invitation waits in while its person signs in, creates an
@@ -88,18 +89,14 @@ export function keepsInvitationWaiting(error: AcceptError): boolean {
   return error === "wrong-account" || error === "unverified" || error === "failed";
 }
 
-/** The invitation page, with the code of a refusal, on the address the request came to. */
-export function acceptInvitationPage(requestUrl: string, error?: AcceptError): URL {
-  const url = new URL("/accept-invitation", requestUrl);
-  if (error !== undefined) url.searchParams.set("error", error);
-  return url;
+/** The invitation page's path, with the code of a refusal. */
+export function acceptInvitationPage(error?: AcceptError): string {
+  return pathWithQuery("/accept-invitation", { error });
 }
 
-/** The organizations page, saying which organization was joined. */
-export function joinedPage(requestUrl: string, organizationId: string): URL {
-  const url = new URL("/", requestUrl);
-  url.searchParams.set("joined", organizationId);
-  return url;
+/** The organizations page's path, saying which organization was joined. */
+export function joinedPage(organizationId: string): string {
+  return pathWithQuery("/", { joined: organizationId });
 }
 
 let logger: Logger | undefined;

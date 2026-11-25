@@ -162,10 +162,12 @@ function approve(fields: Record<string, string>, headers: Record<string, string>
   return POST(request, { params: Promise.resolve({ organizationId: orgId }) });
 }
 
-/** Where a 303 sends the customer, and the message it carries. */
+/** Where a 303 sends the customer, a path on this site, and the message it carries. */
 function landing(response: Response): { path: string; error: string | null; purchased: string | null } {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location") ?? "");
+  const location = response.headers.get("location") ?? "";
+  expect(location).toMatch(/^\/(?![/\\])/);
+  const url = new URL(location, "http://browser.invalid");
   return { path: url.pathname, error: url.searchParams.get("error"), purchased: url.searchParams.get("purchased") };
 }
 

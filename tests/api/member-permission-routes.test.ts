@@ -11,6 +11,7 @@ import {
 } from "@app/domain";
 import { InMemoryUnitsReader, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { hotp } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for giving and taking back a member's individual permissions
@@ -146,8 +147,7 @@ const takingBack = (userId: string, permission: string, organizationId = orgId) 
  */
 function landing(response: Response, userId: string | "members", organizationId = orgId): string {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   const members = `/organizations/${organizationId}/members`;
   expect(url.pathname).toBe(userId === "members" ? members : `${members}/${userId}/permissions`);
   const entries = [...url.searchParams.entries()];
@@ -358,7 +358,7 @@ describe("either form post", () => {
     for (const change of ["grant", "revoke"] as const) {
       const response = await posting(change, ids.CREATOR!, { permission: "audit.view" });
       expect(response.status).toBe(303);
-      expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+      expect(response.headers.get("location")).toBe("/login");
     }
     expect(await grantsOf(ids.CREATOR!)).toEqual([]);
   });

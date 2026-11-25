@@ -63,7 +63,7 @@ describe("POST /api/auth/logout", () => {
     expect(await getSignIn()).not.toBeNull();
     const response = await logout(post());
     expect(response.status).toBe(303);
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(response.headers.get("set-cookie")).toMatch(/^rev_session=;/);
     expect(await getSignIn()).toBeNull();
     expect(revoked()).toHaveLength(1);
@@ -73,7 +73,7 @@ describe("POST /api/auth/logout", () => {
     for (const token of [undefined, "ended"]) {
       cookie.value = token;
       const response = await logout(post());
-      expect([response.status, new URL(response.headers.get("location")!).pathname]).toEqual([303, "/login"]);
+      expect([response.status, response.headers.get("location")]).toEqual([303, "/login"]);
       expect(response.headers.get("set-cookie")).toMatch(/^rev_session=;/);
     }
     expect(revoked()).toEqual([]);

@@ -4,6 +4,7 @@ import { AppError } from "@app/shared";
 import { getIdentityServices } from "./identity";
 import { getMailer, tokenLink } from "./mailer";
 import { getRateLimiter, refusalText, retryMinutes } from "./rate-limit";
+import { pathWithQuery } from "./redirect";
 
 /** The page a verification link opens, and where an unverified sign-in waits (ADR-0129). */
 export const VERIFY_EMAIL_PATH = "/verify-email";
@@ -40,14 +41,11 @@ export function verifyEmailNoticeText(notice: VerifyEmailNotice, retry?: string 
 }
 
 /**
- * The verify page with `notice`, and the minutes a refusal waits, on the
- * address the request came to: a redirect, never an emailed link.
+ * The verify page's path with `notice`, and the minutes a refusal waits: a
+ * redirect's, never an emailed link.
  */
-export function verifyEmailPage(requestUrl: string, notice?: VerifyEmailNotice, retry?: number): URL {
-  const url = new URL(VERIFY_EMAIL_PATH, requestUrl);
-  if (notice !== undefined) url.searchParams.set("notice", notice);
-  if (retry !== undefined) url.searchParams.set("retry", String(retry));
-  return url;
+export function verifyEmailPage(notice?: VerifyEmailNotice, retry?: number): string {
+  return pathWithQuery(VERIFY_EMAIL_PATH, { notice, retry: retry?.toString() });
 }
 
 /**

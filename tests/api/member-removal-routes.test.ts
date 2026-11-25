@@ -10,6 +10,7 @@ import {
 } from "@app/domain";
 import { InMemoryUnitsReader, createTestDeps, markEmailVerified, type TestDeps } from "@app/domain/testing";
 import { hotp } from "@app/shared";
+import { pathOf } from "./redirect-location";
 
 /**
  * Route tests for removing a member from the members page (AT-8b, ADR-0140):
@@ -130,8 +131,7 @@ const removing = (
 /** Where a 303 lands: the members page with one code, and nothing else in the address. */
 function landing(response: Response, organizationId = orgId): string {
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location")!);
-  expect(url.origin).toBe(SITE);
+  const url = pathOf(response);
   expect(url.pathname).toBe(`/organizations/${organizationId}/members`);
   const entries = [...url.searchParams.entries()];
   expect(entries).toHaveLength(1);
@@ -286,7 +286,7 @@ describe("removing a member", () => {
     cookie.value = undefined;
     const response = await removing(ids.VIEWER!, { from: "VIEWER" });
     expect(response.status).toBe(303);
-    expect(new URL(response.headers.get("location")!).pathname).toBe("/login");
+    expect(response.headers.get("location")).toBe("/login");
     expect(await roleOf(ids.VIEWER!)).toBe("VIEWER");
   });
 });

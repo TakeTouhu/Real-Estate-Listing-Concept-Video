@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { InMemoryRateLimitStore } from "@app/domain/testing";
 import { createSubscriptionRepository, getPrismaClient } from "@app/database";
 import { RATE_LIMIT_DEFAULTS } from "@app/shared";
+import { pathOf } from "../api/redirect-location";
 
 /**
  * The start route through the web app's own composition, against PostgreSQL
@@ -185,7 +186,7 @@ async function post(form: URLSearchParams): Promise<{ path: string; error: strin
   });
   const response = await POST(request, { params: Promise.resolve({ projectId }) });
   expect(response.status).toBe(303);
-  const url = new URL(response.headers.get("location") ?? "");
+  const url = pathOf(response);
   return { path: url.pathname, error: url.searchParams.get("error"), started: url.searchParams.get("started") };
 }
 

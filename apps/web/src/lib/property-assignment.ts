@@ -3,6 +3,7 @@ import { createLogger, type Logger } from "@app/observability";
 import { AppError } from "@app/shared";
 import { codeOf } from "./page-codes";
 import { getPropertyServices } from "./property";
+import { pathWithQuery } from "./redirect";
 
 /**
  * What the Property page says after its assignment form is posted, by the
@@ -41,12 +42,10 @@ export function assignmentError(param: string | readonly string[] | undefined): 
 /** What a change of a Property's assignment ended with, for the Property page. */
 export type AssignmentOutcome = { readonly notice: AssignmentNotice } | { readonly error: AssignmentError };
 
-/** The Property page with a notice or an error, on the address the request came to. */
-export function propertyPage(requestUrl: string, propertyId: string, outcome: AssignmentOutcome): URL {
-  const url = new URL(`/properties/${encodeURIComponent(propertyId)}`, requestUrl);
-  if ("notice" in outcome) url.searchParams.set("notice", outcome.notice);
-  else url.searchParams.set("error", outcome.error);
-  return url;
+/** The Property page's path, with a notice or an error. */
+export function propertyPage(propertyId: string, outcome: AssignmentOutcome): string {
+  const path = `/properties/${encodeURIComponent(propertyId)}`;
+  return pathWithQuery(path, "notice" in outcome ? { notice: outcome.notice } : { error: outcome.error });
 }
 
 let logger: Logger | undefined;
