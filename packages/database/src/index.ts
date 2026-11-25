@@ -2,6 +2,7 @@ export {
   getPrismaClient,
   getRateLimitPrismaClient,
   getReadinessPrismaClient,
+  getSignedInRateLimitPrismaClient,
   limitedDatabaseUrl,
   statementLimitedDatabaseUrl,
   type PrismaClient,

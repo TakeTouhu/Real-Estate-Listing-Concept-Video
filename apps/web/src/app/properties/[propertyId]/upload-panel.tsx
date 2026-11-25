@@ -14,6 +14,8 @@ interface UploadItem {
   assetId?: string;
   status?: string;
   message?: string;
+  /** The bytes are stored and the check was refused before it read them, so Retry checks them again. */
+  stored?: boolean;
 }
 
 interface Props {
@@ -70,7 +72,11 @@ export function UploadPanel({ organizationId, propertyId, remainingSlots }: Prop
         body: JSON.stringify({ organizationId }),
       });
       const completeJson = await completeRes.json();
-      if (!completeRes.ok) throw new Error(completeJson?.error?.message ?? "Processing failed");
+      if (!completeRes.ok) {
+        // A rate limit refuses the check before the server reads the stored bytes (ADR-0173).
+        patch(localId, { stored: completeRes.status === 429 });
+        throw new Error(completeJson?.error?.message ?? "Processing failed");
+      }
 
       const status = completeJson.status as string;
       patch(localId, {
@@ -134,10 +140,10 @@ export function UploadPanel({ organizationId, propertyId, remainingSlots }: Prop
 
   /**
    * Tries the same photo again, never a new one. A photo the server failed
-   * after storing its bytes is checked again from those bytes; one whose bytes
-   * never arrived is given a new upload link for the same photo and sent the
-   * kept file. The server refuses a failed photo where the Property has no
-   * place left for it (ADR-0165).
+   * after storing its bytes, or whose check a rate limit refused, is checked
+   * again from those bytes; one whose bytes never arrived is given a new
+   * upload link for the same photo and sent the kept file. The server refuses
+   * a failed photo where the Property has no place left for it (ADR-0165).
    */
   const retry = useCallback(
     async (item: UploadItem) => {
@@ -146,7 +152,7 @@ export function UploadPanel({ organizationId, propertyId, remainingSlots }: Prop
       patch(item.localId, { state: "queued", message: undefined, progress: 0 });
       try {
         let uploadUrl: string | null = null;
-        if (item.status !== "FAILED") {
+        if (item.status !== "FAILED" && item.stored !== true) {
           const res = await fetch(`/api/assets/${assetId}/retry`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },

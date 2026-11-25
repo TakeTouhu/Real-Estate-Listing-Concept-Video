@@ -1319,6 +1319,17 @@ Planned, not done: RD-8b the signed-in limiter client, the JSON answer
 and uploads; RD-8c invitations; RD-8d analysis; RD-8e downloads; RD-8f
 generation start; RD-8g Unit purchase and the records that close RD-8.
 
+**RD-8b — uploads are limited per account** (ADR-0173, no migration):
+upload links, retries and checks share one count per signed-in account,
+1,000 a day by default, taken after the session and body checks and
+before the service, on a limiter client of its own, so a flood on
+sign-in cannot hold it. A refusal answers 429 with `Retry-After`, the
+wait in seconds, and its text in hours above 120 minutes; the upload
+panel's Retry no longer sends the file again after a refused check.
+Planned, not done: RD-8c invitations; RD-8d analysis; RD-8e downloads;
+RD-8f generation start; RD-8g Unit purchase and the records that close
+RD-8.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

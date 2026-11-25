@@ -150,6 +150,20 @@ describe("the upload panel's Retry", () => {
     expect(puts.map(({ url }) => url)).toEqual(["/signed/first", "/signed/again"]);
   });
 
+  it("checks the stored bytes again, sending nothing, when a rate limit refused their check (ADR-0173)", async () => {
+    const limited = "Too many uploads. Try again in 3 hours.";
+    routes({
+      "/upload-url": [started()],
+      [`/${ASSET}/complete`]: [respond(429, { error: { message: limited } }), respond(200, { status: "READY" })],
+    });
+    await choose();
+    await screen.findByText(limited);
+    await userEvent.click(screen.getByRole("button", { name: "Retry upload" }));
+    await screen.findByText("ready");
+    expect(asked().map((url) => url.split("/").pop())).toEqual(["upload-url", "complete", "complete"]);
+    expect(puts).toHaveLength(1);
+  });
+
   it.each([
     ["QUARANTINED", "Malware scan flagged this file"],
     ["REJECTED", "Unsupported or mismatched file type"],

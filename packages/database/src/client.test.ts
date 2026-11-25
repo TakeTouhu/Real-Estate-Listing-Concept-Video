@@ -7,11 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * Making a client opens no connection.
  */
 afterEach(() => {
-  type Name = "appPrismaClient" | "readinessPrismaClient" | "rateLimitPrismaClient";
+  type Name = "appPrismaClient" | "readinessPrismaClient" | "rateLimitPrismaClient" | "signedInRateLimitPrismaClient";
   const holder = globalThis as Partial<Record<Name, unknown>>;
   delete holder.appPrismaClient;
   delete holder.readinessPrismaClient;
   delete holder.rateLimitPrismaClient;
+  delete holder.signedInRateLimitPrismaClient;
 });
 
 describe("the process's PrismaClient", () => {
@@ -101,6 +102,14 @@ describe("the abuse limiter's PrismaClient (ADR-0171)", () => {
     expect(first === getPrismaClient() || first === getReadinessPrismaClient(undefined, 3)).toBe(false);
     vi.resetModules();
     expect((await import("./client")).getRateLimitPrismaClient(undefined)).toBe(first);
+  });
+
+  it("has a second, for signed-in routes, made once and apart from every other (ADR-0173)", async () => {
+    const { getPrismaClient, getRateLimitPrismaClient, getSignedInRateLimitPrismaClient } = await import("./client");
+    const signedIn = getSignedInRateLimitPrismaClient("postgresql://app@db.internal/app?connection_limit=3");
+    expect(signedIn === getPrismaClient() || signedIn === getRateLimitPrismaClient(undefined)).toBe(false);
+    vi.resetModules();
+    expect((await import("./client")).getSignedInRateLimitPrismaClient(undefined)).toBe(signedIn);
   });
 
   it("limits its connections and has the database end each statement, keeping the address's options", async () => {

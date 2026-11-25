@@ -8,9 +8,15 @@ import {
   type RateLimitPolicyName,
   type RateLimitStore,
 } from "@app/domain";
-import { createPrismaRateLimitStore, getRateLimitPrismaClient, statementLimitedDatabaseUrl } from "@app/database";
+import {
+  createPrismaRateLimitStore,
+  getRateLimitPrismaClient,
+  getSignedInRateLimitPrismaClient,
+  statementLimitedDatabaseUrl,
+} from "@app/database";
 import { createLogger, type Logger } from "@app/observability";
 import {
+  AppError,
   rateLimitSubject,
   rateLimitSubjectKey,
   type RateLimitSetting,
@@ -21,10 +27,11 @@ import { clientAddressKey } from "./client-address";
 import { getServerEnv } from "./env";
 
 /**
- * How many connections the limiter's own database client keeps (ADR-0171
- * Decision 6). A hit holds one for about a millisecond, so three serve many
- * sign-ins at once, and a flood on one key waits for these three, never for
- * the web app's own connections.
+ * How many connections each of the limiter's own database clients keeps
+ * (ADR-0171 Decision 6; the second, for signed-in routes, ADR-0173 Decision
+ * 6). A hit holds one for about a millisecond, so three serve many sign-ins
+ * at once, and a flood on one key waits for these three, never for the web
+ * app's own connections.
  */
 export const RATE_LIMIT_DATABASE_CONNECTIONS = 3;
 
@@ -37,7 +44,24 @@ export const RATE_LIMIT_DATABASE_CONNECTIONS = 3;
 export const RATE_LIMIT_STATEMENT_MILLISECONDS = 1000;
 
 /** What a limit guards, as its refusal is logged. */
-export type RateLimitedAction = "SIGN_IN" | "MFA_CODE" | "PASSWORD_RESET_EMAIL" | "VERIFICATION_EMAIL" | "SIGN_UP";
+export type RateLimitedAction =
+  | "SIGN_IN"
+  | "MFA_CODE"
+  | "PASSWORD_RESET_EMAIL"
+  | "VERIFICATION_EMAIL"
+  | "SIGN_UP"
+  | "UPLOAD";
+
+/** The signed-in actions, each counted per account on its own plain policy (ADR-0173 Decisions 1 and 3). */
+const ACCOUNT_POLICIES = { UPLOAD: "upload.user" } as const satisfies Partial<
+  Record<RateLimitedAction, RateLimitPolicyName>
+>;
+
+/** A signed-in action counted per account. */
+export type AccountAction = keyof typeof ACCOUNT_POLICIES;
+
+/** The actions whose waits above 120 minutes read in hours (ADR-0173 Decision 8); RD-7's keep minutes. */
+const WAITS_IN_HOURS: ReadonlySet<RateLimitedAction> = new Set<RateLimitedAction>(["SIGN_UP", "UPLOAD"]);
 
 /** An attempt the limits let through, with what its success settles; or the text that refuses it. */
 export type LimitedAttempt =
@@ -46,6 +70,11 @@ export type LimitedAttempt =
 
 /** A request the limits let through, with nothing to give back, or the text that refuses it (ADR-0173). */
 export type LimitedRequest = { readonly allowed: true } | { readonly allowed: false; readonly message: string };
+
+/** A signed-in request the limits let through, or its refusal's text and whole seconds to wait (ADR-0173). */
+export type LimitedWork =
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly message: string; readonly seconds: number };
 
 /** An email the limits let through, or the whole minutes until another may be asked for. */
 export type LimitedEmail = { readonly allowed: true } | { readonly allowed: false; readonly minutes: number };
@@ -59,6 +88,7 @@ const REFUSALS: Readonly<Record<RateLimitedAction, string>> = {
   PASSWORD_RESET_EMAIL: "Too many reset requests.",
   VERIFICATION_EMAIL: "Too many verification emails.",
   SIGN_UP: "Too many sign-ups.",
+  UPLOAD: "Too many uploads.",
 };
 
 /** Whole minutes until `retryAt`, rounded up, at least one. */
@@ -66,8 +96,20 @@ export function refusalMinutes(retryAt: Date, now: Date): number {
   return Math.max(1, Math.ceil((retryAt.getTime() - now.getTime()) / 60_000));
 }
 
-/** The text of a refusal that waits `minutes`, as a page shows it from `?retry=` (ADR-0172). */
+/** Whole seconds until `retryAt`, rounded up, at least one: a JSON refusal's `Retry-After` (ADR-0173). */
+export function retryAfterSeconds(retryAt: Date, now: Date): number {
+  return Math.max(1, Math.ceil((retryAt.getTime() - now.getTime()) / 1000));
+}
+
+/**
+ * The text of a refusal that waits `minutes`, as a page shows it from
+ * `?retry=` (ADR-0172). An RD-8 action's wait above 120 minutes reads in
+ * whole hours, rounded up (ADR-0173 Decision 8).
+ */
 export function refusalText(action: RateLimitedAction, minutes: number): string {
+  if (minutes > 120 && WAITS_IN_HOURS.has(action)) {
+    return `${REFUSALS[action]} Try again in ${Math.ceil(minutes / 60)} hours.`;
+  }
   return `${REFUSALS[action]} Try again in ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`;
 }
 
@@ -90,11 +132,14 @@ const limiterLog = (): Pick<Logger, "warn"> => (logger ??= createLogger({ base: 
 
 /**
  * The web app's abuse limits (ADR-0171): the limiter over a store, its
- * policies and the key every subject is made with. Every line it logs is a
- * code: never a header, an address, an IP, a subject or a user id.
+ * policies and the key every subject is made with. Signed-in requests are
+ * counted on a store of their own, unless the same is given (ADR-0173
+ * Decision 6). Every line it logs is a code: never a header, an address, an
+ * IP, a subject or a user id.
  */
 export class WebRateLimits {
   readonly limiter: RateLimiter;
+  readonly signedInLimiter: RateLimiter;
   readonly policies: RateLimitPolicies;
   private readonly subjectKey: Buffer;
   private readonly trustedEntries: number | undefined;
@@ -103,8 +148,10 @@ export class WebRateLimits {
     store: RateLimitStore,
     settings: RateLimitSettings,
     private readonly log: Pick<Logger, "warn"> = limiterLog(),
+    signedInStore: RateLimitStore = store,
   ) {
     this.limiter = new RateLimiter(store);
+    this.signedInLimiter = new RateLimiter(signedInStore);
     this.policies = rateLimitPolicies(settings);
     this.subjectKey = rateLimitSubjectKey(settings.SESSION_SECRET);
     const trusted = settings.FORWARDED_FOR_TRUSTED_ENTRIES;
@@ -204,6 +251,18 @@ export class WebRateLimits {
     return decision.allowed ? { allowed: true } : { allowed: false, message: this.refuse("SIGN_UP", decision, now) };
   }
 
+  /**
+   * One signed-in request, counted by its account alone, on the signed-in
+   * limiter, after the request's shape is checked and before its service
+   * (ADR-0173 Decisions 1, 3, 4 and 6). Nothing gives the hit back.
+   */
+  async account(action: AccountAction, userId: string, now: Date): Promise<LimitedWork> {
+    const decision = await this.signedInLimiter.hit([this.userKey(ACCOUNT_POLICIES[action], userId)], now);
+    if (decision.allowed) return { allowed: true };
+    const seconds = retryAfterSeconds(decision.retryAt, now);
+    return { allowed: false, message: this.refuse(action, decision, now), seconds };
+  }
+
   /** Forgets an address's failed sign-ins, as a completed reset does (ADR-0172 Decision 4). */
   forgetSignInAddress(address: string): Promise<void> {
     return this.limiter.forget(this.addressKey("sign-in.address", address));
@@ -228,11 +287,32 @@ export function withoutLimiterText<T>(answer: Promise<T>): Promise<T> {
   });
 }
 
+/**
+ * One JSON route's request, counted by its account (ADR-0173). A refusal is
+ * thrown as the JSON answer: 429, its text, and `details` holding the whole
+ * seconds to wait alone, which `appErrorToResponse` also sends as
+ * `Retry-After`. This is the only place a `RATE_LIMITED` error is made. A
+ * limiter that cannot answer, or cannot be built, is thrown as a plain error,
+ * so the route answers its own 500 and never the limiter's text (Decision 9).
+ * The limits are passed as their getter, so a test may stand in for them.
+ */
+export async function limitJsonRequest(
+  limits: () => WebRateLimits,
+  action: AccountAction,
+  userId: string,
+  now: Date,
+): Promise<void> {
+  const request = await withoutLimiterText(Promise.resolve().then(() => limits().account(action, userId, now)));
+  if (request.allowed) return;
+  throw new AppError("RATE_LIMITED", request.message, { details: { retryAfterSeconds: request.seconds } });
+}
+
 let limits: WebRateLimits | undefined;
 
 /**
  * The process's limits, built on first use over the PostgreSQL store on the
- * limiter's own small database client (ADR-0171 Decision 6).
+ * limiter's own small database client (ADR-0171 Decision 6), and a second
+ * such client for signed-in routes (ADR-0173 Decision 6).
  */
 export function getRateLimiter(): WebRateLimits {
   if (limits) return limits;
@@ -240,5 +320,7 @@ export function getRateLimiter(): WebRateLimits {
   const url =
     env.DATABASE_URL &&
     statementLimitedDatabaseUrl(env.DATABASE_URL, RATE_LIMIT_DATABASE_CONNECTIONS, RATE_LIMIT_STATEMENT_MILLISECONDS);
-  return (limits = new WebRateLimits(createPrismaRateLimitStore(getRateLimitPrismaClient(url)), env));
+  const store = createPrismaRateLimitStore(getRateLimitPrismaClient(url));
+  const signedIn = createPrismaRateLimitStore(getSignedInRateLimitPrismaClient(url));
+  return (limits = new WebRateLimits(store, env, limiterLog(), signedIn));
 }

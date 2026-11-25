@@ -135,6 +135,7 @@ export const RATE_LIMIT_SETTINGS = [
   "RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP",
   "RATE_LIMIT_VERIFICATION_EMAIL",
   "RATE_LIMIT_SIGN_UP_PER_IP",
+  "RATE_LIMIT_UPLOAD",
 ] as const;
 
 /** One of the abuse limits' settings. */
@@ -151,6 +152,7 @@ export const RATE_LIMIT_DEFAULTS: Readonly<Record<RateLimitSetting, string>> = O
   RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: "20/3600",
   RATE_LIMIT_VERIFICATION_EMAIL: "3/3600",
   RATE_LIMIT_SIGN_UP_PER_IP: "60/3600",
+  RATE_LIMIT_UPLOAD: "1000/86400",
 });
 
 /**
@@ -316,6 +318,7 @@ export const serverEnvSchema = z
     RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP: rateLimitSetting("RATE_LIMIT_PASSWORD_RESET_EMAIL_PER_IP"),
     RATE_LIMIT_VERIFICATION_EMAIL: rateLimitSetting("RATE_LIMIT_VERIFICATION_EMAIL"),
     RATE_LIMIT_SIGN_UP_PER_IP: rateLimitSetting("RATE_LIMIT_SIGN_UP_PER_IP"),
+    RATE_LIMIT_UPLOAD: rateLimitSetting("RATE_LIMIT_UPLOAD"),
 
     // How many entries at the right end of X-Forwarded-For our own
     // infrastructure writes; the client is the left-most of them (ADR-0170).
