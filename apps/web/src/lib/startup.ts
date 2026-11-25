@@ -17,9 +17,9 @@ export const PRODUCTION_ADAPTERS: ProductionAdapters = {
   // A ClamAV daemon (ADR-0164). The test scanner refuses production when
   // built (ADR-0008).
   malwareScanner: ["clamav"],
-  // Development adapters only, which refuse production when built
-  // (ADR-0126). RD-6 adds a production one.
-  email: [],
+  // The SMTP sender (ADR-0168). The outbox refuses production when built
+  // (ADR-0126).
+  email: ["smtp"],
   // Not refused in production: no decision keeps them out (ADR-0150 Decision 3).
   imageAnalysis: ["deterministic"],
   promptModeration: ["offline"],
@@ -123,9 +123,7 @@ const REFUSED = "The web app cannot start in production";
  * production one, and what it is refused for, is `webStartProblems`.
  *
  * Both arguments are for tests. The start hook gives neither, so the
- * process's own start is judged by `PRODUCTION_ADAPTERS`; no environment
- * passes that list until production adapters exist, so a test of a start
- * that goes on gives its own.
+ * process's own start is judged by `PRODUCTION_ADAPTERS`.
  */
 export function checkWebStart(start: WebStart = processStart, allowed: ProductionAdapters = PRODUCTION_ADAPTERS): void {
   let env: ServerEnv;

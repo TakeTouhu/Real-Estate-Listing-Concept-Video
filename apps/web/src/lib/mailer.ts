@@ -5,11 +5,11 @@ import { getServerEnv } from "./env";
 
 /**
  * How the web app mails a link: the email goes through the web app's email
- * adapter (ADR-0150), today the development outbox, `EMAIL_OUTBOX_DIR`
- * (ADR-0126), and the link starts with `APP_BASE_URL` (ADR-0129); production
- * has no email service yet. With either unset, both fail with
- * `CONFIGURATION_ERROR` before anything is written, and the outbox is opened
- * only to send.
+ * adapter (ADR-0150), the SMTP server `SMTP_HOST` names (ADR-0168) or, in
+ * development and CI, the outbox, `EMAIL_OUTBOX_DIR` (ADR-0126), and the link
+ * starts with `APP_BASE_URL` (ADR-0129). With no sender or no base address,
+ * both fail with `CONFIGURATION_ERROR` before anything is written, and the
+ * sender is built only to send.
  */
 export interface Mailer extends EmailSender {
   /** The page at `path` with `token`, on the configured base address and never on a request's. */

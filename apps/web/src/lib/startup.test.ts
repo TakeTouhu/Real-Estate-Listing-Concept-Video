@@ -28,18 +28,28 @@ const production = serverEnvSchema.parse({
   APP_BASE_URL: "https://app.example.com",
 });
 
-/**
- * No environment passes until RD-6 adds a production email adapter.
- * This list and environment stand for one that does: every chosen adapter
- * allowed, every setting set.
- */
-const allowingTodays: ProductionAdapters = {
-  ...PRODUCTION_ADAPTERS,
-  storage: ["memory"],
-  malwareScanner: ["passthrough"],
-  email: ["outbox"],
+/** The seven SMTP settings, valid. Throwaway values: the password is not a secret. */
+const SMTP = {
+  SMTP_HOST: "smtp.example.com",
+  SMTP_PORT: "587",
+  SMTP_TLS: "starttls",
+  SMTP_USER: "smtp-user",
+  SMTP_PASSWORD: "smtp-password-not-a-secret",
+  SMTP_EHLO_NAME: "app.example.com",
+  EMAIL_FROM: "noreply@example.com",
 };
-const served: ServerEnv = { ...production, EMAIL_OUTBOX_DIR: "/tmp/outbox" };
+
+/** A production environment with nothing wrong: each port's production adapter chosen, every setting set. */
+const ready: ServerEnv = serverEnvSchema.parse({
+  ...base,
+  NODE_ENV: "production",
+  DATABASE_URL: "postgresql://user:password@db.internal:5432/app",
+  MFA_SECRET_KEY: "11".repeat(32),
+  APP_BASE_URL: "https://app.example.com",
+  GOOGLE_CLOUD_STORAGE_BUCKET: "vtavision-objects",
+  CLAMAV_HOST: "clamav.internal",
+  ...SMTP,
+});
 
 /** A start that records what it reported and how it ended. */
 function recorded(loadEnv: () => ServerEnv) {
@@ -148,8 +158,10 @@ describe("productionStartProblems", () => {
     ]);
   });
 
-  it("finds nothing wrong once every chosen adapter is allowed and every setting is set", () => {
-    expect(productionStartProblems(served, allowingTodays)).toEqual([]);
+  it("allows the SMTP sender, and only it, for email (ADR-0168)", () => {
+    expect(PRODUCTION_ADAPTERS.email).toEqual(["smtp"]);
+    expect(chooseWebAdapters(ready).email).toBe("smtp");
+    expect(productionStartProblems(ready)).toEqual([]);
   });
 });
 
@@ -193,9 +205,9 @@ describe("webStartProblems", () => {
     const starts: [ambient: string, env: ServerEnv, allowed?: ProductionAdapters][] = [
       ["development", development],
       ["production", production],
-      ["production", served, allowingTodays],
-      ["production", { ...served, NODE_ENV: "development" }, allowingTodays],
-      ["development", served, allowingTodays],
+      ["production", ready],
+      ["production", { ...ready, NODE_ENV: "development" }],
+      ["development", ready],
       ["development", { ...production, APP_BASE_URL: undefined }],
     ];
     const counts = starts.map(([ambient, env, allowed]) => {
@@ -220,7 +232,7 @@ describe("NODE_DEBUG (ADR-0158 Decision 6, ADR-0159)", () => {
     // `loadServerEnv` keeps what it parsed for the process: start from nothing kept.
     resetServerEnvCache();
     const { start, reports, exits } = recorded(() => loadServerEnv(raw));
-    checkWebStart(start, allowingTodays);
+    checkWebStart(start);
     expect(exits).toEqual([1]);
     expect(reports).toEqual([
       "The web app cannot start in production. Invalid server environment configuration:\n" +
@@ -230,7 +242,7 @@ describe("NODE_DEBUG (ADR-0158 Decision 6, ADR-0159)", () => {
     // A production build given another NODE_ENV is refused for the mismatch; the schema refuses NODE_DEBUG only
     // where the configured value is production.
     const { start: other, reports: otherReports } = recorded(() => serverEnvSchema.parse({ ...raw, NODE_ENV: "test" }));
-    checkWebStart(other, allowingTodays);
+    checkWebStart(other);
     expect(otherReports.join("\n")).toContain('NODE_ENV is not "production", but this is a production build');
   });
 });
@@ -241,7 +253,7 @@ describe("the ClamAV settings (ADR-0164)", () => {
     vi.stubEnv("NODE_ENV", "production");
     resetServerEnvCache();
     const { start, reports, exits } = recorded(() => loadServerEnv(raw));
-    checkWebStart(start, allowingTodays);
+    checkWebStart(start);
     expect(exits).toEqual([1]);
     expect(reports).toEqual([
       "The web app cannot start in production. Invalid server environment configuration:\n" +
@@ -249,6 +261,39 @@ describe("the ClamAV settings (ADR-0164)", () => {
         "  - CLAMAV_PORT: CLAMAV_PORT must be a whole number from 1 to 65535",
     ]);
     expect(reports.join("\n")).not.toMatch(/marker|99999/);
+    resetServerEnvCache();
+  });
+});
+
+describe("the SMTP settings (ADR-0167, ADR-0168)", () => {
+  it("end a production start that names a server without the rest, naming no value", () => {
+    const raw = { ...base, NODE_ENV: "production" as const, SMTP_HOST: "marker.example.com" };
+    vi.stubEnv("NODE_ENV", "production");
+    resetServerEnvCache();
+    const { start, reports, exits } = recorded(() => loadServerEnv(raw));
+    checkWebStart(start);
+    expect(exits).toEqual([1]);
+    const missing = Object.keys(SMTP).slice(1);
+    expect(reports).toEqual([
+      "The web app cannot start in production. Invalid server environment configuration:\n" +
+        missing.map((name) => `  - ${name}: ${name} is required when SMTP_HOST is set`).join("\n"),
+    ]);
+    expect(reports.join("\n")).not.toContain("marker");
+    resetServerEnvCache();
+  });
+
+  it("end a production start that turns off Node.js's certificate check", () => {
+    const raw = { ...base, NODE_ENV: "production" as const, NODE_TLS_REJECT_UNAUTHORIZED: "0" };
+    vi.stubEnv("NODE_ENV", "production");
+    resetServerEnvCache();
+    const { start, reports, exits } = recorded(() => loadServerEnv(raw));
+    checkWebStart(start);
+    expect(exits).toEqual([1]);
+    expect(reports).toEqual([
+      "The web app cannot start in production. Invalid server environment configuration:\n" +
+        "  - NODE_TLS_REJECT_UNAUTHORIZED: NODE_TLS_REJECT_UNAUTHORIZED must not be set in production: " +
+        "Node.js would let a connection skip checking the server's certificate",
+    ]);
     resetServerEnvCache();
   });
 });
@@ -288,11 +333,11 @@ describe("checkWebStart", () => {
       return reports.join("\n").split("\n").slice(1);
     };
     // A production build given another NODE_ENV: the schema's production rules never ran.
-    expect(refused("production", { ...served, NODE_ENV: "development" }, allowingTodays)).toEqual([
+    expect(refused("production", { ...ready, NODE_ENV: "development" })).toEqual([
       '  - NODE_ENV is not "production", but this is a production build',
     ]);
     // A development server given NODE_ENV=production.
-    expect(refused("development", served, allowingTodays)).toEqual([
+    expect(refused("development", ready)).toEqual([
       '  - NODE_ENV is "production", but this is not a production build',
     ]);
     // Neither vouches for the other (ADR-0150 Decision 2): the three adapters and the three
@@ -338,8 +383,8 @@ describe("checkWebStart", () => {
 
   it("lets a production start go on when nothing is wrong", () => {
     vi.stubEnv("NODE_ENV", "production");
-    const { start, reports, exits } = recorded(() => served);
-    checkWebStart(start, allowingTodays);
+    const { start, reports, exits } = recorded(() => ready);
+    checkWebStart(start);
     expect([reports, exits]).toEqual([[], []]);
   });
 });

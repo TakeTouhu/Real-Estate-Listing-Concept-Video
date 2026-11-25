@@ -16,7 +16,8 @@ export type {
 } from "./shared-folder-storage";
 /**
  * The development outbox for the product's emails, refused in production
- * (ADR-0126). Nothing in either application constructs it yet.
+ * (ADR-0126). The web app's adapters build it when `EMAIL_OUTBOX_DIR` is set
+ * (ADR-0150).
  */
 export {
   DEVELOPMENT_EMAIL_OUTBOX_FORMAT,

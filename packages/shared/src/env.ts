@@ -208,13 +208,12 @@ export const serverEnvSchema = z
     // than in their place. Refused without a host, which it is read beside.
     CLAMAV_PORT: z.string().refine(isClamAvPort, CLAMAV_PORT_MESSAGE).optional(),
 
-    // The SMTP server every email is to be handed to (ADR-0166, ADR-0167): a
-    // DNS name with no port, never an IP address, since its certificate is
-    // checked for this name and no setting names another. Set, each of
-    // SMTP_PORT, SMTP_TLS, SMTP_USER, SMTP_PASSWORD, SMTP_EHLO_NAME and
-    // EMAIL_FROM is required; unset, none may be. Never beside
-    // EMAIL_OUTBOX_DIR. The seven are checked here and used by nothing yet:
-    // the web app is given the SMTP sender in the next milestone.
+    // The SMTP server the web app hands every email to (ADR-0166, ADR-0167,
+    // ADR-0168): a DNS name with no port, never an IP address, since its
+    // certificate is checked for this name and no setting names another. Set,
+    // each of SMTP_PORT, SMTP_TLS, SMTP_USER, SMTP_PASSWORD, SMTP_EHLO_NAME
+    // and EMAIL_FROM is required; unset, none may be. Never beside
+    // EMAIL_OUTBOX_DIR.
     SMTP_HOST: z
       .string()
       .refine(isDnsName, "SMTP_HOST must be a DNS name, with no port and not an IP address")
@@ -242,7 +241,8 @@ export const serverEnvSchema = z
 
     // The folder the product's emails are written to instead of being sent,
     // in development and CI only (ADR-0126). Absolute, for the same reason as
-    // the shared folder. Unset, the web app sends no email (ADR-0129).
+    // the shared folder. Unset, and with no SMTP_HOST, the web app sends no
+    // email (ADR-0129).
     // Refused in production, and beside SMTP_HOST.
     EMAIL_OUTBOX_DIR: z.string().min(1).optional(),
 

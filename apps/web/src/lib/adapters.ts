@@ -11,6 +11,7 @@ import { createImageAnalysisProvider } from "@app/ai-providers";
 import { createLogger, type Logger } from "@app/observability";
 import { AppError, GOOGLE_CLOUD_STORAGE_ORIGIN, type ServerEnv } from "@app/shared";
 import { createGoogleCloudStorage } from "@app/storage/google-cloud-storage";
+import { createSmtpEmailSender, type SmtpEmailSenderOptions } from "@app/storage/smtp";
 import {
   assertNotProduction,
   LocalObjectStorage,
@@ -41,8 +42,13 @@ export interface WebAdapters {
   readonly email: () => EmailSender | null;
 }
 
+/** One plain word: capitals, digits and underscores, 40 at most (ADR-0164). */
+const PLAIN_CODE = /^[A-Z0-9][A-Z0-9_]{0,39}$/;
+
 let logger: Logger | undefined;
 const log = (): Logger => (logger ??= createLogger({ base: { component: "malware-scan" } }));
+let emailLogger: Logger | undefined;
+const emailLog = (): Logger => (emailLogger ??= createLogger({ base: { component: "email" } }));
 
 /**
  * A short code for why a scan did not end in a verdict: its `detail` when that
@@ -50,7 +56,7 @@ const log = (): Logger => (logger ??= createLogger({ base: { component: "malware
  * otherwise, so no message, host or signature's name is logged (ADR-0164).
  */
 export function scanFailureCode(detail: string | undefined): string {
-  return detail !== undefined && /^[A-Z0-9][A-Z0-9_]{0,39}$/.test(detail) ? detail : "UNEXPECTED";
+  return detail !== undefined && PLAIN_CODE.test(detail) ? detail : "UNEXPECTED";
 }
 
 /**
@@ -71,6 +77,56 @@ export function loggingScanFailures(scanner: MalwareScanner): MalwareScanner {
       return result;
     },
   };
+}
+
+/**
+ * Why a send failed, as one word: the SMTP sender's code (`details.smtpCode`, from its allow-list or `UNKNOWN`,
+ * ADR-0166 Decision 4) when it is one plain word, and `UNEXPECTED` otherwise, so no server reply, address or
+ * message is logged (ADR-0168).
+ */
+export function emailFailureCode(error: unknown): string {
+  const code = error instanceof AppError ? error.details?.smtpCode : undefined;
+  return typeof code === "string" && PLAIN_CODE.test(code) ? code : "UNEXPECTED";
+}
+
+/** The sender, with each send that rejects logged by its code alone; the flow gets the same rejection. */
+export function loggingEmailFailures(sender: EmailSender): EmailSender {
+  return {
+    async send(email) {
+      try {
+        await sender.send(email);
+      } catch (error) {
+        try {
+          emailLog().warn("An email was not accepted for delivery", { code: emailFailureCode(error) });
+        } catch {
+          // The flow sees the send's own rejection whether or not the log could be written.
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+/**
+ * The SMTP sender's settings, which the schema requires together with `SMTP_HOST` (ADR-0167). Kept in this file:
+ * only it, `adapter-choice.ts` and the mailer may name an email sender (ADR-0150).
+ */
+function smtpOptions(env: ServerEnv): SmtpEmailSenderOptions {
+  const { SMTP_HOST: host, SMTP_PORT: port, SMTP_TLS: tls, SMTP_USER: user, SMTP_PASSWORD: password } = env;
+  const { SMTP_EHLO_NAME: ehloName, EMAIL_FROM: from } = env;
+  if (
+    host === undefined ||
+    port === undefined ||
+    tls === undefined ||
+    user === undefined ||
+    password === undefined ||
+    ehloName === undefined ||
+    from === undefined
+  ) {
+    // Only an environment the schema did not parse gets here; it is refused, never filled in.
+    throw new AppError("CONFIGURATION_ERROR", "SMTP is chosen without each of its settings");
+  }
+  return { host, port: Number(port), tls, user, password, from, ehloName };
 }
 
 function once<T>(build: () => T): () => T {
@@ -131,7 +187,12 @@ export function createWebAdapters(env: ServerEnv): WebAdapters {
     images: once(() => new SharpImageProcessor()),
     imageAnalysis: once(() => createImageAnalysisProvider(env)),
     promptModerator: once(() => createOfflinePromptModerator()),
-    email: () => (folder !== undefined ? createDevelopmentEmailOutbox({ folder, nodeEnv: nodeEnv() }) : null),
+    // Built for each email, opened only to send it. The SMTP sender is a production adapter, used wherever
+    // SMTP_HOST names a server; the outbox refuses production when built.
+    email: () => {
+      if (choice.email === "smtp") return loggingEmailFailures(createSmtpEmailSender(smtpOptions(env)));
+      return folder !== undefined ? createDevelopmentEmailOutbox({ folder, nodeEnv: nodeEnv() }) : null;
+    },
   };
 }
 

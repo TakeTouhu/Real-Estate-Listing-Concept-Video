@@ -1238,6 +1238,14 @@ rule moves to `@app/shared`, so the settings and the sender judge an
 address alike. The browser test refuses every SMTP setting. Nothing uses
 the settings yet: RD-6d gives the web app the SMTP sender.
 
+**RD-6d — SMTP in the web app** (ADR-0168, no migration): with
+`SMTP_HOST` set, the web app hands every email to the SMTP server, in any
+environment; without it, the outbox or nothing, as before. A production
+start now allows the SMTP sender, and only it, for email, so a
+production environment can pass the start check; passing it does not
+show that an email can be delivered. Each send that fails is logged by
+its code alone. RD-6 is complete.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

@@ -129,8 +129,9 @@ environment.
 ## 3c. Sign up and verify your email address
 
 A new account sees only the verify page until it opens the link mailed to its
-address (ADR-0129). No email service is chosen yet, so the web app writes each
-email to a folder instead of sending it (ADR-0126). Set both in `.env.local`:
+address (ADR-0129). In development the web app writes each email to a folder
+instead of sending it (ADR-0126); it sends through SMTP only when `SMTP_HOST`
+is set (ADR-0168), never beside the folder. Set both in `.env.local`:
 
 ```bash
 EMAIL_OUTBOX_DIR=/absolute/path/to/Real-Estate-Listing-Concept-Video/.dev-outbox
@@ -398,8 +399,10 @@ pnpm test:smtp   # vitest.smtp.config.ts
 ```
 
 Without those variables the run fails. CI runs it in the `storage` job.
-The web app does not send through SMTP yet (RD-6d); the outbox serves
-development.
+The web app sends through SMTP when `SMTP_HOST` and its six companions
+are set (ADR-0168), but only to a DNS name whose certificate Node.js
+trusts, so it is not pointed at this Mailpit; the outbox serves
+development, and the browser test refuses every SMTP setting.
 
 ### Browser tests
 

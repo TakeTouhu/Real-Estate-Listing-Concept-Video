@@ -67,10 +67,12 @@ const nonEmpty = (value: unknown): value is string => typeof value === "string" 
  * retried, the library's logger is off, and no file or address is read for content.
  *
  * The email is checked again before anything is sent. A failure rejects with `PROVIDER_ERROR` and a fixed message
- * naming only {@link smtpFailureCode}: never the server's reply, which can quote what was sent, a certificate or an
- * address. A server may still have delivered an email whose send rejected; the port says every flow tolerates that.
+ * naming only {@link smtpFailureCode}, which its `details.smtpCode` repeats as data (ADR-0168): never the server's
+ * reply, which can quote what was sent, a certificate or an address. A server may still have delivered an email
+ * whose send rejected; the port says every flow tolerates that.
  *
- * Built with no connection, and nothing here starts anything by itself. Nothing in the apps builds it yet.
+ * Built with no connection, and nothing here starts anything by itself. The web app's adapters build one for each
+ * email when `SMTP_HOST` is set (ADR-0168); the worker never does.
  */
 export function createSmtpEmailSender(options: SmtpEmailSenderOptions): EmailSender {
   // No refusal repeats what was given.
@@ -148,8 +150,11 @@ export function createSmtpEmailSender(options: SmtpEmailSenderOptions): EmailSen
           text: checked.text,
         });
       } catch (error) {
+        const code = smtpFailureCode(error);
         // No cause: the library's error carries the server's reply and the certificate.
-        throw new AppError("PROVIDER_ERROR", `The email was not accepted for delivery (${smtpFailureCode(error)})`);
+        throw new AppError("PROVIDER_ERROR", `The email was not accepted for delivery (${code})`, {
+          details: { smtpCode: code },
+        });
       } finally {
         transport.close();
       }

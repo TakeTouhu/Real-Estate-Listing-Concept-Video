@@ -47,7 +47,7 @@ export function resetUrl(baseUrl: string, token: string): string {
 
 /**
  * Password reset in the web app (ADR-0133), mailing through `getMailer`. With
- * no outbox or no `APP_BASE_URL`, asking for a link fails with
+ * no email sender or no `APP_BASE_URL`, asking for a link fails with
  * `CONFIGURATION_ERROR` before anything is written. Opening a link needs
  * neither.
  */

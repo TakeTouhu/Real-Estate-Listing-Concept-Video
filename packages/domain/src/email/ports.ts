@@ -4,9 +4,10 @@ import type { OutgoingEmail } from "./outgoing-email";
  * Where the product's emails go (ADR-0126). Domain code sends through this and
  * never through a delivery service's own client.
  *
- * In development and CI the only implementation is the outbox folder in
- * `@app/storage`, refused in production. No production service is chosen yet;
- * until one is, production has no sender at all.
+ * Two implementations, in `@app/storage`: the outbox folder, for development
+ * and CI and refused in production (ADR-0126), and the SMTP sender (ADR-0166),
+ * which the web app uses when `SMTP_HOST` is set (ADR-0168). Which service
+ * production sends through is not chosen yet.
  */
 export interface EmailSender {
   /**
