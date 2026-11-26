@@ -312,6 +312,24 @@ describe("the SMTP settings (ADR-0167, ADR-0168)", () => {
   });
 });
 
+describe("the settings that widen what Node.js trusts (ADR-0184)", () => {
+  it("end a production start that widens what Node.js trusts, naming no value", () => {
+    const raw = { ...base, NODE_ENV: "production" as const, NODE_OPTIONS: "--use-openssl-ca --require=/marker.js" };
+    vi.stubEnv("NODE_ENV", "production");
+    resetServerEnvCache();
+    const { start, reports, exits } = recorded(() => loadServerEnv(raw));
+    checkWebStart(start);
+    expect(exits).toEqual([1]);
+    expect(reports).toEqual([
+      "The web app cannot start in production. Invalid server environment configuration:\n" +
+        "  - NODE_OPTIONS: NODE_OPTIONS must not be set in production: " +
+        "Node.js would take command-line options from it, some of which widen what it trusts",
+    ]);
+    expect(reports.join("\n")).not.toMatch(/marker|openssl-ca/);
+    resetServerEnvCache();
+  });
+});
+
 describe("checkWebStart", () => {
   const invalid = (): ServerEnv => {
     throw new Error("Invalid server environment configuration:\n  - SESSION_SECRET: Required");

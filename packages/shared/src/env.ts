@@ -400,6 +400,14 @@ export const serverEnvSchema = z
     // token or password to a server nobody checked (measured, ADR-0166).
     NODE_TLS_REJECT_UNAUTHORIZED: z.string().optional(),
 
+    // The settings that widen which authorities Node.js trusts, each read only
+    // to be refused in production (ADR-0184). NODE_OPTIONS is refused whole: it
+    // can carry --use-openssl-ca, --use-system-ca, --openssl-config or a
+    // --require. NODE_EXTRA_CA_CERTS, SSL_CERT_FILE and SSL_CERT_DIR stay open.
+    NODE_OPTIONS: z.string().optional(),
+    NODE_USE_SYSTEM_CA: z.string().optional(),
+    OPENSSL_CONF: z.string().optional(),
+
     LOG_LEVEL: oneOf(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
     // Its default is text, parsed as a set value is: zod 4's `default` would skip the parse (PT-6d).
     LOG_PRETTY: booleanish.prefault("false"),
@@ -533,6 +541,21 @@ export const serverEnvSchema = z
           "NODE_TLS_REJECT_UNAUTHORIZED must not be set in production: " +
           "Node.js would let a connection skip checking the server's certificate",
       });
+    }
+    // Any value, as NODE_DEBUG: which flags or files widen trust is Node.js's to change. An empty value names nothing.
+    const widening = {
+      NODE_OPTIONS: "Node.js would take command-line options from it, some of which widen what it trusts",
+      NODE_USE_SYSTEM_CA: "Node.js would trust the system's certificate store as well as its own",
+      OPENSSL_CONF: "Node.js would load an OpenSSL configuration file at start",
+    } as const;
+    for (const name of Object.keys(widening) as (keyof typeof widening)[]) {
+      if (production && (env[name] ?? "") !== "") {
+        ctx.addIssue({
+          code: "custom",
+          path: [name],
+          message: `${name} must not be set in production: ${widening[name]}`,
+        });
+      }
     }
 
     if (env.APP_BASE_URL !== undefined) {

@@ -39,6 +39,7 @@ const BANNED_ENV = new RegExp(
     "PROXY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|_KEY$",
     "^GCS_|S3_BUCKET|^AWS_|^R2_|^AZURE_STORAGE|^FAL_KEY$|^FFPROBE_PATH$|^FX_API_",
     "^NODE_DEBUG$|^NODE_TLS_REJECT_UNAUTHORIZED$|^NODE_OPTIONS$|^NODE_EXTRA_CA_CERTS$|^OPENSSL_CONF$",
+    "^NODE_USE_SYSTEM_CA$",
     "^GOOGLE_APPLICATION_CREDENTIALS$|^GCE_METADATA_HOST$|^STORAGE_EMULATOR_HOST$",
   ].join("|"),
   "i",
@@ -1003,6 +1004,40 @@ describe("the web image", () => {
     expect(text).toContain("for f in .env packages/database/.env packages/database/prisma/.env apps/web/.env*;");
     expect(text).toContain("-name 'libquery_engine-debian-openssl-3.0.x.so.node' | grep -q . && !");
     expect(text).toContain("-name 'libquery_engine-debian-openssl-1.1.x.so.node' | grep -q . ; } || {");
+  });
+
+  it("refuses a production start that widens what Node.js trusts, by the schema's three lines (ADR-0184)", () => {
+    const job = readJob(raw(WORKFLOW), "web-image");
+    const names = job.steps.map((s) => s.fields.get("name") ?? "");
+    const at = names.indexOf("Refuse it with settings that widen what Node.js trusts");
+    expect(at).toBe(names.indexOf("Refuse it with NEXT_PHASE naming the build") + 1);
+    const step = job.steps[at];
+    const refused = (name: string): string =>
+      `grep -qF "  - ${name}: ${name} must not be set in production: " "$RUNNER_TEMP/trust.log"`;
+    expect([step?.fields.get("timeout-minutes"), step?.fields.get("run")]).toEqual([
+      "2",
+      [
+        "# The schema reads these once its required settings are there: three random stand-ins, masked.",
+        "umask 077",
+        'required="$RUNNER_TEMP/required.env"',
+        "for name in SESSION_SECRET HEALTHCHECK_API_TOKEN STORAGE_SIGNING_SECRET; do",
+        '  value="$(openssl rand -hex 32)"',
+        '  echo "::add-mask::$value"',
+        '  echo "$name=$value" >> "$required"',
+        "done",
+        "set +e",
+        "docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \\",
+        '  --env-file "$required" -e NODE_OPTIONS=--use-openssl-ca -e NODE_USE_SYSTEM_CA=1 -e OPENSSL_CONF=/x \\',
+        '  vtavision-web:ci > "$RUNNER_TEMP/trust.log" 2>&1',
+        "code=$?",
+        "set -e",
+        'cat "$RUNNER_TEMP/trust.log"',
+        'test "$code" -eq 1',
+        refused("NODE_OPTIONS"),
+        refused("NODE_USE_SYSTEM_CA"),
+        refused("OPENSSL_CONF"),
+      ].join("\n"),
+    ]);
   });
 
   it("runs a stage of exactly ADR-0175 Decision 5", () => {

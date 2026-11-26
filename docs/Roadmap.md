@@ -1632,6 +1632,21 @@ a label the process cannot read and not through an `ARG` (ADR-0175
 Decision 3), and the worker's own names on a Cloud Run job or worker
 pool (`TODO.md`).
 
+**PT-7a4 — A production start refuses the settings that widen what
+Node.js trusts** (ADR-0184, no migration): where `NODE_ENV` is
+production, the environment schema refuses a non-empty
+`NODE_OPTIONS`, `NODE_USE_SYSTEM_CA` or `OPENSSL_CONF`, one line per
+name and no value (`docs/api-changes-pt-7a4.md`). `NODE_OPTIONS` is
+refused whole; a later flag needs a new ADR with an allowlist.
+`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR` and
+`NODE_USE_ENV_PROXY` stay accepted. CI's web-image job runs the image
+with all three and greps the three lines; the worker's refusal is held
+by `bootstrap.test.ts` alone, since its image runs no Node.js. Decided
+before the deployment's layout; G1 may amend it. Not measured against
+the image's Node.js by digest. Still open: reporting
+`NODE_EXTRA_CA_CERTS` at a production start, and `OPENSSL_MODULES`
+and `OPENSSL_ENGINES` (`TODO.md`).
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
