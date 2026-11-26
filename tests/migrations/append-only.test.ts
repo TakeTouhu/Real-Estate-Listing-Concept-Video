@@ -143,22 +143,36 @@ describe("append-only.sh", () => {
     expect(run(t).status).toBe(0);
   });
 
-  describe("orders names by byte, whatever the caller's locale", () => {
-    // In byte order "_" (0x5f) comes before "b" (0x62); a collation that ignores "_" would swap these two.
-    const locale = { LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" };
+  // In byte order "_" (0x5f) comes before "b" (0x62); a collation that ignores "_" would swap these two.
+  const locale = { LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" };
+  // Where en_US.UTF-8 is not installed, bash falls back to byte order, and the locale cases would pass even without
+  // the script's `export LC_ALL=C`. So they run only where the locale really orders "_ab" first; workflow.test.ts
+  // requires that line in the script everywhere.
+  const input = "20260101000000_a_z\n20260101000000_ab\n";
+  const probe = spawnSync("sort", { input, encoding: "utf8", env: { ...process.env, ...locale } });
+  const collates = probe.status === 0 && probe.stdout.startsWith("20260101000000_ab\n");
 
+  function byteOrder(env: NodeJS.ProcessEnv): void {
     it("passes a new name that is later only in byte order", () => {
       const t = trees(["00000000000000_init", "20260101000000_a_z"]);
       add(t.head, "20260101000000_ab");
-      expect(run(t, locale).status).toBe(0);
+      expect(run(t, env).status).toBe(0);
     });
 
     it("refuses a new name that is earlier only in byte order", () => {
       const t = trees(["00000000000000_init", "20260101000000_ab"]);
       add(t.head, "20260101000000_a_z");
-      const result = run(t, locale);
+      const result = run(t, env);
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("20260101000000_a_z: is new but sorts before the parent's last");
     });
+  }
+
+  describe("orders names by byte, in the caller's own locale", () => {
+    byteOrder({});
+  });
+
+  describe.skipIf(!collates)("orders names by byte under en_US.UTF-8 (skipped where it is not installed)", () => {
+    byteOrder(locale);
   });
 });

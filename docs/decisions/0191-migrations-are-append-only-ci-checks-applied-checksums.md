@@ -17,7 +17,8 @@ PostgreSQL; still 8 checks).
 `00000000000000_init` to `00000000000035_rate_limit_counters`, and
 `migration_lock.toml`. CI's `database` job applies them to an empty
 PostgreSQL 16 and checks the committed schema for drift. Nothing
-checked that a migration a database already holds was left as it was.
+checked every applied migration byte for byte; shape and dormancy tests
+pin only parts of particular migrations.
 
 Prisma cannot see that. Measured on a throwaway PostgreSQL 16.15 with
 the repository's Prisma 5.22.0, on a database holding all 36:
@@ -40,9 +41,9 @@ parents). Nothing is deployed, and no tag marks a release.
 The checked-out commit's first parent, `HEAD^1`, stands for "the
 previous release" until production records which migration it holds
 (G1/G3). The `database` job's checkout gets `fetch-depth: 2`, so the
-parent is present with no token or extra fetch, and
-`persist-credentials: false`, since no later step needs Git
-credentials. On a pull request the checkout is GitHub's test merge
+parent is present with no extra fetch, and `persist-credentials:
+false`, so no credentials are kept after the checkout, since no later
+step needs them. On a pull request the checkout is GitHub's test merge
 commit, whose first parent is the base branch *(inference from
 GitHub's documented behaviour, not fetched)*; on a push to `main` it is
 the merge commit. If `HEAD^1` is missing, the step fails with a message
@@ -82,9 +83,14 @@ The step "Check the applied migrations' checksums" runs right after
 rolled-back row of `_prisma_migrations` with the SHA-256 of the head's
 `migration.sql` of the same name. A mismatch, a row with no folder, a
 folder with no row or a name applied twice exits 1. It prints names and
-rules only, never a checksum. psql reaches the database through libpq's
-own variables, as the shadow-database step already does, so no address
-is on a command line and nothing is printed.
+rules only, never a checksum. psql gets the password through
+`PGPASSWORD`, as the shadow-database step does, and host, user and
+database through `PGHOST`, `PGUSER` and `PGDATABASE` too, so no address
+is on a command line. It runs with `-w`, so it never waits at a
+password prompt. The one other thing it can print is psql's own
+connection error, which names the host or socket, the port and the
+database, never a password (measured: a missing database and a refused
+port).
 
 ## Decision 4 — No unseeded upgrade
 
@@ -95,9 +101,18 @@ the same SQL in the same order as the fresh apply *(from the guard's
 rules and the order Prisma applies names in; not measured as a pair)*.
 PT-8a therefore adds no such step and no second throwaway database.
 **An upgrade's only value is the seeded path:** rows that a later
-migration must carry or refuse. That is built in PT-8b, with a seed at
-a fixed level applied at its own level and then the head's remaining
-set.
+migration must carry or refuse.
+
+**Built in PT-8b (PT-8b1, PT-8b2).** PT-8b has no ADR of its own; this
+is its contract. The seed is adversarial but valid. It covers every
+enum value, `NULL` in every nullable column, at least two rows per
+tenant-scoped table that share values where a later uniqueness rule
+could bite, and boundary lengths. It is applied at its own fixed level,
+from a temporary folder holding the migrations up to that level, and
+then the head's remaining set is applied. The limit: data that the seed
+level's constraints already forbid cannot be seeded, so a failure that
+needs such data is not caught. It is planned as two pull requests from
+the start.
 
 ## Decision 5 — In the `database` job, still 8 checks
 
@@ -116,14 +131,16 @@ still shows 8 checks. Each step has `timeout-minutes: 2`.
   holding each banned word fail; a parent already holding `phase…` and
   `mfa…` names passes with a valid new one; and two names whose order
   differs between byte order and `en_US.UTF-8` are judged by byte
-  order. The repository's own migrations pass against themselves.
+  order, under `en_US.UTF-8` where it is installed. The repository's
+  own migrations pass against themselves.
 - **Unit:** `tests/migrations/workflow.test.ts` reads `ci.yml` as text,
   printing no line that may hold an address or password. It requires
-  the checkout's two settings, the steps in order and their exact
-  commands. It refuses `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK`, `migrate
-  dev`, `migrate reset`, `db push`, `--accept-data-loss`,
-  `--force-reset`, `--from-url` and `--to-url` in the workflow and the
-  scripts, and tracing or an `echo` of a `…URL` variable in the scripts.
+  the checkout's two settings, the steps in order, `shell: bash` on
+  the append-only step and their exact commands. It refuses
+  `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK`, `migrate dev`, `migrate
+  reset`, `db push`, `--accept-data-loss`, `--force-reset`,
+  `--from-url` and `--to-url` in the workflow and the scripts, and
+  tracing or an `echo` of a `…URL` variable in the scripts.
 - **CI:** both steps on every pull request and push to `main`.
 
 ## What was measured
@@ -135,14 +152,18 @@ deploy`:
 - `checksums.sh` exited 0 on the 36 applied migrations;
 - with one row's checksum set to 64 zeros it exited 1, naming
   `00000000000034_one_pending_invitation`;
-- it exited 1 for a rolled-back row, an unfinished row, an extra row
-  and a duplicate row, naming each, and 2 when the database did not
-  exist;
+- it exited 1, naming each, when a migration's only row was marked
+  rolled back or left unfinished ("committed but not applied"), for an
+  extra finished row and for a duplicate finished row; an extra row
+  that is rolled back or unfinished is ignored;
+- it exited 2, printing psql's connection error, when the database did
+  not exist and when the port refused the connection;
 - against a copy with migration 35 edited it exited 1, where Prisma
   passed (Context).
 
-The append-only step's own script, run locally with bash `-e -o
-pipefail` as Actions runs it:
+The append-only step runs with `shell: bash`, so Actions runs it with
+`-eo pipefail` and a failed `git archive` fails the step whatever `tar`
+reads. Its commands, run locally the same way:
 
 - exited 0 on this tree, after extracting `230972fb`'s first parent;
 - exited 1 with both names in a scratch clone of depth 2, on a commit
@@ -151,9 +172,13 @@ pipefail` as Actions runs it:
 
 With an `en_US.UTF-8` locale built for the test, that locale ordered
 `…_ab` before `…_a_z`, the reverse of byte order, and the two ordering
-tests failed once `export LC_ALL=C` was removed from the script. On a
-machine without that locale those two tests pass either way
-*(inference: glibc then falls back to byte order)*.
+tests failed once `export LC_ALL=C` was removed from the script. Where
+the locale is not installed, bash falls back to byte order and those
+tests would pass either way, so the test first checks that `sort`
+under `en_US.UTF-8` puts `…_ab` first and is skipped, by name, when it
+does not; the same two cases run in the caller's own locale
+everywhere, and `workflow.test.ts` requires the `export LC_ALL=C` line.
+Whether the GitHub runner has the locale was not checked.
 
 ## Not done
 
@@ -164,9 +189,9 @@ machine without that locale those two tests pass either way
   branch other than `main` gets that branch as its "previous release".
   Two pull requests that each add a migration can both pass on their
   own base and meet only in `main`'s push run. "Require branches to be
-  up to date before merging" would close that; it is a branch
-  protection setting, so it is T14's, held by whoever has GitHub admin
-  access.
+  up to date before merging" would close that. It is a branch
+  protection setting, so it is the product owner's (T14, GitHub admin
+  access in the part 2 plan); they hold it.
 - **A rebase push of several commits** makes `HEAD^1` the previous
   commit, not the previous `main`. The repository merges with merge
   commits, and each pull request's own run tested its base.

@@ -76,12 +76,14 @@ describe("the database job's migration checks", () => {
     const run = step.slice(3);
     expect(run.length).toBe(2);
     expect(/^PGPASSWORD=\S+ PGHOST=localhost PGUSER=revt PGDATABASE=revt$/.test(run[0] ?? "")).toBe(true);
-    expect(run[1]).toBe("bash tests/migrations/checksums.sh packages/database/prisma/migrations");
+    // A boolean, so a failure never prints the line: a later edit could put the password's line here.
+    expect(run[1] === "bash tests/migrations/checksums.sh packages/database/prisma/migrations").toBe(true);
   });
 
-  it("runs append-only.sh on the first parent's tree, failing when the first parent is missing", () => {
+  it("runs append-only.sh on the first parent's tree with pipefail, failing when the first parent is missing", () => {
     expect(safe(named("Check that no applied migration changed")).slice(1)).toEqual([
       "timeout-minutes: 2",
+      "shell: bash",
       "run: |",
       "if ! git rev-parse --verify --quiet 'HEAD^1^{commit}' > /dev/null; then",
       'echo "::error::The first parent, HEAD^1, is not in the checkout: the job needs fetch-depth: 2."',

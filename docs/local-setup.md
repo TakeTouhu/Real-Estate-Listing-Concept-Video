@@ -330,19 +330,25 @@ check needs no database: it compares a parent commit's
 `packages/database/prisma` with your tree's, here `origin/main`'s.
 
 ```bash
-mkdir -p /tmp/parent
-git archive "$(git rev-parse origin/main)" packages/database/prisma | tar -x -C /tmp/parent
-bash tests/migrations/append-only.sh /tmp/parent/packages/database/prisma packages/database/prisma
+parent="$(mktemp -d)"
+git archive "$(git rev-parse origin/main)" packages/database/prisma | tar -x -C "$parent"
+bash tests/migrations/append-only.sh "$parent/packages/database/prisma" packages/database/prisma
 ```
+
+A fresh folder each time keeps an older extraction from showing up as a
+folder "in the parent but not in the head".
 
 It names each changed, deleted or renamed migration, and each new name
 that sorts too early or breaks the naming rule, then exits 1.
 
 The checksum check reads a **disposable** database that the migrations
-were just applied to, the one `DATABASE_URL` names for Prisma. psql
-reaches it through libpq's own variables, so no address goes on the
+were just applied to, the one `DATABASE_URL` names for Prisma. Set
+`PGUSER` and `PGDATABASE` to the user and database `DATABASE_URL`
+names; the example below assumes `revt` and `revt_test`. psql reaches
+it through libpq's own variables, so no address goes on the
 command line; a password, if the database needs one, belongs in
-`~/.pgpass` rather than the shell:
+`~/.pgpass` rather than the shell. psql runs with `-w`, so it fails
+rather than prompting when it finds no password:
 
 ```bash
 export PGHOST=localhost PGUSER=revt PGDATABASE=revt_test

@@ -24,8 +24,11 @@ After:
 | Database integration tests | unchanged |
 
 The append-only step fails with a message if the checkout holds no
-first parent. Each new step has `timeout-minutes: 2`. Both print names
-and rules only: no checksum, address or password. Still 8 checks.
+first parent, and runs with `shell: bash`, so with pipefail. Each new
+step has `timeout-minutes: 2`. Both print names and rules only: no
+checksum, address or password. The one exception is psql's own
+connection error, which names the host or socket, the port and the
+database, never a password. Still 8 checks.
 
 ## The scripts
 
@@ -34,8 +37,9 @@ and rules only: no checksum, address or password. Still 8 checks.
   usage error.
 - `tests/migrations/checksums.sh <migrations dir>`: psql through
   libpq's variables (`PGHOST`, `PGUSER`, `PGDATABASE`, `PGPASSWORD`
-  or a password file), never an address argument. Exit 0, 1 with each
-  fault, or psql's own exit code if it cannot connect or query.
+  or a password file), never an address argument, and with `-w`, so it
+  never prompts. Exit 0, 1 with each fault, 2 on a usage error, or
+  psql's own exit code if it cannot connect or query.
 
 `docs/local-setup.md` shows how to run both against a scratch
 database.

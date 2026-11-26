@@ -32,7 +32,8 @@ while IFS= read -r name; do
   printf '%s %s\n' "$name" "${sum%% *}" >> "$work/files"
 done <<< "$(find "$dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)"
 
-psql -X -q -A -t -F ' ' -v ON_ERROR_STOP=1 \
+# -w: never prompt for a password; with none in the environment or a password file, fail at once instead.
+psql -X -w -q -A -t -F ' ' -v ON_ERROR_STOP=1 \
   -c 'SELECT migration_name, checksum FROM _prisma_migrations
       WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name' > "$work/rows"
 sort -o "$work/rows" "$work/rows"

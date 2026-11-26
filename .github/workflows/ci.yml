@@ -267,7 +267,9 @@ jobs:
 
       - name: Check that no applied migration changed
         # The first parent stands for the previous release until production records its own (ADR-0191 Decision 1).
+        # "shell: bash" runs it with pipefail, so a failed git archive fails the step whatever tar reads.
         timeout-minutes: 2
+        shell: bash
         run: |
           if ! git rev-parse --verify --quiet 'HEAD^1^{commit}' > /dev/null; then
             echo "::error::The first parent, HEAD^1, is not in the checkout: the job needs fetch-depth: 2."
