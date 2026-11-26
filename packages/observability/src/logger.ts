@@ -4,6 +4,38 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
+/** Cloud Logging's LogSeverity name for each level (ADR-0181 Decision 1). */
+const SEVERITY: Record<LogLevel, "DEBUG" | "INFO" | "WARNING" | "ERROR"> = {
+  debug: "DEBUG",
+  info: "INFO",
+  warn: "WARNING",
+  error: "ERROR",
+};
+
+/**
+ * Keys a caller's field, `base` or `child` binding may not carry: the ones
+ * Cloud Logging reads from a JSON line into the entry itself, and `level`,
+ * the name this logger wrote before (ADR-0181 Decision 2).
+ */
+const RESERVED_KEYS: ReadonlySet<string> = new Set([
+  "severity",
+  "level",
+  "message",
+  "time",
+  "timestamp",
+  "timestampSeconds",
+  "timestampNanos",
+  "httpRequest",
+]);
+const RESERVED_PREFIX = "logging.googleapis.com/";
+
+/** The caller's fields without the reserved keys, in the caller's own order. */
+function withoutReserved(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([key]) => !RESERVED_KEYS.has(key) && !key.startsWith(RESERVED_PREFIX)),
+  );
+}
+
 export interface Logger {
   debug(message: string, fields?: Record<string, unknown>): void;
   info(message: string, fields?: Record<string, unknown>): void;
@@ -24,7 +56,8 @@ export interface LoggerOptions {
 /**
  * Minimal, dependency-free structured JSON logger. Every emitted record is
  * passed through {@link redact} so secrets and signed URLs cannot leak, even
- * if a caller accidentally includes them in `fields`.
+ * if a caller accidentally includes them in `fields`. A line starts with
+ * `severity`, `time` and `message`; a caller's field never replaces them.
  */
 export function createLogger(options: LoggerOptions = {}): Logger {
   const level = options.level ?? "info";
@@ -35,10 +68,10 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   function emit(entry: LogLevel, message: string, fields?: Record<string, unknown>): void {
     if (LEVEL_ORDER[entry] < LEVEL_ORDER[level]) return;
     const record = {
-      level: entry,
+      severity: SEVERITY[entry],
       time: now().toISOString(),
       message,
-      ...(redact({ ...base, ...(fields ?? {}) }) as Record<string, unknown>),
+      ...(redact(withoutReserved({ ...base, ...(fields ?? {}) })) as Record<string, unknown>),
     };
     sink(JSON.stringify(record));
   }

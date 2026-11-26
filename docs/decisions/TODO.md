@@ -2220,6 +2220,12 @@ into on 2026-11-17.
       strings that start `http(s)://`, and keeps a URL's user and password
       when it has no query (`redact.ts`). The new line carries only
       literals, ids and filtered words, so it does not depend on them.
+      *Amended in PT-7a: the reserved keys are closed. A field, `base` or
+      `child` binding can no longer write `severity` (which replaces
+      `level`), `level`, `message`, `time`, the other time keys,
+      `httpRequest` or a `logging.googleapis.com/` key (ADR-0181). The
+      message, which is still written as given, and a URL's user and
+      password kept when it has no query stay open for PT-7a2.*
 - [ ] **The lib helpers log `UNEXPECTED` for every error they do not
       know.** `apps/web/src/lib/groups.ts` and nine other helpers log a
       code alone; they could use `failureCode` and `failureName`. Their

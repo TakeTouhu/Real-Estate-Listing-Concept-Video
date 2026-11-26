@@ -1599,6 +1599,16 @@ setting now hides the cross-field refusals until it is fixed. Not
 measured before CI: the browser and database suites, and `zod` 4
 inside the built server chunks and the worker start.
 
+**PT-7a — `severity` for Cloud Logging** (ADR-0181, no migration): a
+log line starts with `severity` (`DEBUG`, `INFO`, `WARNING` or
+`ERROR`, LogSeverity's own names) where it had `level`, and a caller's
+field can no longer write `severity`, `level`, `message`, `time`, the
+other time keys, `httpRequest` or a `logging.googleapis.com/` key; the
+other fields keep the caller's order (`docs/api-changes-pt-7a.md`). The
+production-mode log report reads `severity`. Not measured: how Cloud
+Logging reads the line, since nothing is deployed; G1 is the first
+measurement. The message still bypasses `redact` (PT-7a2).
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

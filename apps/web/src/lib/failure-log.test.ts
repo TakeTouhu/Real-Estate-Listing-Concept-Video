@@ -10,7 +10,7 @@ import { failureCode, failureName, isUnknownFailure, logRequestFailure } from ".
  */
 const CANARY = "postgresql://u:CANARY@h:5432/db?sig=CANARY";
 const EMAIL = "canary@example.com";
-const KEYS = ["level", "time", "message", "component", "route", "requestId", "errorName", "code"];
+const KEYS = ["severity", "time", "message", "component", "route", "requestId", "errorName", "code"];
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -32,7 +32,7 @@ describe("logRequestFailure", () => {
     const [line] = sink.lines;
     expect(Object.keys(line ?? {})).toEqual(KEYS);
     expect(line).toMatchObject({
-      level: "error",
+      severity: "ERROR",
       message: "A request failed",
       component: "request",
       route: "POST /api/x",

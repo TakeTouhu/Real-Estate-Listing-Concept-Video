@@ -2,19 +2,20 @@
  * The production-mode job's report of the web server's log (RD-11b, ADR-0178
  * Decision 10): `node log-report.mjs <web.log> [values...]`. It counts the
  * JSON lines by seven fields and prints no other field; a raw line must be one
- * of Next.js's start lines, and a JSON line must have one of the logger's
- * levels and a component. It fails on any other line, on any error line but
- * the one the database outage step causes (exactly one), and on any warning
- * but a refusal by the client address's limit or readiness's database probe
- * answering `P1001` or `P1017` during the outage (CI's first run read both: a
- * stopped server closes the open connection, then refuses new ones). A listed value in the log (one per line
- * of each `values` file) fails it with exit 2 and prints nothing more. Node.js
+ * of Next.js's start lines, and a JSON line must have one of the logger's four
+ * severities (PT-7a, ADR-0181) and a component. It fails on any other line,
+ * on any `ERROR` line but the one the database outage step causes (exactly
+ * one), and on any `WARNING` but a refusal by the client address's limit or
+ * readiness's database probe answering `P1001` or `P1017` during the outage
+ * (CI's first run read both: a stopped server closes the open connection,
+ * then refuses new ones). A listed value in the log (one per line of each
+ * `values` file) fails it with exit 2 and prints nothing more. Node.js
  * built-ins only.
  */
 import { appendFileSync, readFileSync } from "node:fs";
 import process from "node:process";
 
-const FIELDS = ["level", "component", "code", "route", "errorName", "causeName", "dimension"];
+const FIELDS = ["severity", "component", "code", "route", "errorName", "causeName", "dimension"];
 const START_LINES = [/^▲ Next\.js 15\.\d+\.\d+$/, /^- Local: +http:\/\/localhost:3000$/];
 START_LINES.push(/^- Network: +http:\/\/0\.0\.0\.0:3000$/, /^✓ Starting\.\.\.$/, /^✓ Ready in \d+(?:\.\d+)?m?s$/);
 const OUTAGE = { component: "request", route: "POST /api/auth/login", errorName: "RateLimiterUnavailable" };
@@ -24,7 +25,7 @@ const WARNINGS = [
   { component: "readiness", probe: "database", code: "P1001" },
   { component: "readiness", probe: "database", code: "P1017" },
 ];
-const LEVELS = ["debug", "info", "warn", "error"];
+const SEVERITIES = ["DEBUG", "INFO", "WARNING", "ERROR"];
 /** A field's value as printed: a plain word or route, else hidden. */
 const shown = (value) => (typeof value === "string" && /^[\w ./:[\]-]{1,80}$/.test(value) ? value : "(other)");
 
@@ -52,10 +53,10 @@ for (const line of log.split("\n").map((each) => each.trim()).filter((each) => e
   }
   const row = FIELDS.map((name) => (entry[name] === undefined ? "" : shown(entry[name]))).join(" | ");
   counts.set(row, (counts.get(row) ?? 0) + 1);
-  if (!LEVELS.includes(entry.level) || typeof entry.component !== "string") problems.push(`a JSON line: ${row}`);
-  if (entry.level === "error" && matches(entry, OUTAGE)) outages += 1;
-  else if (entry.level === "error") problems.push(`an error line: ${row}`);
-  if (entry.level === "warn" && !WARNINGS.some((wanted) => matches(entry, wanted))) {
+  if (!SEVERITIES.includes(entry.severity) || typeof entry.component !== "string") problems.push(`a JSON line: ${row}`);
+  if (entry.severity === "ERROR" && matches(entry, OUTAGE)) outages += 1;
+  else if (entry.severity === "ERROR") problems.push(`an error line: ${row}`);
+  if (entry.severity === "WARNING" && !WARNINGS.some((wanted) => matches(entry, wanted))) {
     problems.push(`a warning: ${row}`);
   }
 }

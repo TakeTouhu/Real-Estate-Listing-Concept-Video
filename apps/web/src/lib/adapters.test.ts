@@ -242,7 +242,7 @@ describe("the web app's ClamAV scanner (ADR-0164)", () => {
       // Nothing listens there now: the connection is refused.
       const result = await scannerFor(stand.port).malwareScanner().scan(new Uint8Array([1]));
       expect(result).toEqual({ verdict: "SCAN_FAILED", detail: "ECONNREFUSED" });
-      const line = { level: "warn", component: "malware-scan", message: "A malware scan could not be completed" };
+      const line = { severity: "WARNING", component: "malware-scan", message: "A malware scan could not be completed" };
       expect(lines).toEqual([{ ...line, code: "ECONNREFUSED", time: expect.any(String) }]);
       expect(JSON.stringify(lines)).not.toContain(String(stand.port));
       // A scan that ends in a verdict logs nothing: the daemon's detection, and the test scanner's, detail and all.
