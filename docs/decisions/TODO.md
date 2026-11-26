@@ -2115,9 +2115,16 @@ into on 2026-11-17.
       float; `production-mode` pins its own by digest (ADR-0178).
       *Both run `production-mode`'s `PG_IMAGE` by tag and digest since
       PT-6a (ADR-0179 Decision 3).*
-- [ ] **Decide whether the page policy gains `upgrade-insecure-requests`.**
+- [x] **Decide whether the page policy gains `upgrade-insecure-requests`.**
       ADR-0174 Decision 10 left it out for an `http://localhost` run that
       cannot exist (ADR-0178 Decision 6). Not decided; nothing changed.
+      *Done in PT-7c4 (ADR-0190 Decision 1): yes, in the production
+      policy only; `next dev`'s is unchanged. Chromium 153 was measured
+      not to upgrade `http://localhost` or `http://127.0.0.1`; a
+      production build opened over plain `http` on the one other name
+      measured, `app.pt7c4.test`, lost its own files, and other
+      non-loopback names are expected to by inference
+      (`docs/local-setup.md`).*
 
 ## Open in RD-11b — what the browser through the front leaves open
 
@@ -2529,6 +2536,12 @@ into on 2026-11-17.
 - [ ] **HSTS without `includeSubDomains` or `preload`** until the
       public domain is chosen; its `max-age` is an operations decision
       then (RD-9d, ADR-0174 Decision 12).
+      *Amended in PT-7c4: the rule is written in ADR-0190 Decision 3
+      (`includeSubDomains` once T2 names the host, at once on a
+      dedicated host, on the apex only with the product owner's yes;
+      `preload` only on their domain-wide yes; `max-age` a year until
+      then), and a test pins the grammar, refusing `max-age=0`. Open for
+      T2, as PT-7c5.*
 - [x] **RD-10's image build must run `next build` with `NODE_ENV` unset
       or `production`**, or production sends no HSTS: `next build` only
       defaults it (ADR-0174 Decision 8).

@@ -11,12 +11,15 @@ import { APP_BASE_URL, emulatorBytes, listValue, productionRun } from "./support
 /** Read as the file loads, so a run without the job's runner settings fails before the browser starts. */
 const run = productionRun();
 
-/** The page policy a production build sends (ADR-0174 Decision 10): `next dev`'s but `'unsafe-eval'` and `ws: wss:`. */
+/**
+ * The page policy a production build sends (ADR-0174 Decision 10): `next dev`'s but `'unsafe-eval'` and `ws: wss:`,
+ * plus `upgrade-insecure-requests` (ADR-0190).
+ */
 const productionPagePolicy = (nonce: string): string =>
   `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; ` +
   "img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; " +
   "base-uri 'none'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; report-uri /api/csp-report; " +
-  "report-to csp";
+  "report-to csp; upgrade-insecure-requests";
 
 /**
  * The production image as built, through the TLS front, against the job's

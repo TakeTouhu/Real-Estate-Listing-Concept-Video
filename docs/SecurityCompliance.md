@@ -183,6 +183,10 @@ release and **is not activated** (ADR-0054 Decision 2).
   `Reporting-Endpoints` header on every page); the API policy reports
   to nothing. The endpoint logs categories only, the page as its route
   pattern, never its address, query or ids (ADR-0189).*
+  *Amended in PT-7c4: the production page policy ends with
+  `upgrade-insecure-requests`; `next dev`'s does not. HSTS stays
+  `max-age=31536000` for the app's own host; `includeSubDomains` and
+  `preload` wait on the product owner's domain decision (ADR-0190).*
 - **Defense-in-depth rate limiting** across account, organization, IP and
   endpoint/action dimensions, covering login, password reset, MFA recovery,
   uploads, generation, downloads and billing. Login failures use progressive
