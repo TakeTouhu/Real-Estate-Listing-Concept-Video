@@ -25,9 +25,9 @@ no `phase-N-complete` tag (see "Release tag").
 Base: `c9444fc` (PR #218 merge commit on `main`). It was drafted on the
 tree of #218's earlier head `0ace998e` and checked again on `c9444fc`
 (see "Test results"). No ADR, no migration, no code: documents only.
-RD-11c adds this file; three `TODO.md` amendments and one checkbox flip
-for the decisions under "Remaining work", and one new item, "Open in
-RD-11c"; a pointer in `docs/Roadmap.md` and in the gap analysis's RD-11
+RD-11c adds this file; five `TODO.md` amendments, three for the
+decisions under "Remaining work" (one with a checkbox flip) and two
+recording CI's run on #218, and one new item, "Open in RD-11c"; a pointer in `docs/Roadmap.md` and in the gap analysis's RD-11
 row; and its section in `docs/migration-notes.md`.
 
 ## RD-11: the production-mode test
@@ -400,7 +400,7 @@ against the emulator, ClamAV and Mailpit), `database`, `e2e`,
 the project thread that #216 merged with all 14 of its checks green
 (`production-mode` came with #217), #217 with all 16 green on its first
 run, and #218 with all 16 green on its merged head (2026-11-26 00:51Z,
-01:25Z and 03:01Z). These results were not read from GitHub for this
+01:24Z and 03:01Z). These results were not read from GitHub for this
 report, except #218's: its runs 45744972828 and 45744977732, and
 `main`'s run 1210 (45746183350) on `c9444fc`, all passed (read from
 GitHub). The run on `main` after this report's merge is reported at
