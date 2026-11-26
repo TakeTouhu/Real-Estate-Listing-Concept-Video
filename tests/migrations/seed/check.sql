@@ -62,7 +62,91 @@ BEGIN
     ('unit_purchase_cancellations', 'purchaseId', 2, '821b784c3b2fa22e71aad4c8bb499b8e',
      '"purchaseId", "organizationId", fault, "operatorName", reason, "cancelledAt"'),
     ('rate_limit_counters', 'subject', 4, '73bd0a3bfd0be063d95acae597619858',
-     'policy, subject, "windowStartedAt", count, "lockedUntil", "lockLevel", "expiresAt"')
+     'policy, subject, "windowStartedAt", count, "lockedUntil", "lockLevel", "expiresAt"'),
+    ('properties', 'id', 5, 'c9eb18b3053185fb63eb72aed2f103d4',
+     'id, "organizationId", name, "propertyType", "addressMasked", description, status, "createdBy", "createdAt", '
+     '"updatedAt", "groupId", "responsibleUserId"'),
+    ('media_assets', 'id', 27, 'ca28a373a2617179ad3d48857f9eba03',
+     'id, "organizationId", "propertyId", "storageKey", "originalFilename", "mimeType", "sizeBytes", width, height, '
+     'sha256, "perceptualHash", status, "failureReason", "thumbnailKey", "createdBy", "deletionRequestedAt", '
+     '"retentionExpiresAt", "createdAt", "updatedAt"'),
+    ('asset_analyses', 'id', 19, 'c09a2895c8b5a412ced2708a6b4c4e50',
+     'id, "organizationId", "assetId", provider, status, "roomType", confidence, "qualityScore", "brightnessScore", '
+     '"blurScore", "duplicateGroup", "detectedObjects", "safetyFlags", "suggestedOrder", "failureReason", '
+     '"reviewedBy", "reviewedAt", "createdAt", "updatedAt", "analysisRevision", "reviewNote", "reviewStatus", '
+     '"roomTypeOverride", "orderOverride", "correctedBy", "correctedAt"'),
+    ('video_projects', 'id', 4, 'a84b62669bc1b6e75bd1b1eb60a8de47',
+     'id, "organizationId", "propertyId", name, status, "durationSeconds", "aspectRatio", resolution, '
+     '"stylePreset", "cameraMotion", prompt, "negativePrompt", "includeMusic", "includeCaptions", '
+     '"brandTemplateId", "compositionFingerprint", "createdBy", "createdAt", "updatedAt"'),
+    ('storyboard_scenes', 'id', 18, '110ab28aa2d48223a22a690ddddb0fe6',
+     'id, "videoProjectId", "propertyId", "assetId", "position", "roomType", "durationSeconds", "cameraMotion", '
+     '"compiledPrompt", "sourceAnalysisRevision", "createdAt", "updatedAt"'),
+    ('generation_jobs', 'id', 12, '7e3badead372d9a645fc615fe0c23bd3',
+     'id, "videoProjectId", "requestedByUserId", "qualityTier", "targetOutputResolution", "targetAspectRatio", '
+     '"requestedDurationSeconds", "requiredVideoUnits", "requiredHighQualityUnits", state, "stateVersion", '
+     '"currentDeliverableVersionId", "createdAt", "updatedAt", "disclosureMode", "idempotencyKey"'),
+    ('generation_deliverable_versions', 'id', 15, '0f22b843a7625004e49979a925adc3af',
+     'id, "generationJobId", ordinal, "inputFingerprint", "createdAt", "disclosureMode"'),
+    ('generation_reservations', 'id', 8, 'd554f58ef6685b8b1d0a3bfde041cbb4',
+     'id, "generationJobId", "billingCycleKey", "billingCycleStartedAt", "billingCycleEndsAt", '
+     '"reservedTotalVideoUnits", "reservedHighQualityUnits", state, "stateVersion", "reservedAt", "consumedAt", '
+     '"releasedAt", "createdAt", "updatedAt", "entitlementPeriodId", funding'),
+    ('generation_reservation_allocations', 'id', 7, 'b3dfaeaa4730633a92499ea47898e0ee',
+     'id, "reservationId", "organizationId", "entitlementPeriodId", ordinal, "sourceType", "addOnBlockId", quality, '
+     'quantity, "createdAt"'),
+    ('generation_scenes', 'id', 6, 'eb7d59864039da70f6c13ddab15c88f5',
+     'id, "generationJobId", "position", "sourceStoryboardSceneId", "sourceAssetId", "sourceAnalysisRevision", '
+     '"snapshotDurationSeconds", "snapshotCameraMotion", "snapshotCompiledPrompt", state, "stateVersion", '
+     '"currentDeliveredRequestId", "createdAt", "updatedAt"'),
+    ('scene_generation_requests', 'id', 10, '812056ac6bc2cab9493006a9aafb9a24',
+     'id, "generationSceneId", kind, "userRegenerationOrdinal", state, "stateVersion", "requestedByUserId", '
+     '"createdAt", "deliveredAt", "failedAt"'),
+    ('scene_generations', 'id', 22, 'afe9f5fc2903db643462b1ba24d65f65',
+     'id, "videoProjectId", "sourceStoryboardSceneId", "assetId", "sourceAnalysisRevision", "requestHash", '
+     '"providerName", "providerModelId", state, "providerPredictionId", "submittedAt", "lastPolledAt", '
+     '"normalizedErrorCode", "normalizedErrorMessage", "outputStorageKey", "createdAt", "updatedAt", '
+     '"requestCompiledPrompt", "requestDurationSeconds", "requestCameraMotion", "requestAspectRatio", '
+     '"requestResolution", "requestRenderedPrompt", "requestModelKey", "requestTargetOutputResolution", '
+     '"requestNativeGenerationResolution", "requestResolutionNormalization", "requestNativeMeetsTarget", '
+     '"attemptKind", "attemptOrdinal", "generationSceneRequestId", "orchestrationState", "pricingContractKey", '
+     '"providerAcceptedAt", "reconciliationDeadlineAt", "reconciliationResolvedAt", "reconciliationStartedAt", '
+     '"stateVersion", "submissionBoundaryEnteredAt", "submissionCertainty", "outputSha256", "outputSizeBytes", '
+     '"outputVerifiedAt"'),
+    ('fx_rate_snapshots', 'id', 2, 'c32bb68383a7f58c62ae1b0acd18bec2',
+     'id, "baseCurrency", "quoteCurrency", "rateNumerator", "rateDenominator", "effectiveAtEpochMs", '
+     '"sourceReference", "createdAt"'),
+    ('generation_pricing_snapshots', 'id', 3, '876781c706c939eb7c430f1b094a0711',
+     'id, "sceneGenerationId", "pricingVersion", provider, "contractKey", "contractFingerprint", "identityJson", '
+     '"stablePriceReferenceJson", "riskProfileKey", "riskBufferBps", "requestedSeconds", "billableSeconds", '
+     '"estimatedStableCostMicroUsd", "estimatedPlanningCostMicroUsd", "pricingEffectiveAtEpochMs", "fxSnapshotId", '
+     '"createdAt"'),
+    ('managed_output_media_validations', 'id', 13, '1d9d489f007c77bddbe091627f8fecc9',
+     'id, "sceneGenerationId", status, "receiptSha256", "receiptSizeBytes", "leaseToken", "leaseExpiresAt", '
+     '"nextAttemptAt", "attemptCount", version, "invalidReason", container, "durationMs", "videoWidth", '
+     '"videoHeight", "videoStreamCount", "audioStreamCount", "validatedAt", "createdAt", "updatedAt"'),
+    ('managed_output_media_failure_resolutions', 'id', 7, '64098b941f51fa7bea25fc8d1276bdcc',
+     'id, "managedOutputMediaValidationId", status, "leaseToken", "leaseExpiresAt", "nextAttemptAt", '
+     '"attemptCount", version, "lastPlanRefusalCode", "resolutionKind", "recoveryAttemptId", "resolvedAt", '
+     '"createdAt", "updatedAt"'),
+    ('generation_deliverable_inputs', 'id', 4, 'ae048436ecd074514f0cc5fe289a9895',
+     'id, "deliverableVersionId", "position", "generationSceneId", "sceneGenerationRequestId", '
+     '"sceneGenerationAttemptId", "mediaValidationId", "sourceSha256", "sourceSizeBytes", "createdAt"'),
+    ('generation_deliverable_compositions', 'id', 13, '22b6629e762b70c598c6b4679caa7b5c',
+     'id, "deliverableVersionId", status, "profileKey", "targetWidthPx", "targetHeightPx", "frameRateNumerator", '
+     '"frameRateDenominator", "videoCodec", "pixelFormat", "fitMode", "transitionMode", "audioMode", '
+     '"encoderPreset", crf, "leaseToken", "leaseExpiresAt", "nextAttemptAt", "attemptCount", version, '
+     '"lastRetryCode", "blockCode", "blockedAt", "outputStorageKey", "outputSha256", "outputSizeBytes", '
+     '"outputVerifiedAt", "createdAt", "updatedAt"'),
+    ('generation_deliverable_validations', 'id', 10, '5a42d9406c482b1a6ea360f4b95c7909',
+     'id, "deliverableVersionId", status, "receiptSha256", "receiptSizeBytes", "leaseToken", "leaseExpiresAt", '
+     '"nextAttemptAt", "attemptCount", version, "invalidReason", container, "durationMs", "videoWidth", '
+     '"videoHeight", "videoStreamCount", "audioStreamCount", "validatedAt", "createdAt", "updatedAt"'),
+    ('generation_deliverable_clean_masters', 'id', 2, '776e39502dc04091f11c6359b8dd2cca',
+     'id, "deliverableVersionId", "storageKey", sha256, "sizeBytes", "verifiedAt", "createdAt"'),
+    ('generation_transition_events', 'id', 8, 'c9031b5dec2650f6a7593ed816744278',
+     'id, "organizationId", "aggregateType", "aggregateId", sequence, "fromState", "toState", "eventType", '
+     '"actorType", "actorUserId", "reasonCode", "correlationId", "causationId", "safeMetadata", "createdAt"')
   ) AS seeded (tbl, key, expected_rows, expected_digest, cols)
   LOOP
     EXECUTE format(
