@@ -1609,6 +1609,16 @@ production-mode log report reads `severity`. Not measured: how Cloud
 Logging reads the line, since nothing is deployed; G1 is the first
 measurement. The message still bypasses `redact` (PT-7a2).
 
+**PT-7a2 — A log message is a constant** (ADR-0182, no migration): a
+new guard parses apps and packages and requires every `.debug`,
+`.info`, `.warn` or `.error` call not on `console` to take a constant
+message, apart from three listed stream `controller.error(...)` calls;
+every logger call already did. The message also goes through `redact`
+as a backstop, and `redact` now drops a URL's user name and password
+when it has no query (`docs/api-changes-pt-7a2.md`). Still open: a URL
+inside a longer field string, and whether value patterns are wanted
+(`TODO.md`).
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

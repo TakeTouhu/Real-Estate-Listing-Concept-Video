@@ -115,6 +115,19 @@ describe("createLogger", () => {
     expect(lines.every((line) => !line.includes("\n"))).toBe(true);
   });
 
+  it("passes a message that is itself a URL through redact, and leaves a plain message as written", () => {
+    const { logger, parsed } = capture();
+    logger.info("https://storage.example.com/o/key?X-Goog-Signature=abc");
+    logger.info("https://user:pw@h.test/a");
+    logger.info("Fetched https://h.test/a?sig=1 once");
+    expect(parsed().map((line) => line.message)).toEqual([
+      `https://storage.example.com/o/key?${REDACTED}`,
+      "https://h.test/a",
+      "Fetched https://h.test/a?sig=1 once",
+    ]);
+    expect(Object.keys(parsed()[0] ?? {})).toEqual(["severity", "time", "message"]);
+  });
+
   it("still passes the fields, base and bindings through redact", () => {
     const { logger, parsed } = capture({ base: { apiKey: "sk-base" } });
     logger.child({ webhookSecret: "shh" }).info("m", {

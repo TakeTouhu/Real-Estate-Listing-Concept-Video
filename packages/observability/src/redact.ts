@@ -35,13 +35,18 @@ function isSensitiveKey(key: string): boolean {
 /**
  * Redact a URL string: strip query/fragment (which carry signatures and
  * tokens) and keep only origin + path so logs remain useful without leaking
- * credentials. Returns REDACTED if the value is not a parseable URL but looks
- * secret.
+ * credentials. A user name or password in the URL is dropped even when there
+ * is no query or fragment (ADR-0182 Decision 3). A value that is not a
+ * parseable URL is returned unchanged.
  */
 export function redactUrl(value: string): string {
   try {
     const url = new URL(value);
-    return url.search || url.hash ? `${url.origin}${url.pathname}?${REDACTED}` : value;
+    if (url.search || url.hash) return `${url.origin}${url.pathname}?${REDACTED}`;
+    if (!url.username && !url.password) return value;
+    url.username = "";
+    url.password = "";
+    return url.href;
   } catch {
     return value;
   }

@@ -36,7 +36,7 @@ recovery budget, defect records, operator recovery and cost inputs.
 | Production video start | not built; the start route answers "not found" outside the fake kit | `apps/web/src/lib/generation-start.ts:19-25` |
 | Infrastructure code, deploy | none; CI's image guard bans push and secrets | `tests/container-images.test.ts` |
 | Migrations in production | no image or job | |
-| Logs | `level`, not Cloud Logging's `severity` (*`severity` by LogSeverity's names, reserved keys dropped, since PT-7a, ADR-0181; now in `logger.ts` `emit()`*) | `packages/observability/src/logger.ts:37-42` |
+| Logs | `level`, not Cloud Logging's `severity` (*`severity` by LogSeverity's names, reserved keys dropped, since PT-7a, ADR-0181; now in `logger.ts` `emit()`*) (*message a constant and through `redact`, a URL's user name and password dropped, since PT-7a2, ADR-0182*) | `packages/observability/src/logger.ts:37-42` |
 | CI | two runs per commit; `database` and `e2e` on a floating `postgres:16` (*one run per commit, one pinned PostgreSQL since PT-6a, ADR-0179*) | `.github/workflows/ci.yml` |
 | Dependencies | no image scanner; `sharp`, `postcss` and `zod` advisories (*`sharp` and `postcss`'s `nanoid` and `source-map-js` fixed since PT-6c; each image scanned with pinned Syft and Grype, failing on a fixable critical finding, since PT-6b, ADR-0180; `zod` 4.6.7 since PT-6d*) | `TODO.md` |
 | Worker runtime | exits 2 in production; development pipeline only | `apps/worker` |

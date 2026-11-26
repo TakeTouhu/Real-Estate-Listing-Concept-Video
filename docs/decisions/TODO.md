@@ -2213,7 +2213,7 @@ into on 2026-11-17.
       `onRequestError` in `apps/web/src/instrumentation.ts` could add a
       JSON line but never remove the raw one, and must never take its
       `path`, which can hold a signed `?token=`, or its `headers`.
-- [ ] **The logger's message, reserved keys and other URLs bypass
+- [x] **The logger's message, reserved keys and other URLs bypass
       `redact`.** `createLogger` writes `message` as given and lets a field
       overwrite `level`, `time` or `message`
       (`packages/observability/src/logger.ts`); `redact` scrubs only
@@ -2226,12 +2226,38 @@ into on 2026-11-17.
       `httpRequest` or a `logging.googleapis.com/` key (ADR-0181). The
       message, which is still written as given, and a URL's user and
       password kept when it has no query stay open for PT-7a2.*
+      *Amended in PT-7a2: the message and the user name and password are
+      closed. Every logger message is a constant, held by
+      `tests/observability/constant-log-messages.test.ts`, and the
+      message goes through `redact` as a backstop; `redactUrl` drops a
+      URL's user name and password with or without a query (ADR-0182).
+      `redact` still scrubs only a string that starts `http(s)://`; that
+      part moves to the next item, so this one is closed.*
+- [ ] **A URL not at the start of a field string is not scrubbed, and no
+      value pattern is decided.** `redact` rewrites a string only when it
+      starts with `http(s)://` and parses as a URL, so a field such as
+      `"Fetched https://h.test/a?sig=1"` is written whole (ADR-0182, known
+      gaps). A message cannot carry one, since messages are constants. A
+      string `new URL` refuses, such as `https://user:pw@[bad/a`, or one
+      with a leading space, keeps its user name and password. Whether
+      `redact` should also look for a URL anywhere in a string, `Bearer`,
+      `key=value` or other value patterns is a redaction policy nothing
+      decides yet. The guard also does not see a method called other than
+      by its name: an alias, a destructured method, an element access
+      (`log["error"]`), `.bind` or a method passed as a callback.
 - [ ] **The lib helpers log `UNEXPECTED` for every error they do not
       know.** `apps/web/src/lib/groups.ts` and nine other helpers log a
       code alone; they could use `failureCode` and `failureName`. Their
       own catches are outside the guard.
 - [ ] **The worker prints its start failure raw**
       (`apps/worker/src/main.ts`).
+- [ ] **Other `console` output outside the logger is not tracked.** The
+      command-line tools under `apps/ops/src/bin` and
+      `apps/worker/src/development-pipeline`, the web app's start report
+      (`apps/web/src/lib/startup.ts`) and
+      `packages/storage/src/bin/render-disclosure-layers.ts` print values
+      through `console`, outside `redact` and the guard of ADR-0182.
+      Nothing decides whether they should go through the logger.
 - [ ] **No stack is logged.** Revisit only if RD-11 shows that a name and
       a code are not enough.
       *Amended in RD-11b: in the lab the run's one error line, the
