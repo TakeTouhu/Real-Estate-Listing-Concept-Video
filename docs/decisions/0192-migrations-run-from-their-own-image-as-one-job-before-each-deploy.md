@@ -35,8 +35,10 @@ where Prisma reads one, and copies, with `cp -a`, exactly six
 `node_modules/.pnpm` folders: `prisma@*`, `@prisma+engines@*`,
 `@prisma+engines-version@*`, `@prisma+debug@*`,
 `@prisma+fetch-engine@*` and `@prisma+get-platform@*`. Each pattern
-must match one folder, or the build refuses, so a Prisma upgrade that
-renames or adds one fails loudly. Both of Debian 13's OpenSSL 3
+must match one folder, or the build refuses: a Prisma upgrade that
+renames or duplicates one fails there. One that adds a seventh package
+passes the build and leaves a dead link, which the job refuses
+(Decision 4). Both of Debian 13's OpenSSL 3
 engines, `schema-engine-debian-openssl-3.0.x` and
 `libquery_engine-debian-openssl-3.0.x.so.node`, must be there, and no
 `openssl-1.1.x` file.
@@ -77,12 +79,15 @@ workflow and the migration scripts.
 
 ## Decision 4 — Its own job, the ninth check
 
-The `migrate-image` job builds the image as `vtavision-migrate:ci` and
-checks it with no network and a read-only root: user `1000:1000`; `id
+The `migrate-image` job builds the image as `vtavision-migrate:ci`.
+Every run of it in the job has no network, a read-only root, no
+capability and `no-new-privileges`. It checks: user `1000:1000`; `id
 -u` 1000; the entrypoint and command literals; no `proxy` in its
-environment; `/app` holding only `node_modules/` and `prisma/`, every
-entry root's and none but a link writable by others, no client,
-`.prisma` or `apps/`, and no dead link. It lists every entry under
+environment; `/app` holding only `node_modules/` and `prisma/`;
+`node_modules/` holding only `.pnpm/` and the `prisma` link, and
+`.pnpm/` exactly the six packages; every entry root's and none but a
+link writable by others; no client, `.prisma` or `apps/`; no dead
+link. A failing check prints what it found. It lists every entry under
 `/app/prisma` by type and relative path, and every file by SHA-256,
 and compares that with the same list of this commit's `schema.prisma`
 and `migrations/`: a missing, extra, moved or changed file fails. The
@@ -92,7 +97,10 @@ CLI runs with `--network none --read-only --cap-drop ALL
 `migrate deploy` against `127.0.0.1:1`, with no password, must exit 1
 with `P1001` and print neither `binaries.prisma.sh` nor `ECONNREFUSED`.
 It prints what the image holds, then runs ADR-0180's three scan steps
-word for word. Only stand-in values exist in the job.
+word for word. Only stand-in values exist in the job. The stand-in
+address goes in an env file, as `web-image` writes its settings to
+one, because the image-job guard admits no job `env` but `REVISION`,
+`SYFT_PIN` and `GRYPE_PIN`; it has no password and is never printed.
 
 The CTO's PT-8 decisions asked first to fit this into an existing
 image job within the guards. It does not fit: the guard holds
@@ -125,6 +133,21 @@ first run's log holds "`<N>` migrations found in prisma/migrations",
 with N the directory count, and "All migrations have been successfully
 applied."
 
+## Considered and not done
+
+- **The runner, with production database access.** The CTO's default 3
+  says migrations are not run from CI with production database
+  access; it would also need G2's federation and an amendment of
+  ADR-0175.
+- **The web image.** It holds no CLI, PT-10 bans overriding its
+  entrypoint, and at web startup every instance of a scale-out would
+  contend for the lock, the second failing after 10 s with `P1002`
+  (measured in the research lab, Context).
+- **A `--target migrate` stage of `apps/web/Dockerfile`.** The guard
+  checks `USER` in the final stage alone, and the web job scans one
+  tag, so the stage would ship unscanned; it would also tie the two
+  images' releases together.
+
 ## What holds it
 
 - **Unit:** `tests/container-images.test.ts` runs its per-Dockerfile
@@ -132,7 +155,8 @@ applied."
   scan last, nothing pushed), bans the lock's name in `BANNED_ENV`, and
   holds the final `ENTRYPOINT`, `CMD`, the four `ENV` names, the two
   `COPY` lines, `ca-certificates` alone, no PostgreSQL, the six-folder
-  copy, the engine check, the ignore file's exact lines, the path and
+  copy, the engine check, the install from the lockfile alone, the
+  ignore file's exact lines, the files check's key lines, the path and
   hash comparison word for word and the offline run's key lines.
 - **CI:** the job on every pull request and push to `main`.
 
@@ -164,11 +188,21 @@ the sandbox. So the image measured lacked `ca-certificates` and
   `checksums.sh` passed all 36.
 - Syft and Grype were not run: the sandbox could not fetch their
   layers. The job's first CI run scans the image.
+- The committed file as written (pinned `FROM`, the runtime `apt-get`
+  line, no proxy) was never built end to end outside CI: run verbatim
+  here, it stopped at `corepack enable` with no route out. The job's
+  first run is its first build, `apt-get` line included.
+- After review, the files check also failed, printing the offending
+  entry, on images with an extra workspace folder, an extra `.pnpm`
+  package, a client package or a dead link; the offline run printed
+  the CLI's own error for a missing engine.
 
 ## Consequences
 
 - A pull request shows 9 checks; the merge rule is still "every check
   green".
-- A Prisma upgrade must keep the six folders, or change the Dockerfile
-  and the guard in the same pull request.
+- A Prisma upgrade must keep the six folders, or change the Dockerfile,
+  the job's files check and the guard in the same pull request. It
+  also changes the job's `5\.22\.0` version check and that line in the
+  guard.
 - Nothing runs the image outside its job until PT-8d.

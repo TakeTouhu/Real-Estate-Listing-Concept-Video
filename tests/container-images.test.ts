@@ -1470,6 +1470,13 @@ describe("the migration image", () => {
     expect(instructions(file).filter((l) => /postgres|psql/i.test(l))).toEqual([]);
   });
 
+  it("installs from the lockfile alone, offline after fetching it", () => {
+    const installs = ofKind(instructions(file), "RUN").filter((l) =>
+      /\b(?:pnpm|npm|yarn)\b (?:i|install|add|fetch)\b/.test(l),
+    );
+    expect(installs).toEqual(["RUN pnpm fetch --frozen-lockfile", "RUN pnpm install --frozen-lockfile --offline"]);
+  });
+
   it("copies the schema and the migrations by two lines, so the migrations keep their folder", () => {
     expect(ofKind(finalStage(file), "COPY")).toEqual([
       "COPY --from=build /out/node_modules ./node_modules",
@@ -1502,23 +1509,33 @@ describe("the migration image", () => {
     const job = readJob(raw(WORKFLOW), "migrate-image");
     const step = (name: string): string[] =>
       commands(job.steps.find((s) => s.fields.get("name") === name)?.fields.get("run") ?? "");
+    const confined = "docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges";
+    expect(step("Check the image's user, files, entrypoint and environment")).toEqual(
+      expect.arrayContaining([
+        `test "$(${confined} --entrypoint id vtavision-migrate:ci -u)" = "1000"`,
+        `${confined} --entrypoint find vtavision-migrate:ci /app "$@"`,
+        `test "$(printf '%s\\n' "$nm" | LC_ALL=C sort)" = "$(printf 'd node_modules/.pnpm\\nl node_modules/prisma')"`,
+        `test "$(printf '%s\\n' "$pkgs" | sed -E 's/@[0-9][^@]*$//' | LC_ALL=C sort)" = "$(printf 'd %s\\n' ` +
+          "@prisma+debug @prisma+engines @prisma+engines-version @prisma+fetch-engine @prisma+get-platform prisma)\"",
+        'if [ -n "$loose$extra$dead" ]; then',
+      ]),
+    );
     expect(step("Check that the image holds this commit's schema and migrations")).toEqual([
       `list='find . -mindepth 1 -printf "%y %P\\n" | LC_ALL=C sort`,
       `find . -type f -printf "%P\\0" | LC_ALL=C sort -z | xargs -0 sha256sum'`,
-      "docker run --rm --network none --read-only --entrypoint sh -w /app/prisma vtavision-migrate:ci " +
-        '-c "$list" > "$RUNNER_TEMP/image.list"',
+      `${confined} --entrypoint sh -w /app/prisma vtavision-migrate:ci -c "$list" > "$RUNNER_TEMP/image.list"`,
       'mkdir "$RUNNER_TEMP/commit"',
       'cp -R packages/database/prisma/schema.prisma packages/database/prisma/migrations "$RUNNER_TEMP/commit/"',
       '(cd "$RUNNER_TEMP/commit" && sh -c "$list") > "$RUNNER_TEMP/commit.list"',
       'diff "$RUNNER_TEMP/commit.list" "$RUNNER_TEMP/image.list"',
       `echo "$(grep -c '^d migrations/' "$RUNNER_TEMP/image.list") migrations, as this commit's"`,
     ]);
-    const offline = "docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges";
     expect(step("Run the CLI offline")).toEqual(
       expect.arrayContaining([
-        `${offline} vtavision-migrate:ci --version > "$RUNNER_TEMP/version.log" 2>&1`,
+        `${confined} vtavision-migrate:ci --version > "$RUNNER_TEMP/version.log" 2>&1`,
+        'test "$code" -eq 0',
         "grep -qE '^prisma +: 5\\.22\\.0$' \"$RUNNER_TEMP/version.log\"",
-        `${offline} --env-file "$RUNNER_TEMP/migrate.env" vtavision-migrate:ci > "$RUNNER_TEMP/deploy.log" 2>&1`,
+        `${confined} --env-file "$RUNNER_TEMP/migrate.env" vtavision-migrate:ci > "$RUNNER_TEMP/deploy.log" 2>&1`,
         'test "$code" -eq 1',
         "grep -qF 'P1001' \"$RUNNER_TEMP/deploy.log\"",
         "if grep -qE 'binaries\\.prisma\\.sh|ECONNREFUSED' \"$RUNNER_TEMP/deploy.log\"; then",

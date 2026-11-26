@@ -14,8 +14,9 @@ RUN for f in .env packages/database/.env packages/database/prisma/.env; do \
       if [ -e "$f" ]; then echo "refusing to build: $f exists" >&2; exit 1; fi; \
     done
 RUN pnpm install --frozen-lockfile --offline
-# The CLI's six packages, each pattern matching one folder, so a Prisma
-# upgrade that renames or adds one fails here; then the link node runs.
+# The CLI's six packages, each pattern matching one folder, so a renamed or
+# duplicated package fails here; a new dependency of the CLI would leave a
+# dead link, which the migrate-image job refuses. Then the link node runs.
 RUN mkdir -p /out/node_modules/.pnpm \
  && for p in 'prisma@*' '@prisma+engines@*' '@prisma+engines-version@*' \
       '@prisma+debug@*' '@prisma+fetch-engine@*' '@prisma+get-platform@*'; do \

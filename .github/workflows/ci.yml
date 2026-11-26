@@ -868,12 +868,14 @@ jobs:
           --tag vtavision-migrate:ci .
 
       - name: Check the image's user, files, entrypoint and environment
-        # /app holds the CLI's packages and the schema's folder alone, all
-        # root's and none writable by others; no client, no app, no dead link.
+        # /app holds the CLI's six packages, its link and the schema's folder
+        # alone, all root's and none writable by others; no client, app or dead
+        # link. A failing check prints what it found.
         timeout-minutes: 3
         run: |
           test "$(docker image inspect -f '{{.Config.User}}' vtavision-migrate:ci)" = "1000:1000"
-          test "$(docker run --rm --network none --read-only --entrypoint id vtavision-migrate:ci -u)" = "1000"
+          test "$(docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint id vtavision-migrate:ci -u)" = "1000"
           test "$(docker image inspect -f '{{json .Config.Entrypoint}}' vtavision-migrate:ci)" = \
             '["node","/app/node_modules/prisma/build/index.js"]'
           test "$(docker image inspect -f '{{json .Config.Cmd}}' vtavision-migrate:ci)" = \
@@ -883,16 +885,26 @@ jobs:
             echo "The image's environment names a proxy." >&2
             exit 1
           fi
-          find_app() { docker run --rm --network none --read-only --entrypoint find vtavision-migrate:ci /app "$@"; }
+          find_app() {
+            docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --entrypoint find vtavision-migrate:ci /app "$@"
+          }
+          find_app -maxdepth 3 -printf '%u:%g %m %y %p\n'
           top="$(find_app -mindepth 1 -maxdepth 1 -printf '%y %P\n')"
           test "$(printf '%s\n' "$top" | LC_ALL=C sort)" = "$(printf 'd node_modules\nd prisma')"
-          find_app -maxdepth 3 -printf '%u:%g %m %y %p\n'
+          nm="$(find_app -mindepth 2 -maxdepth 2 -path '/app/node_modules/*' -printf '%y %P\n')"
+          test "$(printf '%s\n' "$nm" | LC_ALL=C sort)" = "$(printf 'd node_modules/.pnpm\nl node_modules/prisma')"
+          pkgs="$(find_app -mindepth 3 -maxdepth 3 -path '/app/node_modules/.pnpm/*' -printf '%y %f\n')"
+          test "$(printf '%s\n' "$pkgs" | sed -E 's/@[0-9][^@]*$//' | LC_ALL=C sort)" = "$(printf 'd %s\n' \
+            @prisma+debug @prisma+engines @prisma+engines-version @prisma+fetch-engine @prisma+get-platform prisma)"
           loose="$(find_app ! -user 0 -o ! -group 0 -o ! -type l -perm /o=w)"
-          test -z "$loose"
           extra="$(find_app -path '*/@prisma/client' -o -name '@prisma+client*' -o -name .prisma -o -name apps)"
-          test -z "$extra"
           dead="$(find_app -xtype l)"
-          test -z "$dead"
+          if [ -n "$loose$extra$dead" ]; then
+            printf 'Not root-owned, or writable by others:\n%s\nClient, .prisma or app:\n%s\nDead link:\n%s\n' \
+              "$loose" "$extra" "$dead" >&2
+            exit 1
+          fi
 
       - name: Check that the image holds this commit's schema and migrations
         # Each entry by its path under prisma/ and each file by its SHA-256: a
@@ -901,8 +913,8 @@ jobs:
         run: |
           list='find . -mindepth 1 -printf "%y %P\n" | LC_ALL=C sort
             find . -type f -printf "%P\0" | LC_ALL=C sort -z | xargs -0 sha256sum'
-          docker run --rm --network none --read-only --entrypoint sh -w /app/prisma vtavision-migrate:ci \
-            -c "$list" > "$RUNNER_TEMP/image.list"
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint sh -w /app/prisma vtavision-migrate:ci -c "$list" > "$RUNNER_TEMP/image.list"
           mkdir "$RUNNER_TEMP/commit"
           cp -R packages/database/prisma/schema.prisma packages/database/prisma/migrations "$RUNNER_TEMP/commit/"
           (cd "$RUNNER_TEMP/commit" && sh -c "$list") > "$RUNNER_TEMP/commit.list"
@@ -914,9 +926,13 @@ jobs:
         # asks for a database nothing listens on and must fail with P1001.
         timeout-minutes: 2
         run: |
+          set +e
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
             vtavision-migrate:ci --version > "$RUNNER_TEMP/version.log" 2>&1
+          code=$?
+          set -e
           cat "$RUNNER_TEMP/version.log"
+          test "$code" -eq 0
           grep -qE '^prisma +: 5\.22\.0$' "$RUNNER_TEMP/version.log"
           grep -qE '^Schema Engine +: schema-engine-cli ' "$RUNNER_TEMP/version.log"
           echo 'DATABASE_URL=postgresql://pt8c@127.0.0.1:1/pt8c' > "$RUNNER_TEMP/migrate.env"
