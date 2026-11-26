@@ -200,8 +200,9 @@ describe("bodies shaped like the specifications'", () => {
 
 /**
  * Bodies as Chromium 153 (headless) sent them in PT-7c3, for an inline script
- * refused on a page at `/login?run=1` over HTTPS, with this origin put in.
- * Neither names a column.
+ * refused on a page at `/login?run=1` over HTTPS, with this origin and this
+ * policy (its nonce and directives) put in: the captured `report-uri` body came
+ * from a policy without `report-to`. Neither names a column.
  */
 describe("bodies captured from Chromium", () => {
   const POLICY = "script-src 'nonce-N0nceS3cret'; report-uri /api/csp-report; report-to csp";
@@ -259,6 +260,9 @@ describe("the categories", () => {
       [`${BASE}/properties/${UUID}/video-projects/${UUID}/start`]:
         "/properties/[propertyId]/video-projects/[projectId]/start",
       [`${BASE}/organizations/${UUID}/members/${UUID}/permissions`]:
+        "/organizations/[organizationId]/members/[userId]/permissions",
+      // The longest path that can match: 164 characters, two 64-character ids.
+      [`${BASE}/organizations/${"a".repeat(64)}/members/${"b".repeat(64)}/permissions`]:
         "/organizations/[organizationId]/members/[userId]/permissions",
       [`${BASE}/properties/${UUID}/x`]: OTHER_PAGE, [`${BASE}/properties`]: OTHER_PAGE,
       [`${BASE}/properties/a%2Fb/review`]: OTHER_PAGE, [`${BASE}/login/`]: OTHER_PAGE,

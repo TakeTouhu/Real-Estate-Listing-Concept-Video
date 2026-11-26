@@ -37,11 +37,12 @@ export const PAGE_PATTERNS: readonly string[] = [
   "/properties/[propertyId]/video-projects/[projectId]",
   "/properties/[propertyId]/video-projects/[projectId]/start",
 ];
-/** The page category of anything not on the list, on another origin, or with a path over {@link MAX_PAGE_PATH}. */
+/** The page category of anything not on the list or on another origin. */
 export const OTHER_PAGE = "(other)";
-/** The longest path read for its pattern, in characters: the longest pattern with two 64-character ids (162) fits. */
-const MAX_PAGE_PATH = 180;
-/** What a dynamic segment (`[propertyId]`) matches: an id, never an encoded or empty segment. */
+/**
+ * What a dynamic segment (`[propertyId]`) matches: an id, never an encoded or empty segment. It also bounds the
+ * path: the longest that can match is 164 characters, the members' permissions page with two 64-character ids.
+ */
 const ID_SEGMENT = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** What a bounded read gave: the text, or why there is none. */
@@ -159,11 +160,11 @@ export function blockedCategory(value: string | undefined, origin: string): stri
 
 /**
  * The page's route pattern, matched segment by segment, from {@link PAGE_PATTERNS}: never its path, query or ids.
- * `(other)` for any other path, another origin or a path over {@link MAX_PAGE_PATH} characters.
+ * `(other)` for any other path or another origin.
  */
 export function pageCategory(value: string | undefined, origin: string): string {
   const url = value === undefined ? null : URL.parse(value);
-  if (url === null || url.origin !== origin || url.pathname.length > MAX_PAGE_PATH) return OTHER_PAGE;
+  if (url === null || url.origin !== origin) return OTHER_PAGE;
   const segments = url.pathname.split("/");
   const matches = (pattern: string) => {
     const wanted = pattern.split("/");

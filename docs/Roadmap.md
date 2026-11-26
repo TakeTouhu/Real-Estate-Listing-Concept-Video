@@ -1719,13 +1719,17 @@ with `report-uri /api/csp-report; report-to csp`, and every page
 answer carries `Reporting-Endpoints: csp="/api/csp-report"`, relative,
 so the middleware reads no setting; the API policy reports to nothing
 (`docs/api-changes-pt-7c3.md`). Chromium was measured to resolve the
-relative address over `https` and to register no endpoint over plain
-`http`, so `next dev` pages report nothing. The line gains the `page`
+relative address over `https`, and over plain `http` to register no
+endpoint and then post nothing for a policy naming `report-to`, so
+`next dev` pages report nothing. The line gains the `page`
 category, the route pattern from the app's 17 pages or `(other)`,
 which raises the key bound to 73,872. A browser test proves a real
 `report-uri` post and its `204`; the production-mode job posts one
-report of each kind, one from another origin's page that must write no
-line, and one too large, with a run-unique mark the log must not hold.
+report of each kind, a hand-built one naming another origin's page
+that must write no line, and one too large, with a run-unique mark the
+log must not hold. A real browser's report from a second origin was
+measured once, outside CI, against the endpoint's function: it
+arrived, naming that origin's page, and wrote no line.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —

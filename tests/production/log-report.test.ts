@@ -165,6 +165,8 @@ describe("the production-mode log report", () => {
     ["a warning", [...CLEAN, reported("report-uri").replace('"INFO"', '"WARNING"')], ["a page policy report line"]],
     ["two violations in a line", [...CLEAN, reported("report-uri").replace("}]}", "},{}]}")],
       ["a page policy report line"]],
+    ["a dropped violation", [...START, LIMIT, PROBE, OUTAGE, ...UNCAUGHT, reported("report-to"),
+      reported("report-uri").replace('"dropped":0', '"dropped":1')], ["a page policy report line", "0 report-uri"]],
   ])("fails on a page policy report log with %s, and says so", (_, lines, named) => {
     const { status, out } = report(lines);
     expect(status).toBe(1);

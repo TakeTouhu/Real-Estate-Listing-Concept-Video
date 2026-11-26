@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { APIResponse, Response } from "@playwright/test";
 import { createSharedFolderStorage } from "@app/storage";
 import { expect, test } from "./support/csp-guard";
+import { devPagePolicy } from "./support/dev-page-policy";
 import { E2E_BASE_URL, E2E_SHARED_STORAGE_DIR, E2E_STORAGE_SIGNING_SECRET } from "./support/environment";
 
 /** The fixed headers every answer carries (RD-9d, ADR-0174 Decision 8). */
@@ -16,13 +17,6 @@ const EVERY_ANSWER = {
 
 /** The API policy (Decision 9): the download route's own `default-src 'none'; sandbox`, and no framing. */
 const API_POLICY = "default-src 'none'; frame-ancestors 'none'; sandbox";
-
-/** `next dev`'s page policy (Decision 10), which serves this test, for a nonce; it reports (ADR-0189, PT-7c3). */
-const devPagePolicy = (nonce: string): string =>
-  `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'; ` +
-  "style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; " +
-  "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'; " +
-  "frame-ancestors 'none'; report-uri /api/csp-report; report-to csp";
 
 /** Where a page's `report-to` group posts: on every page answer, never on the API's (PT-7c3). */
 const REPORTING_ENDPOINTS = 'csp="/api/csp-report"';

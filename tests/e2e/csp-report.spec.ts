@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { expect, test } from "@playwright/test";
+import { devReportUriPolicy } from "./support/dev-page-policy";
 import { E2E_BASE_URL } from "./support/environment";
 
 /**
@@ -13,13 +14,6 @@ const DOCUMENT = `${E2E_BASE_URL}/csp-report-probe`;
 
 /** The endpoint, which the web app answers. */
 const CSP_REPORT_PATH = "/api/csp-report";
-
-/** `next dev`'s page policy as the middleware sends it (`security-headers.spec.ts`), but without `report-to csp`. */
-const reportUriPolicy = (nonce: string): string =>
-  `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'; ` +
-  "style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; " +
-  "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'; " +
-  "frame-ancestors 'none'; report-uri /api/csp-report";
 
 /**
  * The keys CSP3 names for a report-uri body. Chromium 153 sent all but `column-number` (measured, PT-7c3); the
@@ -52,14 +46,15 @@ const REPORT_KEYS = [
  */
 test("a refused inline script is reported by report-uri, and the endpoint answers 204", async ({ page }) => {
   const nonce = randomBytes(16).toString("base64");
-  const policy = reportUriPolicy(nonce);
+  // The middleware's policy (held by `security-headers.spec.ts`) with its last directive taken off.
+  const policy = devReportUriPolicy(nonce);
   const html =
     `<!doctype html><html><head><title>probe</title><script nonce="${nonce}">document.title = "nonced";</script>` +
     '<script>document.title = "inline";</script></head><body></body></html>';
   const headers = { "content-security-policy": policy };
   await page.route(DOCUMENT, (route) => route.fulfill({ status: 200, contentType: "text/html", headers, body: html }));
 
-  // Bounded by Playwright's own default limit for a wait and the test's limit, never by a timer of the test's.
+  // Bounded by the configured action limit (`use.actionTimeout`) and the test's limit, never by a timer of the test's.
   const reported = page.waitForRequest(
     (request) => request.method() === "POST" && new URL(request.url()).pathname === CSP_REPORT_PATH,
   );

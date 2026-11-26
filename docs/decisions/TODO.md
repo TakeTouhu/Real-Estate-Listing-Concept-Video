@@ -2557,8 +2557,10 @@ into on 2026-11-17.
       *Amended in PT-7c3: done. Both page policies report to the
       endpoint (`report-uri` and `report-to csp`, with
       `Reporting-Endpoints` on every page), and its line names the page
-      by route pattern. Chromium sends nothing from a plain-`http` page,
-      so `next dev` reports nothing (`docs/api-changes-pt-7c3.md`).*
+      by route pattern. Over plain `http` Chromium registers no
+      `Reporting-Endpoints`, and a policy naming `report-to` then sends
+      nothing, not even by `report-uri`, so `next dev` pages report
+      nothing (`docs/api-changes-pt-7c3.md`).*
 - [ ] **`style-src` allows `'unsafe-inline'`** for Next.js's own
       fallback pages, which render an inline `<style>` without a nonce;
       tighten when Next.js nonces them.
