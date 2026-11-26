@@ -6,7 +6,7 @@
 -- case, one address PENDING and EXPIRED, the same reference, key or name in two organizations), and the lengths the
 -- CHECKs bound. Every value is fake: example.com addresses, hex built from 5eed35, no real hash or secret. Every key
 -- holds seed35, or 5eed35 for hex, so check.sql finds these rows. The property, media, storyboard, generation and FX
--- tables, Unit reservations and allocations included, follow (PT-8b2).
+-- tables, Unit reservations and allocations included, come in PT-8b2.
 
 INSERT INTO organizations (id, name, slug, status, "mfaRequired", "createdAt", "updatedAt") VALUES
   ('org_seed35_a', 'Seed Org A', 'seed35-a', 'ACTIVE', false, '2026-01-01', '2026-01-01'),
@@ -180,21 +180,28 @@ INSERT INTO rate_limit_counters (policy, subject, "windowStartedAt", count, "loc
   ('a.b', lpad('42', 64, '5eed35'), '2026-01-01', 1, NULL, 0, '2026-01-01 00:01'),
   ('seed35.' || repeat('p', 57), lpad('43', 64, '5eed35'), '2026-01-01', 2147483647, NULL, 0, '2026-01-02');
 
--- PT-8b2: the property, media, storyboard, generation and FX tables. Where a CHECK or partial unique index ties
--- columns together, every combination it allows is seeded and the rest cannot be, so it is not:
+-- PT-8b2: the property, media, storyboard, generation and FX tables. Every enum value, and NULL and a value in every
+-- nullable column, is seeded in a combination the rules below allow; not every cross-combination they allow is. These
+-- rules tie columns together, so what they forbid is not seeded:
 -- * An enum with one value here (DisclosureMode, ManagedOutputContainerFamily) is covered by that value.
 -- * Media and deliverable validations: an invalid reason only on INVALID_MEDIA, the probe facts and container only
---   on VALID, a lease only on RUNNING; a deliverable validation's PENDING needs nextAttemptAt, a media one's may lack
---   it. Compositions: a retry code only on PENDING, a block code only on BLOCKED, the output only on OUTPUT_VERIFIED;
---   crf is 18. Failure resolutions: a kind only on RESOLVED, a recovery attempt only with RECOVERY_ADMITTED.
+--   on VALID, a lease only on RUNNING, nextAttemptAt only on PENDING; a deliverable validation's PENDING needs
+--   nextAttemptAt, a media one's may lack it. Compositions: a retry code only on PENDING, a block code only on
+--   BLOCKED, the output only on OUTPUT_VERIFIED; crf is 18. Failure resolutions: a kind only on RESOLVED, a recovery
+--   attempt only with RECOVERY_ADMITTED.
 -- * Jobs: units follow the duration, high-quality units equal them on HIGH_QUALITY and are 0 on NORMAL. Requests: an
 --   ordinal (1 or 2) only on USER_REGENERATION; a second INITIAL, active regeneration or delivered ordinal for one
 --   scene is refused. Reservations: ALLOCATED exactly when a period is named. Allocations: a block exactly when the
 --   source is ADD_ON_BLOCK, of the block's quality; one BASE per reservation.
 -- * Scene generations: the six orchestration columns are all set or all NULL; a sha256:v2: hash needs the five v2
 --   fields and no requestResolution, another hash none of them; an orchestrated prediction only when ACCEPTED, which
---   needs one; RECONCILIATION_PENDING needs its times, OUTPUT_VERIFIED its receipt; one active attempt and one PRIMARY
---   per request, one active row per project and hash.
+--   needs one; an orchestrated row past QUEUED and CANCELLED_PRE_SUBMISSION needs submissionBoundaryEnteredAt;
+--   RECONCILIATION_PENDING needs its times, OUTPUT_VERIFIED its receipt; one active attempt and one PRIMARY per
+--   request, one active row per project and hash.
+-- Kept on purpose, though no production path writes them: media validations hang off attempts in many states, where
+-- production validates only an OUTPUT_VERIFIED attempt, and one recovery attempt is admitted by two resolutions of
+-- attempts on other requests, where production admits one for a failed PRIMARY on its own request. Covering every
+-- validation status, invalid reason and resolution with consistent rows would take about twelve more attempts.
 -- The job and its current deliverable version, and the scene and its current delivered request, reference each other,
 -- so each pair is inserted by one statement.
 
@@ -253,7 +260,7 @@ INSERT INTO media_assets (id, "organizationId", "propertyId", "storageKey", "ori
     'seed35.jpg', 'READY', 'usr_seed35_creator', '2026-01-01', '2026-01-01'
   FROM generate_series(1, 15) AS n;
 
--- Every status and review status; one duplicate group in two analyses and two organizations.
+-- Every status and review status; one duplicate group in three analyses and two organizations.
 INSERT INTO asset_analyses (id, "organizationId", "assetId", provider, status, "roomType", confidence,
   "qualityScore", "brightnessScore", "blurScore", "duplicateGroup", "detectedObjects", "safetyFlags",
   "suggestedOrder", "failureReason", "reviewedBy", "reviewedAt", "createdAt", "updatedAt", "analysisRevision",
@@ -293,10 +300,13 @@ INSERT INTO video_projects (id, "organizationId", "propertyId", name, status, "d
   ('vp_seed35_b1', 'org_seed35_b', 'prp_seed35_b1', 'Seed Tour', 'STORYBOARD_READY', 60, '16:9', '1080p', NULL,
    NULL, NULL, NULL, true, false, NULL, 'seed35-fingerprint', 'usr_seed35_owner', '2026-01-01', '2026-01-01');
 
--- Position 0 in two projects with no room type, then one scene per room type.
+-- Position 0 in three projects with no room type, one photo in two projects' storyboards, then one scene per room
+-- type.
 INSERT INTO storyboard_scenes (id, "videoProjectId", "propertyId", "assetId", position, "roomType",
   "durationSeconds", "cameraMotion", "compiledPrompt", "sourceAnalysisRevision", "createdAt", "updatedAt") VALUES
   ('sbs_seed35_00', 'vp_seed35_a1', 'prp_seed35_a1', 'ast_seed35_01', 0, NULL, 1, NULL, NULL, 2147483647,
+   '2026-01-01', '2026-01-01'),
+  ('sbs_seed35_a2', 'vp_seed35_a2', 'prp_seed35_a1', 'ast_seed35_01', 0, NULL, 5, 'seed35-pan', 'seed35 prompt', 1,
    '2026-01-01', '2026-01-01'),
   ('sbs_seed35_b1', 'vp_seed35_b1', 'prp_seed35_b1', 'ast_seed35_b1', 0, NULL, 10, 'seed35-pan', 'seed35 prompt', 1,
    '2026-01-01', '2026-01-01');
@@ -353,7 +363,8 @@ INSERT INTO generation_jobs (id, "videoProjectId", "requestedByUserId", "quality
 INSERT INTO generation_deliverable_versions (id, "generationJobId", ordinal, "inputFingerprint", "createdAt",
   "disclosureMode") VALUES ('gdv_seed35_15', 'gj_seed35_10', 1, 'seed35-input-1', '2026-01-01', 'THROUGHOUT');
 
--- Every state and funding; 0 units, high-quality units equal to the total, and a 1 ms billing window.
+-- Every state and funding, each state in step with its job's; 0 units, high-quality units equal to the total, and a
+-- 1 ms billing window.
 INSERT INTO generation_reservations (id, "generationJobId", "billingCycleKey", "billingCycleStartedAt",
   "billingCycleEndsAt", "reservedTotalVideoUnits", "reservedHighQualityUnits", state, "stateVersion", "reservedAt",
   "consumedAt", "releasedAt", "createdAt", "updatedAt", "entitlementPeriodId", funding) VALUES
@@ -363,12 +374,14 @@ INSERT INTO generation_reservations (id, "generationJobId", "billingCycleKey", "
    '2026-02-02', '2026-02-02', 'per_seed35_a2', 'ALLOCATED'),
   ('res_seed35_04', 'gj_seed35_04', 'x', '2026-02-01', '2026-02-01 00:00:00.001', 2, 0, 'RECONCILIATION_HOLD',
    2147483647, '2026-02-02', NULL, NULL, '2026-02-02', '2026-02-02', 'per_seed35_a2', 'ALLOCATED'),
-  ('res_seed35_05', 'gj_seed35_05', 'seed35-2026-01', '2026-01-01', '2026-02-01', 3, 3, 'CONSUMED', 2, '2026-01-01',
-   '2026-01-02', NULL, '2026-01-01', '2026-01-02', NULL, 'UNALLOCATED_LEGACY'),
-  ('res_seed35_06', 'gj_seed35_06', 'x', '2026-02-01', '2026-03-01', 3, 0, 'RELEASED', 2, '2026-02-02', NULL,
-   '2026-02-03', '2026-02-02', '2026-02-03', 'per_seed35_a2', 'ALLOCATED'),
+  ('res_seed35_05', 'gj_seed35_05', 'seed35-2026-01', '2026-01-01', '2026-02-01', 3, 3, 'RESERVED', 1, '2026-01-01',
+   NULL, NULL, '2026-01-01', '2026-01-01', NULL, 'UNALLOCATED_LEGACY'),
+  ('res_seed35_06', 'gj_seed35_06', 'x', '2026-02-01', '2026-03-01', 3, 0, 'RESERVED', 1, '2026-02-02', NULL, NULL,
+   '2026-02-02', '2026-02-02', 'per_seed35_a2', 'ALLOCATED'),
   ('res_seed35_09', 'gj_seed35_09', 'x', '2026-02-01', '2026-03-01', 1, 1, 'CONSUMED', 2, '2026-02-02', '2026-02-03',
    NULL, '2026-02-02', '2026-02-03', 'per_seed35_a2', 'ALLOCATED'),
+  ('res_seed35_11', 'gj_seed35_11', 'seed35-2026-01', '2026-01-01', '2026-02-01', 1, 0, 'RELEASED', 2, '2026-01-01',
+   NULL, '2026-01-02', '2026-01-01', '2026-01-02', NULL, 'UNALLOCATED_LEGACY'),
   ('res_seed35_12', 'gj_seed35_12', 'seed35-2026-01', '2026-01-01', '2026-02-01', 1, 0, 'RELEASED', 2, '2026-01-02',
    NULL, '2026-01-03', '2026-01-02', '2026-01-03', 'per_seed35_b1', 'ALLOCATED');
 
@@ -436,6 +449,7 @@ INSERT INTO scene_generation_requests (id, "generationSceneId", kind, "userRegen
 
 -- Orchestrated attempts, sg_seed35_01 to 13: every attempt state, kind and submission certainty, each column the
 -- CHECKs make conditional derived from them; every resolution normalization. The inactive ones share sg_03's hash.
+-- Each takes its request's storyboard scene, photo and analysis revision.
 INSERT INTO scene_generations (id, "videoProjectId", "sourceStoryboardSceneId", "assetId", "sourceAnalysisRevision",
   "requestHash", "providerName", "providerModelId", state, "providerPredictionId", "submittedAt", "lastPolledAt",
   "normalizedErrorCode", "normalizedErrorMessage", "outputStorageKey", "createdAt", "updatedAt",
@@ -445,7 +459,12 @@ INSERT INTO scene_generations (id, "videoProjectId", "sourceStoryboardSceneId", 
   "generationSceneRequestId", "orchestrationState", "pricingContractKey", "providerAcceptedAt",
   "reconciliationDeadlineAt", "reconciliationResolvedAt", "reconciliationStartedAt", "stateVersion",
   "submissionBoundaryEnteredAt", "submissionCertainty", "outputSha256", "outputSizeBytes", "outputVerifiedAt")
-  SELECT 'sg_seed35_' || a.n, a.project, 'sbs_seed35_00', 'ast_seed35_01', 1,
+  SELECT 'sg_seed35_' || a.n, a.project,
+    CASE WHEN a.project = 'vp_seed35_b1' THEN 'sbs_seed35_b1' WHEN a.request IN ('sgr_seed35_06', 'sgr_seed35_07')
+      THEN 'sbs_seed35_01' ELSE 'sbs_seed35_00' END,
+    CASE WHEN a.project = 'vp_seed35_b1' THEN 'ast_seed35_b1' WHEN a.request IN ('sgr_seed35_06', 'sgr_seed35_07')
+      THEN 'ast_seed35_r01' ELSE 'ast_seed35_01' END,
+    CASE WHEN a.request IN ('sgr_seed35_06', 'sgr_seed35_07') THEN 2147483647 ELSE 1 END,
     'sha256:v2:' || lpad(a.hash, 64, '5eed35'),
     'seed35-provider', 'seed35-model', a.state::"SceneGenerationState",
     CASE WHEN a.certainty = 'ACCEPTED' THEN 'seed35-prediction-' || a.n END,
@@ -499,7 +518,7 @@ INSERT INTO scene_generations (id, "videoProjectId", "sourceStoryboardSceneId", 
   "normalizedErrorCode", "normalizedErrorMessage", "outputStorageKey", "createdAt", "updatedAt",
   "requestCompiledPrompt", "requestDurationSeconds", "requestCameraMotion", "requestAspectRatio", "requestResolution",
   "requestRenderedPrompt", "stateVersion", "outputSha256", "outputSizeBytes", "outputVerifiedAt")
-  SELECT 'sg_seed35_l' || l.n, 'vp_seed35_a2', 'sbs_seed35_00', 'ast_seed35_01', 1, 'sha256:' || lpad(l.hash, 64,
+  SELECT 'sg_seed35_l' || l.n, 'vp_seed35_a2', 'sbs_seed35_a2', 'ast_seed35_01', 1, 'sha256:' || lpad(l.hash, 64,
     '5eed35'), 'seed35-provider', 'seed35-model', l.state::"SceneGenerationState",
     CASE WHEN l.state NOT IN ('QUEUED', 'SUBMITTING') THEN 'seed35-prediction-l' || l.n END,
     CASE WHEN l.state <> 'QUEUED' THEN timestamp '2026-01-01 00:01' END,
@@ -516,6 +535,16 @@ INSERT INTO scene_generations (id, "videoProjectId", "sourceStoryboardSceneId", 
   FROM (VALUES (1, 'QUEUED', '91'), (2, 'SUBMITTING', '92'), (3, 'PROCESSING', '93'), (4, 'SUCCEEDED', '91'),
     (5, 'FAILED_RETRYABLE', '95'), (6, 'FAILED_TERMINAL', '91'), (7, 'SUBMISSION_UNKNOWN', '97'),
     (8, 'CANCELLED', '91')) AS l (n, state, hash);
+
+-- What current code writes before orchestration: a sha256:v2: hash with its five fields, no orchestration column.
+INSERT INTO scene_generations (id, "videoProjectId", "sourceStoryboardSceneId", "assetId", "sourceAnalysisRevision",
+  "requestHash", "providerName", "providerModelId", state, "createdAt", "updatedAt", "requestCompiledPrompt",
+  "requestDurationSeconds", "requestCameraMotion", "requestAspectRatio", "requestRenderedPrompt", "requestModelKey",
+  "requestTargetOutputResolution", "requestNativeGenerationResolution", "requestResolutionNormalization",
+  "requestNativeMeetsTarget", "stateVersion") VALUES
+  ('sg_seed35_l9', 'vp_seed35_a2', 'sbs_seed35_a2', 'ast_seed35_01', 1, 'sha256:v2:' || lpad('99', 64, '5eed35'),
+   'seed35-provider', 'seed35-model', 'QUEUED', '2026-01-01', '2026-01-01', 'seed35 prompt', 5, 'seed35-pan', '9:16',
+   'seed35 rendered', 'seed35-model-key', '1080p', '1080p', 'NONE', true, 0);
 
 -- One currency pair and instant twice, at the rate bounds.
 INSERT INTO fx_rate_snapshots (id, "baseCurrency", "quoteCurrency", "rateNumerator", "rateDenominator",
@@ -601,7 +630,7 @@ INSERT INTO generation_deliverable_inputs (id, "deliverableVersionId", position,
   ('gdi_seed35_4', 'gdv_seed35_02', 2147483647, 'gs_seed35_02', 'sgr_seed35_06', 'sg_seed35_08', 'mov_seed35_03',
    lpad('08', 64, '5eed35'), 1048576, '2026-01-03');
 
--- Every status, retry code and block code; the raster and output bounds.
+-- Every status, retry code and block code; the raster, counter and output bounds; one output SHA-256 twice.
 INSERT INTO generation_deliverable_compositions (id, "deliverableVersionId", status, "profileKey", "targetWidthPx",
   "targetHeightPx", "frameRateNumerator", "frameRateDenominator", "videoCodec", "pixelFormat", "fitMode",
   "transitionMode", "audioMode", "encoderPreset", crf, "leaseToken", "leaseExpiresAt", "nextAttemptAt",
@@ -611,11 +640,13 @@ INSERT INTO generation_deliverable_compositions (id, "deliverableVersionId", sta
     c.w, c.h, c.fn, c.fd, 'h264', 'yuv420p', 'contain', 'cut', 'silent', 'medium', 18,
     CASE WHEN c.status = 'RUNNING' THEN 'seed35-lease' END,
     CASE WHEN c.status = 'RUNNING' THEN timestamp '2026-01-01 00:05' END,
-    CASE WHEN c.status = 'PENDING' THEN timestamp '2026-01-02' END, c.fn % 7, c.fd % 7,
+    CASE WHEN c.status = 'PENDING' THEN timestamp '2026-01-02' END,
+    CASE c.n WHEN '02' THEN 2147483647 WHEN '03' THEN 0 ELSE c.fn % 7 END,
+    CASE c.n WHEN '02' THEN 2147483647 WHEN '03' THEN 0 ELSE c.fd % 7 END,
     c.retry::"DeliverableCompositionRetryCode", c.block::"DeliverableCompositionBlockCode",
     CASE WHEN c.status = 'BLOCKED' THEN timestamp '2026-01-02' END,
     CASE WHEN c.size IS NOT NULL THEN 'seed35/a/deliverables/' || c.n || '.mp4' END,
-    CASE WHEN c.size IS NOT NULL THEN lpad('7' || c.n, 64, '5eed35') END, c.size,
+    CASE WHEN c.size IS NOT NULL THEN lpad('701', 64, '5eed35') END, c.size,
     CASE WHEN c.size IS NOT NULL THEN timestamp '2026-01-02' END, '2026-01-01', '2026-01-01'
   FROM (VALUES
     ('01', 'OUTPUT_VERIFIED', NULL, NULL, 1920, 1080, 30, 1, 1::bigint),
@@ -633,15 +664,18 @@ INSERT INTO generation_deliverable_compositions (id, "deliverableVersionId", sta
     ('13', 'BLOCKED', NULL, 'CLEAN_MASTER_UNUSABLE', 1280, 720, 30, 1, NULL)
   ) AS c (n, status, retry, block, w, h, fn, fd, size);
 
--- Every status and invalid reason; the receipt and fact bounds.
+-- Every status and invalid reason; the receipt, counter and fact bounds; one receipt SHA-256 twice, the output's.
 INSERT INTO generation_deliverable_validations (id, "deliverableVersionId", status, "receiptSha256",
   "receiptSizeBytes", "leaseToken", "leaseExpiresAt", "nextAttemptAt", "attemptCount", version, "invalidReason",
   container, "durationMs", "videoWidth", "videoHeight", "videoStreamCount", "audioStreamCount", "validatedAt",
   "createdAt", "updatedAt")
   SELECT 'gdx_seed35_' || v.n, 'gdv_seed35_' || v.n, v.status::"DeliverableValidationStatus",
-    lpad('7' || v.n, 64, '5eed35'), coalesce(v.fact, 10), CASE WHEN v.status = 'RUNNING' THEN 'seed35-lease' END,
+    lpad('7' || CASE v.n WHEN '02' THEN '01' ELSE v.n END, 64, '5eed35'), coalesce(v.fact, 10),
+    CASE WHEN v.status = 'RUNNING' THEN 'seed35-lease' END,
     CASE WHEN v.status = 'RUNNING' THEN timestamp '2026-01-01 00:05' END,
-    CASE WHEN v.status = 'PENDING' THEN timestamp '2026-01-02' END, 1, 2,
+    CASE WHEN v.status = 'PENDING' THEN timestamp '2026-01-02' END,
+    CASE v.n WHEN '02' THEN 2147483647 WHEN '03' THEN 0 ELSE 1 END,
+    CASE v.n WHEN '02' THEN 2147483647 WHEN '03' THEN 0 ELSE 2 END,
     v.reason::"ManagedOutputMediaInvalidReason",
     (CASE WHEN v.fact IS NOT NULL THEN 'ISO_BMFF' END)::"ManagedOutputContainerFamily",
     v.fact, v.fact, v.fact, v.fact, v.fact - 1,
@@ -660,7 +694,7 @@ INSERT INTO generation_deliverable_clean_masters (id, "deliverableVersionId", "s
   ('gcm_seed35_02', 'gdv_seed35_02', 'org/org_seed35_a/internal/clean-masters/gdv_seed35_02', lpad('81', 64, '5eed35'),
    9007199254740991, '2026-01-03', '2026-01-03');
 
--- Every aggregate and actor type; one aggregate and sequence under two types and in two organizations.
+-- Every aggregate and actor type; one aggregate and sequence under two types; an event in a second organization.
 INSERT INTO generation_transition_events (id, "organizationId", "aggregateType", "aggregateId", sequence,
   "fromState", "toState", "eventType", "actorType", "actorUserId", "reasonCode", "correlationId", "causationId",
   "safeMetadata", "createdAt") VALUES
@@ -677,5 +711,7 @@ INSERT INTO generation_transition_events (id, "organizationId", "aggregateType",
    '2026-01-02'),
   ('gte_seed35_6', 'org_seed35_a', 'DELIVERABLE', 'gdv_seed35_01', 1, NULL, 'PENDING', 'seed35.created', 'SYSTEM',
    NULL, NULL, 'seed35-correlation', NULL, '{}', '2026-01-02'),
-  ('gte_seed35_7', 'org_seed35_b', 'RESERVATION', 'gj_seed35_09', 1, NULL, 'RESERVING', 'seed35.created', 'USER',
+  ('gte_seed35_7', 'org_seed35_a', 'RESERVATION', 'gj_seed35_09', 1, NULL, 'RESERVING', 'seed35.created', 'USER',
+   'usr_seed35_owner', NULL, 'seed35-correlation', NULL, '{}', '2026-01-01'),
+  ('gte_seed35_8', 'org_seed35_b', 'JOB', 'gj_seed35_12', 1, NULL, 'CREATED', 'seed35.created', 'USER',
    'usr_seed35_owner', NULL, 'seed35-correlation', NULL, '{}', '2026-01-01');

@@ -28,6 +28,19 @@ const inserted = (file: string): string[] =>
   );
 const seeded = (): Set<string> => new Set(seedFiles().flatMap(inserted));
 
+/** What follows a leading `WITH name AS (INSERT INTO …)`, parentheses matched; without one, the statement itself. */
+function afterInsertingWith(statement: string): string {
+  const head = /^WITH\s+\w+\s+AS\s+\(\s*(?=INSERT\s+INTO\s)/i.exec(statement);
+  if (head === null) return statement;
+  let depth = 1;
+  for (let at = head[0].length; at < statement.length; at += 1) {
+    if (statement[at] === "(") depth += 1;
+    if (statement[at] === ")") depth -= 1;
+    if (depth === 0) return statement.slice(at + 1).trimStart();
+  }
+  return statement;
+}
+
 describe("the upgrade seeds", () => {
   it("holds seed files named by level, and check.sql, only", () => {
     const others = readdirSync(SEEDS).filter((file) => !/^\d{14}\.sql$/.test(file) && file !== "check.sql");
@@ -59,8 +72,8 @@ describe("the upgrade seeds", () => {
   it("holds data only: INSERT statements in a seed, one DO block in the check, and no psql command", () => {
     // A psql command (\set, \c, \!, anywhere on a line) or a transaction, session or COPY statement could undo
     // `psql -1 -v ON_ERROR_STOP=1`, reach another database, or run a program with the job's environment. A seed's
-    // statement is an INSERT, or one INSERT in a WITH before it, for two rows that reference each other (PT-8b2);
-    // nothing may update, delete or merge.
+    // statement is an INSERT, or an INSERT after one WITH holding an INSERT, for two rows that reference each other
+    // (PT-8b2); nothing may update, delete or merge.
     const words =
       "DROP|TRUNCATE|ALTER|CREATE|COPY|PROGRAM|COMMIT|ROLLBACK|SAVEPOINT|SET|RESET|GRANT|REVOKE|CALL|" +
       "UPDATE|DELETE|MERGE";
@@ -76,7 +89,7 @@ describe("the upgrade seeds", () => {
       const others = statements(readFileSync(join(SEEDS, file), "utf8"))
         .split(";")
         .map((statement) => statement.trim())
-        .filter((statement) => statement !== "" && !/^(WITH\s+\w+\s+AS\s+\(\s*)?INSERT\s+INTO\s/i.test(statement));
+        .filter((statement) => statement !== "" && !/^INSERT\s+INTO\s/i.test(afterInsertingWith(statement)));
       expect([file, others]).toEqual([file, []]);
     }
     const check = statements(readFileSync(join(SEEDS, "check.sql"), "utf8")).trim();

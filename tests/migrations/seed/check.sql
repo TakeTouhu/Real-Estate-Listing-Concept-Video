@@ -79,7 +79,7 @@ BEGIN
      'id, "organizationId", "propertyId", name, status, "durationSeconds", "aspectRatio", resolution, '
      '"stylePreset", "cameraMotion", prompt, "negativePrompt", "includeMusic", "includeCaptions", '
      '"brandTemplateId", "compositionFingerprint", "createdBy", "createdAt", "updatedAt"'),
-    ('storyboard_scenes', 'id', 17, '879735355a9f85d35b30ffbd2c6dd1cb',
+    ('storyboard_scenes', 'id', 18, '110ab28aa2d48223a22a690ddddb0fe6',
      'id, "videoProjectId", "propertyId", "assetId", "position", "roomType", "durationSeconds", "cameraMotion", '
      '"compiledPrompt", "sourceAnalysisRevision", "createdAt", "updatedAt"'),
     ('generation_jobs', 'id', 12, '7e3badead372d9a645fc615fe0c23bd3',
@@ -88,7 +88,7 @@ BEGIN
      '"currentDeliverableVersionId", "createdAt", "updatedAt", "disclosureMode", "idempotencyKey"'),
     ('generation_deliverable_versions', 'id', 15, '0f22b843a7625004e49979a925adc3af',
      'id, "generationJobId", ordinal, "inputFingerprint", "createdAt", "disclosureMode"'),
-    ('generation_reservations', 'id', 7, '0fe01b162f04fc3f09bbb6dee5b0c905',
+    ('generation_reservations', 'id', 8, 'd554f58ef6685b8b1d0a3bfde041cbb4',
      'id, "generationJobId", "billingCycleKey", "billingCycleStartedAt", "billingCycleEndsAt", '
      '"reservedTotalVideoUnits", "reservedHighQualityUnits", state, "stateVersion", "reservedAt", "consumedAt", '
      '"releasedAt", "createdAt", "updatedAt", "entitlementPeriodId", funding'),
@@ -102,7 +102,7 @@ BEGIN
     ('scene_generation_requests', 'id', 10, '812056ac6bc2cab9493006a9aafb9a24',
      'id, "generationSceneId", kind, "userRegenerationOrdinal", state, "stateVersion", "requestedByUserId", '
      '"createdAt", "deliveredAt", "failedAt"'),
-    ('scene_generations', 'id', 21, '26c2572c2b22b571522b97ce20e21b59',
+    ('scene_generations', 'id', 22, 'afe9f5fc2903db643462b1ba24d65f65',
      'id, "videoProjectId", "sourceStoryboardSceneId", "assetId", "sourceAnalysisRevision", "requestHash", '
      '"providerName", "providerModelId", state, "providerPredictionId", "submittedAt", "lastPolledAt", '
      '"normalizedErrorCode", "normalizedErrorMessage", "outputStorageKey", "createdAt", "updatedAt", '
@@ -132,19 +132,19 @@ BEGIN
     ('generation_deliverable_inputs', 'id', 4, 'ae048436ecd074514f0cc5fe289a9895',
      'id, "deliverableVersionId", "position", "generationSceneId", "sceneGenerationRequestId", '
      '"sceneGenerationAttemptId", "mediaValidationId", "sourceSha256", "sourceSizeBytes", "createdAt"'),
-    ('generation_deliverable_compositions', 'id', 13, '88df11faec8fb9621aa9a5d7d995c1e0',
+    ('generation_deliverable_compositions', 'id', 13, '22b6629e762b70c598c6b4679caa7b5c',
      'id, "deliverableVersionId", status, "profileKey", "targetWidthPx", "targetHeightPx", "frameRateNumerator", '
      '"frameRateDenominator", "videoCodec", "pixelFormat", "fitMode", "transitionMode", "audioMode", '
      '"encoderPreset", crf, "leaseToken", "leaseExpiresAt", "nextAttemptAt", "attemptCount", version, '
      '"lastRetryCode", "blockCode", "blockedAt", "outputStorageKey", "outputSha256", "outputSizeBytes", '
      '"outputVerifiedAt", "createdAt", "updatedAt"'),
-    ('generation_deliverable_validations', 'id', 10, 'dc1e0a796cbd98004f3fbaaccb3cdc5c',
+    ('generation_deliverable_validations', 'id', 10, '5a42d9406c482b1a6ea360f4b95c7909',
      'id, "deliverableVersionId", status, "receiptSha256", "receiptSizeBytes", "leaseToken", "leaseExpiresAt", '
      '"nextAttemptAt", "attemptCount", version, "invalidReason", container, "durationMs", "videoWidth", '
      '"videoHeight", "videoStreamCount", "audioStreamCount", "validatedAt", "createdAt", "updatedAt"'),
     ('generation_deliverable_clean_masters', 'id', 2, '776e39502dc04091f11c6359b8dd2cca',
      'id, "deliverableVersionId", "storageKey", sha256, "sizeBytes", "verifiedAt", "createdAt"'),
-    ('generation_transition_events', 'id', 7, 'dc34f649f1a0b4ea7dcfea04195dd178',
+    ('generation_transition_events', 'id', 8, 'c9031b5dec2650f6a7593ed816744278',
      'id, "organizationId", "aggregateType", "aggregateId", sequence, "fromState", "toState", "eventType", '
      '"actorType", "actorUserId", "reasonCode", "correlationId", "causationId", "safeMetadata", "createdAt"')
   ) AS seeded (tbl, key, expected_rows, expected_digest, cols)

@@ -1775,7 +1775,7 @@ column without a default and a unique index over shared values each
 fail it, and pass on the fresh apply. Still 8 checks.
 
 **PT-8b2 — The seed covers every table** (no ADR: ADR-0191 Decision
-4's "Built in PT-8b"; no migration). The seed at migration 35 gains 211
+4's "Built in PT-8b"; no migration). The seed at migration 35 gains 215
 rows in the 21 tables PT-8b1 left: properties, media and analyses,
 projects and storyboards, jobs, reservations and their allocations,
 scenes, requests and attempts, pricing and FX snapshots, media and
@@ -1783,12 +1783,13 @@ deliverable validations, failure resolutions, deliverable versions,
 inputs, compositions and Clean Masters, and transition events
 (`docs/api-changes-pt-8b2.md`). Measured with a catalog query: every
 value of their 38 enum columns, `NULL` and a value in each of their 127
-nullable columns; combinations a CHECK forbids are named in the seed's
-header instead. `check.sql` checks them, and the coverage test now
-requires every table to be seeded. Rehearsed by hand: a `NOT NULL`
-column on `scene_generations`, a tightened job-state CHECK, an `UPDATE`
-on reservations and a unique index on deliverable inputs each fail it;
-a plain index passes. Still 8 checks.
+nullable columns, not every combination the CHECKs allow; the seed's
+header names the rules that tie columns together. `check.sql` checks
+them, and the coverage test now requires every table to be seeded.
+Rehearsed by hand: a `NOT NULL` column on `scene_generations`, a
+tightened job-state CHECK, an `UPDATE` on reservations, a unique index
+on deliverable inputs and a composition counter CHECK each fail it; a
+plain index passes. Still 8 checks.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —

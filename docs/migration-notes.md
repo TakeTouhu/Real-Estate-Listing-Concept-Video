@@ -3877,7 +3877,7 @@ file, the Roadmap, `local-setup.md`, the part 2 gap analysis and
 
 **No migration** (ADR-0191 Decision 4); nothing deployed or pushed; no
 setting, image, route, CI step or dependency changes; still 8 checks.
-`tests/migrations/seed/00000000000035.sql` gains 211 rows in the 21
+`tests/migrations/seed/00000000000035.sql` gains 215 rows in the 21
 tables PT-8b1 left, the property, media, storyboard, generation, FX,
 Unit reservation and allocation tables; `seed/check.sql` checks them;
 the PT-8b2 list leaves `seed-coverage.test.ts`, which now requires
