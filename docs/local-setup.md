@@ -492,9 +492,12 @@ A production build's page policy ends with `upgrade-insecure-requests`
 (ADR-0190), so a browser asks the page's own files over `https`.
 Measured with Chromium 153 on `next start` over plain `http`:
 `http://localhost` and `http://127.0.0.1` are not upgraded and the page
-works, but any other name (a LAN address, a hosts-file name) loses its
-scripts and styles and does not hydrate. Other browsers were not
-measured. To work on the app in a browser, use `next dev`
+works, but a non-loopback host name (`app.pt7c4.test`, mapped to the
+same server) lost its scripts and styles and did not hydrate. A LAN
+address or another hosts-file name is expected to behave the same
+*(inference: Chromium exempts only potentially trustworthy hosts;
+`*.localhost` names may not)*. Other browsers were not measured. To
+work on the app in a browser, use `next dev`
 (`pnpm dev`), whose policy has no such directive.
 
 CI's `production-mode` job (ADR-0178) runs the image against stand-ins;

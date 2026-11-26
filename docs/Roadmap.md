@@ -1737,7 +1737,8 @@ ends with `upgrade-insecure-requests`; `next dev`'s and the API policy
 are unchanged (`docs/api-changes-pt-7c4.md`). Measured in Chromium 153
 on a production build: through a TLS front `/login` and the 404
 hydrate with no refusal; over plain `http` a loopback address is not
-upgraded, and any other name loses its own files. HSTS stays
+upgraded, and the one non-loopback name tried (`app.pt7c4.test`) lost
+its own files; other names are expected to *(inference)*. HSTS stays
 `max-age=31536000`; a test holds its grammar (at least a year,
 `includeSubDomains`, `preload` only beside it, `max-age=0` refused).
 ADR-0190 writes the rule for PT-7c5, which waits on the product

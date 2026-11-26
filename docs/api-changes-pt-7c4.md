@@ -31,8 +31,9 @@ still absent from the page policies.
 
 ## What a browser does with it
 
-It asks an `http://` address a page names over `https`. Today no page
-names one, so nothing a customer sees changes. Measured with Chromium
+It asks the `http://` subresources and form targets a page names, and
+links to its own host, over `https` (ADR-0190 Decision 1). Today no
+page names one, so nothing a customer sees changes. Measured with Chromium
 153 on a production build (ADR-0190):
 
 | Opened as | Static files | Hydrated |
@@ -41,9 +42,11 @@ names one, so nothing a customer sees changes. Measured with Chromium
 | `http://localhost:3456`, `http://127.0.0.1:3456` | 5 over `http`, not upgraded | yes |
 | `http://app.pt7c4.test:3456` (same server) | 5 upgraded to `https`, all failed | no |
 
-So a production build served over plain `http` breaks in a browser on
-any name but a loopback one. `docs/local-setup.md` says to use
-`next dev` locally.
+So a production build served over plain `http` broke in Chromium on
+the one non-loopback name measured. A LAN address or another hosts-file
+name is expected to break the same way *(inference: Chromium exempts
+only potentially trustworthy hosts; `*.localhost` names may not
+break)*. `docs/local-setup.md` says to use `next dev` locally.
 
 ## HSTS
 

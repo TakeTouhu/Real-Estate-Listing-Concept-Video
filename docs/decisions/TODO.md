@@ -2121,8 +2121,10 @@ into on 2026-11-17.
       *Done in PT-7c4 (ADR-0190 Decision 1): yes, in the production
       policy only; `next dev`'s is unchanged. Chromium 153 was measured
       not to upgrade `http://localhost` or `http://127.0.0.1`; a
-      production build opened over plain `http` on any other name loses
-      its own files (`docs/local-setup.md`).*
+      production build opened over plain `http` on the one other name
+      measured, `app.pt7c4.test`, lost its own files, and other
+      non-loopback names are expected to by inference
+      (`docs/local-setup.md`).*
 
 ## Open in RD-11b — what the browser through the front leaves open
 

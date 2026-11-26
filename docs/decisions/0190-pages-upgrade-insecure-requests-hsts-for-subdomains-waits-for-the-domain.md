@@ -41,7 +41,8 @@ measured for links)*.
 - It is defence in depth: for a future absolute `http://` reference,
   and for a first visit before the browser holds HSTS.
 - `next dev`'s policy is unchanged. It serves plain `http`, where the
-  upgrade would break its own files on any name but a loopback one.
+  upgrade would break its own files on a non-loopback name (one name
+  measured, below; the rest by inference).
 - Nothing supported runs a production build over plain `http` in a
   browser: the `production-mode` job goes through the TLS front
   (ADR-0178 Decision 6), the `web-image` probe uses Node.js `fetch`,
@@ -52,7 +53,10 @@ measured for links)*.
   hydrated, so Chromium does not upgrade a loopback address. Over
   `http://app.pt7c4.test`, mapped to the same server, all 5 were asked
   over `https`, each failed (`ERR_CONNECTION_RESET`) and the page did
-  not hydrate. `docs/local-setup.md` says so.
+  not hydrate. No LAN address or other name was tried; they are
+  expected to behave the same *(inference: Chromium exempts only
+  potentially trustworthy hosts; `*.localhost` names may not)*.
+  `docs/local-setup.md` says so.
 
 ## Decision 2 — HSTS's grammar is pinned
 
@@ -110,10 +114,11 @@ stays as it is, and only the grammar it may move within is written.
 The plan the product owner approved on 2026-11-26 lists PT-7c as
 depending on T0 only, "each a CTO call". HSTS `includeSubDomains` and
 `preload` bind the product owner's whole domain, so that part moved to
-the product owner, after T2, as PT-7c5. The CTO's decision of the same
-day carries it to the product owner; the part 2 gap analysis records
-it under "Deviations from the approved plan" (since PT-7c1), and
-PT-7c5 joins T2's "Unblocks" in the next owner summary.
+the product owner, after T2, as PT-7c5. It is to be told to the
+product owner with T2, and PT-7c5 joins T2's "Unblocks" the next time
+the owner summary is sent; this PR does not tell them. The part 2 gap
+analysis records it under "Deviations from the approved plan" (since
+PT-7c1).
 
 **PT-7c counts as done only when PT-7c5 is done or explicitly
 dropped.** PT-7c1 to PT-7c4 having merged makes it done in code, not
@@ -142,6 +147,9 @@ The question for the product owner, with T2:
   violation guard. It is the proof that nothing on the pages is
   upgraded into a failure.
 - The `web-image` probe is unchanged.
+- **TODO.md:** the existing open item "HSTS without `includeSubDomains`
+  or `preload`" is amended to name PT-7c5 and stays open; it tracks
+  PT-7c5 in place of the new item the plan's PT-7c4 "Docs" asked for.
 
 ## What was measured
 
@@ -165,7 +173,7 @@ daemon here); CI's job is its first run.
 but HSTS does not cover a first visit, and `'self'` lets through a
 future absolute `http://` address on the app's own host.
 **The directive under `next dev` too:** it would break `next dev` on
-any non-loopback name, for no customer. **Allow `max-age=0` in the
+a non-loopback name (Decision 1), for no customer. **Allow `max-age=0` in the
 grammar** (the critique's first option): the CTO chose that an
 emergency withdrawal edit the test. **`includeSubDomains` now:**
 harmless on a dedicated host, wrong on an apex whose subdomains are
@@ -174,7 +182,9 @@ unknown; the domain is not chosen.
 ## Consequences
 
 - A production build served over plain `http` on a non-loopback name
-  cannot load its own files in a browser. No supported path does that.
+  cannot load its own files in a browser (measured in Chromium on one
+  name; the rest by inference, Decision 1). No supported path does
+  that.
 - A future third-party `http://` resource is upgraded, or fails, rather
   than loading as mixed content. That is intended.
 - PT-7c5 waits on T2. Its row stays open in the completion report.

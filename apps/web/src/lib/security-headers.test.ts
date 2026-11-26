@@ -76,7 +76,7 @@ describe("pageContentSecurityPolicy", () => {
       expect(policy.endsWith("; upgrade-insecure-requests")).toBe(true);
       expect(directives(policy).get("upgrade-insecure-requests")).toEqual([]);
     }
-    // `next dev` serves plain http, where the upgrade would break its own files (ADR-0190).
+    // `next dev` serves plain http, where the upgrade would break its own files on a non-loopback name (ADR-0190).
     expect(pageContentSecurityPolicy(NONCE, "development")).not.toContain("upgrade-insecure-requests");
   });
 

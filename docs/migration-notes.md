@@ -3798,9 +3798,11 @@ lines go; `api-changes-pt-7c3.md` and the PT-7c3 lines of the Roadmap,
 **No migration** (ADR-0190); nothing deployed or pushed; no setting,
 dependency or image step changes. The production page policy ends with
 `upgrade-insecure-requests`. A production build served over plain
-`http` and opened in a browser on any name but a loopback one now
-loses its own scripts and styles, which are asked over `https`
-(measured in Chromium 153); no supported path does that, and
+`http` and opened in a browser on a non-loopback name now loses its
+own scripts and styles, which are asked over `https` (measured in
+Chromium 153 on one name, `app.pt7c4.test`; a LAN address or another
+hosts-file name by inference, and `*.localhost` names may not); no
+supported path does that, and
 `next dev` is unchanged. HSTS is unchanged. **Rolling back** is a
 revert: the directive and its test go, the production literals in
 `security-headers.test.ts` and the `production-mode` spec lose it, and

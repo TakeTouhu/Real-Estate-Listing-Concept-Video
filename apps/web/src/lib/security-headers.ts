@@ -12,9 +12,10 @@
  *
  * `next dev` (`NODE_ENV=development`) also needs `eval` and its Fast Refresh
  * socket; every other `NODE_ENV` gets the production policy, which alone ends
- * with `upgrade-insecure-requests`: a browser asks any `http://` address a page
- * names over `https` instead (ADR-0190). `next dev` serves plain `http`, where
- * that would break its own files. The `/api` policy is the configuration's
+ * with `upgrade-insecure-requests`: a browser asks the `http://` subresources and
+ * form targets a page names, and links to its own host, over `https` instead
+ * (ADR-0190). `next dev` serves plain `http`, where that would break its own
+ * files on any name but a loopback one. The `/api` policy is the configuration's
  * (`fixed-headers.mjs`), never this one, and reports to nothing: an unknown
  * `/api` address answers Next.js's HTML 404 under `default-src 'none'; sandbox`,
  * so a report directive there would report every such visit, from an opaque
