@@ -2174,9 +2174,11 @@ into on 2026-11-17.
 - [ ] **Decide on `high`.** The first run is recorded in ADR-0180
       ("What was measured"). Moving the gate to `high` is a later
       reviewed PR, once `postcss` 8.4.31, which `next` pins, is
-      settled; it would also fail on npm's own dependencies in both
-      images (`brace-expansion`, `pacote`, `sigstore` and others), so
-      the move first removes npm from the images or accepts them.
+      settled. It would also fail on what appear to be npm's own
+      dependencies in both images (`brace-expansion`, `pacote`,
+      `sigstore` and others; *inference* from the names). Removing npm
+      from the images or accepting those findings are options, not
+      decided.
 - [ ] **Critical findings Debian will not fix.** The worker image holds
       29 critical rows the gate does not count, since none has a fix:
       three CVEs on each of FFmpeg's nine packages, one on `libtiff6`

@@ -176,8 +176,9 @@ for the product owner and the CTO (`TODO.md`, "Open in PT-6b").
 
 ## What was measured
 
-The first CI run, on 2026-11-26 (run 45768707896, head `5117e63`),
-with the database of schema v6.1.10 built 2026-11-25 at 06:22Z:
+The first CI run, on 2026-11-26 (run 45768707896, head `5117e63`,
+built and scanned as the merge ref `2557b5a`), with the database of
+schema v6.1.10 built 2026-11-25 at 06:22Z:
 
 | | `web-image` | `worker-image` |
 | --- | --- | --- |
@@ -192,8 +193,9 @@ with the database of schema v6.1.10 built 2026-11-25 at 06:22Z:
 
 - The gate passed in both jobs, with no fixable critical finding;
   nothing was suppressed (`ignore: []`).
-- Every run worked under `--user` and `--read-only` with only `/work`
-  writable. Debian rows carry CVE ids, npm rows GHSA ids.
+- Every run worked under `--user` and `--read-only`, with only `/work`
+  writable, and Syft's `/sbom` output folder as well. Debian rows carry
+  CVE ids, npm rows GHSA ids.
 - The fixable rows of both images: `brace-expansion`, `glob`,
   `ip-address`, `minimatch`, `pacote`, `picomatch`,
   `postcss-selector-parser`, `sigstore` and `@sigstore/core`, which
@@ -209,8 +211,9 @@ with the database of schema v6.1.10 built 2026-11-25 at 06:22Z:
   each of FFmpeg's nine packages (27 rows), CVE-2026-52490 on `libtiff6`
   and CVE-2026-6653 on `libxml2`.
 - After the SBOM step the runner's disk was 42% used in `web-image` and
-  40% in `worker-image`, with 84 GB and 87 GB free. The database step
-  is the slow one, well inside its 8 minutes.
+  40% in `worker-image`, with 84 GB and 87 GB free. The database step,
+  which includes pulling Grype's image, is the slow one, well inside
+  its 8 minutes.
 
 Confirmed from the source at the pinned tags (Syft v1.57.2, Grype
 v0.122.1): `cyclonedx-json@1.6` is accepted; `--show-suppressed`
@@ -249,8 +252,8 @@ database's size.
 
 ## Consequences
 
-- Each image job takes about 70 to 80 seconds longer, most of it the
-  database download (first run).
+- Each image job takes 68 to 81 seconds longer, most of it the
+  database step (first run).
 - CI can turn red with no code change: database drift, a database
   older than 120 hours, a Debian security fix on the frozen base, a
   Node.js or npm release.
