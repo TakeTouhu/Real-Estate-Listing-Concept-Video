@@ -38,7 +38,7 @@ recovery budget, defect records, operator recovery and cost inputs.
 | Migrations in production | no image or job | |
 | Logs | `level`, not Cloud Logging's `severity` | `packages/observability/src/logger.ts:37-42` |
 | CI | two runs per commit; `database` and `e2e` on a floating `postgres:16` (*one run per commit, one pinned PostgreSQL since PT-6a, ADR-0179*) | `.github/workflows/ci.yml` |
-| Dependencies | no image scanner; `sharp`, `postcss` and `zod` advisories (*`sharp` and `postcss`'s `nanoid` and `source-map-js` fixed since PT-6c*) | `TODO.md` |
+| Dependencies | no image scanner; `sharp`, `postcss` and `zod` advisories (*`sharp` and `postcss`'s `nanoid` and `source-map-js` fixed since PT-6c; each image scanned with pinned Syft and Grype, failing on a fixable critical finding, since PT-6b, ADR-0180*) | `TODO.md` |
 | Worker runtime | exits 2 in production; development pipeline only | `apps/worker` |
 | Bounds, moderation, recovery budget | none; a Unit can be held forever | |
 

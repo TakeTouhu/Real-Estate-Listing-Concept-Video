@@ -1,0 +1,3 @@
+# Findings accepted by review (ADR-0180 Decision 6): each by its id, package and version, with its TODO.md item.
+# An npm package not in the lockfile, the base image's own npm or corepack, also names its location there.
+ignore: []

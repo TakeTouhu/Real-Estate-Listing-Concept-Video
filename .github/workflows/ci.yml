@@ -332,13 +332,16 @@ jobs:
     # It must refuse a production start without settings and with NEXT_PHASE
     # naming the build, and serve with stand-in settings that point nowhere.
     # Nothing is pushed: no registry, login, secret or cache. The base image is
-    # pinned by digest; readiness against live services is RD-11's.
+    # pinned by digest; readiness against live services is RD-11's. The very
+    # image is then scanned with pinned Syft and Grype (ADR-0180).
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
     env:
       REVISION: ${{ github.sha }}
+      SYFT_PIN: ghcr.io/anchore/syft:v1.57.2@sha256:e97e20b6e6d1699c60296b66ab337941724f9bd06ac279d893eda89601fc4b2a
+      GRYPE_PIN: ghcr.io/anchore/grype:v0.122.1@sha256:661583704a253c0448ed63998b5ea2cd9d5a76ee71eedc4aed439b8ce3e93a1c
     steps:
       - uses: actions/checkout@v4
         with:
@@ -519,6 +522,67 @@ jobs:
           docker run --rm --network none --read-only --entrypoint node vtavision-web:ci --version
           docker image inspect -f '{{.Size}} bytes' vtavision-web:ci
 
+      - name: Write the image's SBOM
+        # Syft holds no vulnerability database: it reads the very image this job tested, with no network.
+        timeout-minutes: 5
+        run: |
+          dir="$RUNNER_TEMP/scan"
+          mkdir -p "$dir/image" "$dir/sbom" "$dir/syft" "$dir/grype"
+          docker image save -o "$dir/image/image.tar" vtavision-web:ci
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e SYFT_CHECK_FOR_APP_UPDATE=false -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+            -v "$dir/image:/image:ro" -v "$dir/sbom:/sbom" -v "$dir/syft:/work" \
+            "$SYFT_PIN" docker-archive:/image/image.tar \
+            -o syft-json=/sbom/image.syft.json -o cyclonedx-json@1.6=/sbom/image.cdx.json
+          rm "$dir/image/image.tar"
+          jq -e '.specVersion == "1.6"' "$dir/sbom/image.cdx.json"
+          jq -r '"\(.artifacts | length) packages"' "$dir/sbom/image.syft.json"
+          sha256sum "$dir/sbom/image.cdx.json"
+          df -h "$RUNNER_TEMP"
+
+      - name: Fetch the vulnerability database
+        # The one scanner run with a network: Grype's database, into Grype's own folder alone.
+        # Longer than Grype's own 300-second download limit, so a slow download fails with Grype's error.
+        timeout-minutes: 8
+        run: |
+          dir="$RUNNER_TEMP/scan"
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e GRYPE_CHECK_FOR_APP_UPDATE=false \
+            -e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+            -v "$dir/grype:/work" "$GRYPE_PIN" db update
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_AUTO_UPDATE=false \
+            -e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+            -v "$dir/grype:/work" "$GRYPE_PIN" db status
+
+      - name: Scan the SBOM
+        # Every match is listed; a fixable critical one fails with Grype's code 2, any other code is Grype's own.
+        timeout-minutes: 3
+        run: |
+          dir="$RUNNER_TEMP/scan"
+          grype() {
+            docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --user "$(id -u):$(id -g)" -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_AUTO_UPDATE=false \
+              -e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+              -v "$dir/grype:/work" -v "$dir/sbom:/sbom:ro" \
+              -v "$GITHUB_WORKSPACE/.github/scan/grype.yaml:/cfg/grype.yaml:ro" \
+              "$GRYPE_PIN" sbom:/sbom/image.syft.json -c /cfg/grype.yaml "$@"
+          }
+          if ! grype --show-suppressed -o table; then
+            echo "Grype itself failed listing every match: not a finding." >&2
+            exit 1
+          fi
+          set +e
+          grype --only-fixed --fail-on critical -o table
+          code=$?
+          set -e
+          if [ "$code" -eq 2 ]; then
+            echo "A fixable critical finding: fix it, or accept it in .github/scan/grype.yaml and TODO.md." >&2
+          elif [ "$code" -ne 0 ]; then
+            echo "Grype itself failed with code $code: not a finding." >&2
+          fi
+          exit "$code"
+
       - name: Stop the server
         if: always()
         # The log holds only stand-ins; printed here too, so a failed probe keeps it.
@@ -531,6 +595,7 @@ jobs:
     # FFmpeg and the six disclosure images, and no worker code. The media
     # suites run on that very FFmpeg stage with no network; the image's check
     # and its default, which refuses, run with no network and a read-only root.
+    # Last, the very image is scanned with pinned Syft and Grype (ADR-0180).
     # Nothing is pushed: no registry, login, secret or cache.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -538,6 +603,8 @@ jobs:
       contents: read
     env:
       REVISION: ${{ github.sha }}
+      SYFT_PIN: ghcr.io/anchore/syft:v1.57.2@sha256:e97e20b6e6d1699c60296b66ab337941724f9bd06ac279d893eda89601fc4b2a
+      GRYPE_PIN: ghcr.io/anchore/grype:v0.122.1@sha256:661583704a253c0448ed63998b5ea2cd9d5a76ee71eedc4aed439b8ce3e93a1c
     steps:
       - uses: actions/checkout@v4
         with:
@@ -621,6 +688,67 @@ jobs:
             -W -f '${Package}\t${Version}\n'
           docker run --rm --network none --read-only --entrypoint node vtavision-worker:ci --version
           docker image inspect -f '{{.Size}} bytes' vtavision-worker:ci
+
+      - name: Write the image's SBOM
+        # Syft holds no vulnerability database: it reads the very image this job tested, with no network.
+        timeout-minutes: 5
+        run: |
+          dir="$RUNNER_TEMP/scan"
+          mkdir -p "$dir/image" "$dir/sbom" "$dir/syft" "$dir/grype"
+          docker image save -o "$dir/image/image.tar" vtavision-worker:ci
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e SYFT_CHECK_FOR_APP_UPDATE=false -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+            -v "$dir/image:/image:ro" -v "$dir/sbom:/sbom" -v "$dir/syft:/work" \
+            "$SYFT_PIN" docker-archive:/image/image.tar \
+            -o syft-json=/sbom/image.syft.json -o cyclonedx-json@1.6=/sbom/image.cdx.json
+          rm "$dir/image/image.tar"
+          jq -e '.specVersion == "1.6"' "$dir/sbom/image.cdx.json"
+          jq -r '"\(.artifacts | length) packages"' "$dir/sbom/image.syft.json"
+          sha256sum "$dir/sbom/image.cdx.json"
+          df -h "$RUNNER_TEMP"
+
+      - name: Fetch the vulnerability database
+        # The one scanner run with a network: Grype's database, into Grype's own folder alone.
+        # Longer than Grype's own 300-second download limit, so a slow download fails with Grype's error.
+        timeout-minutes: 8
+        run: |
+          dir="$RUNNER_TEMP/scan"
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e GRYPE_CHECK_FOR_APP_UPDATE=false \
+            -e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+            -v "$dir/grype:/work" "$GRYPE_PIN" db update
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_AUTO_UPDATE=false \
+            -e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+            -v "$dir/grype:/work" "$GRYPE_PIN" db status
+
+      - name: Scan the SBOM
+        # Every match is listed; a fixable critical one fails with Grype's code 2, any other code is Grype's own.
+        timeout-minutes: 3
+        run: |
+          dir="$RUNNER_TEMP/scan"
+          grype() {
+            docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --user "$(id -u):$(id -g)" -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_AUTO_UPDATE=false \
+              -e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+              -v "$dir/grype:/work" -v "$dir/sbom:/sbom:ro" \
+              -v "$GITHUB_WORKSPACE/.github/scan/grype.yaml:/cfg/grype.yaml:ro" \
+              "$GRYPE_PIN" sbom:/sbom/image.syft.json -c /cfg/grype.yaml "$@"
+          }
+          if ! grype --show-suppressed -o table; then
+            echo "Grype itself failed listing every match: not a finding." >&2
+            exit 1
+          fi
+          set +e
+          grype --only-fixed --fail-on critical -o table
+          code=$?
+          set -e
+          if [ "$code" -eq 2 ]; then
+            echo "A fixable critical finding: fix it, or accept it in .github/scan/grype.yaml and TODO.md." >&2
+          elif [ "$code" -ne 0 ]; then
+            echo "Grype itself failed with code $code: not a finding." >&2
+          fi
+          exit "$code"
 
   production-mode:
     # The web image as built, run against stand-ins (ADR-0178), with Google's

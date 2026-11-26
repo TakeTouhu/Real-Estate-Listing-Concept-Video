@@ -2147,6 +2147,49 @@ into on 2026-11-17.
       block (measured in PT-6c's review); a fixture that carries one is
       open.
 
+## Open in PT-6b — what the image scan leaves open
+
+- [ ] **Verify the scanners' signatures.** The Syft and Grype pins were
+      read from `ghcr.io` on 2026-11-26 by anonymous manifest `HEAD`;
+      their cosign keyless signatures were not verified (no `cosign`
+      here, and the sandbox proxy refuses the blob host and
+      `grype.anchore.io`). A person verifies both on a workstation,
+      against the identity Anchore documents, and records the date in
+      ADR-0180 (Decision 1).
+- [ ] **Keep the SBOM.** The job writes Syft JSON and CycloneDX 1.6 and
+      keeps neither (ADR-0180 Decision 4). Keeping one with each pushed
+      image belongs to part 2, with Artifact Registry.
+- [ ] **Decide who may accept a critical finding.** An entry in
+      `.github/scan/grype.yaml` lets a fixable critical finding pass;
+      who may approve one, and how it is reviewed again, is not decided.
+      A question for the product owner and the CTO (ADR-0180 Decision
+      6).
+- [ ] **A database outage or a stale database turns CI red.** If
+      `grype.anchore.io` is down, or its newest database is older than
+      Grype's 120-hour limit, every image job fails until it recovers or
+      a reviewed ADR changes the policy (ADR-0180 Decision 7). There is
+      no second source.
+- [ ] **No timed run.** A new advisory is first seen at the next push
+      to `main` or pull request; nothing scans `main` between them.
+- [ ] **Decide on `high`.** The first run is recorded in ADR-0180
+      ("What was measured"). Moving the gate to `high` is a later
+      reviewed PR, once `postcss` 8.4.31, which `next` pins, is
+      settled. It would also fail on what appear to be npm's own
+      dependencies in both images (`brace-expansion`, `pacote`,
+      `sigstore` and others; *inference* from the names). Removing npm
+      from the images or accepting those findings are options, not
+      decided.
+- [ ] **Critical findings Debian will not fix.** The worker image holds
+      29 critical rows the gate does not count, since none has a fix:
+      three CVEs on each of FFmpeg's nine packages, one on `libtiff6`
+      and one on `libxml2` (ADR-0180, "What was measured"). Whether
+      they reach code the worker runs, and whether FFmpeg should come
+      from elsewhere, is not assessed.
+- [ ] **Bundled dependencies are invisible to the image scan.** `zod`
+      is bundled into Next.js's server chunks, so only `pnpm audit
+      --prod` sees it; scanning the lockfile is a later milestone, after
+      `zod` 4.
+
 ## Open in the unknown-failure PR — what logging unknown failures leaves open
 
 - [ ] **Errors the app does not catch are printed raw by Next.js.** The
@@ -2201,6 +2244,11 @@ into on 2026-11-17.
       otherwise, is not decided.
       *Amended in RD-10c (ADR-0176): the worker image shares the same
       digest, and the guard test requires one digest for both.*
+      *Amended in PT-6b (ADR-0180 Decision 8): a fixable critical
+      finding in the base layer now fails each image job's scan, and
+      that is the signal to refresh the digest. Still no bot, and no
+      step looks for a newer digest; who refreshes it, and how often
+      otherwise, is still not decided.*
 - [ ] **A deployment must not replace the web image's entrypoint.** It
       strips `NEXT_PHASE` (ADR-0175 Decision 5); a platform command
       that starts `node apps/web/server.js` directly brings back the
@@ -2208,6 +2256,14 @@ into on 2026-11-17.
 - [ ] **Choose an image scanner and an SBOM format with the
       deployment.** CI prints each image's packages and Node.js version
       and runs no scanner (ADR-0175 Decision 8).
+      *Amended in PT-6b (ADR-0180): each image job writes its image's
+      SBOM with Syft, as Syft JSON and as CycloneDX 1.6, and scans it
+      with Grype, failing on a fixable critical finding. Still open:
+      keeping the SBOM with the deployment; who may accept a critical
+      finding (a product owner and CTO question, not decided here); a
+      database outage or a stale database, which turns CI red; no timed
+      run; the move to `high`; and the critical findings Debian will
+      not fix in the worker image ("Open in PT-6b").*
 - [ ] **Act on the production dependencies' advisories.** `pnpm audit
       --prod` on 2026-11-25: 22, three critical in `next` 15.5.22, high
       ones in `sharp` 0.33.5 (fixed from 0.35.5) and `zod` 3.25.76
@@ -2236,6 +2292,11 @@ into on 2026-11-17.
       `onlyBuiltDependencies`, which becomes `allowBuilds`; without it
       pnpm 11, whose `strictDepBuilds` is on by default, refuses the
       install scripts of `esbuild` and Prisma's packages.*
+      *Amended in PT-6b (ADR-0180): the image scan cannot see `zod` or
+      any other dependency bundled into Next.js's server chunks, so
+      `pnpm audit --prod` stays the only check on them. What the scan's
+      first run finds in each image is recorded in ADR-0180's "What was
+      measured" before merge.*
 - [ ] **Decide how migrations run in production.** The web image holds
       no Prisma CLI; RD-11 applies them from the runner. Part 2.
       *Amended in RD-11a (ADR-0178): CI applies them from the runner.*

@@ -23,7 +23,8 @@ import { serverEnvSchema } from "@app/shared";
  * text: a pinned base and one digest for all, no build argument, no timer, no
  * proxy, secret or setting baked in, a numeric non-root user, an ignore file
  * that keeps secrets and outputs out of the build context, and a workflow that
- * builds each image and pushes none. A later image adds its Dockerfile here.
+ * builds each image, scans it with pinned Syft and Grype, and pushes none. A
+ * later image adds its Dockerfile here.
  */
 const REPO_ROOT = join(__dirname, "..");
 const DOCKERFILES = ["apps/web/Dockerfile", "apps/worker/Dockerfile"];
@@ -273,6 +274,35 @@ const commands = (run: string): string[] =>
 const DOCKER_COMMANDS = ["run", "exec", "logs", "rm", "image inspect", "buildx build"];
 /** A stand-in job's commands besides: its networks, read as two words like `image` and `buildx` (ADR-0178). */
 const STAND_IN_COMMANDS = [...DOCKER_COMMANDS, "network create", "network connect", "network rm", "stop", "start"];
+/** The image jobs' commands besides: saving the image tested, for the scanners (ADR-0180). Not a stand-in job's. */
+const IMAGE_COMMANDS = [...DOCKER_COMMANDS, "image save"];
+/** Each scanner by tag and index digest, from Anchore's registry (ADR-0180 Decision 1). */
+const SCANNERS = {
+  SYFT_PIN: /^ghcr\.io\/anchore\/syft:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/,
+  GRYPE_PIN: /^ghcr\.io\/anchore\/grype:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/,
+};
+/** The only settings a scanner run is given, each by `-e`; it writes to its own `/work`, and Syft to `/sbom`. */
+const SCANNER_ENV = [
+  "SYFT_CHECK_FOR_APP_UPDATE",
+  "GRYPE_CHECK_FOR_APP_UPDATE",
+  "GRYPE_DB_AUTO_UPDATE",
+  "GRYPE_DB_CACHE_DIR",
+  "TMPDIR",
+  "XDG_CACHE_HOME",
+];
+/** What would widen a scanner run, reach the host or a registry, or turn a database check off. */
+const SCANNER_BANNED = new RegExp(
+  [
+    "--privileged|docker\\.sock|--(?:network|net)[= ]host|--cap-add|--entrypoint|--env\\b|--platform|--mount",
+    "--volumes-from|--device|--pid|--ipc|--userns|unconfined|registry:|docker:|oci-",
+    "INSECURE|VALIDATE|UPDATE_URL|CA_CERT|MAX_ALLOWED",
+  ].join("|"),
+);
+/** Every scanner run's flags, `--network none` aside, and its user: the runner's own. */
+const CONFINED = "--rm --read-only --cap-drop ALL --security-opt no-new-privileges";
+const SCANNER_USER = '--user "$(id -u):$(id -g)"';
+/** The one level a fixable finding fails the scan at (ADR-0180 Decision 5). */
+const FAIL_ON = "critical";
 const BUILD = new RegExp(
   [
     "^docker buildx build --provenance=false --load --platform linux/amd64 -f (\\S+)(?: --target ([\\w-]+))?",
@@ -293,9 +323,15 @@ const BANNED_WORKFLOW = new RegExp(
  * empty for the last stage) and its steps run whatever happened before them.
  */
 const IMAGE_JOBS = [
-  { name: "web-image", builds: [["apps/web/Dockerfile", ""]], guarded: [["Stop the server", "always()"]] },
+  {
+    name: "web-image",
+    tag: "vtavision-web:ci",
+    builds: [["apps/web/Dockerfile", ""]],
+    guarded: [["Stop the server", "always()"]],
+  },
   {
     name: "worker-image",
+    tag: "vtavision-worker:ci",
     builds: [
       ["apps/worker/Dockerfile", "media-test"],
       ["apps/worker/Dockerfile", ""],
@@ -303,6 +339,98 @@ const IMAGE_JOBS = [
     guarded: [],
   },
 ];
+
+/**
+ * The three steps that scan an image job's image, as `[name, timeout, run]`, word for word (ADR-0180): its SBOM
+ * from the image the job tested, with no network; Grype's database, the one run with a network; and the scan,
+ * which lists every match and fails only on a fixable one at `FAIL_ON`, with Grype's code 2.
+ */
+function scanSteps(tag: string): string[][] {
+  const lines = (...text: string[]): string => text.join("\n");
+  const isolated = "docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \\";
+  const offline = "-e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_AUTO_UPDATE=false \\";
+  const work = "-e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \\";
+  return [
+    [
+      "Write the image's SBOM",
+      "5",
+      lines(
+        'dir="$RUNNER_TEMP/scan"',
+        'mkdir -p "$dir/image" "$dir/sbom" "$dir/syft" "$dir/grype"',
+        `docker image save -o "$dir/image/image.tar" ${tag}`,
+        isolated,
+        `  ${SCANNER_USER} -e SYFT_CHECK_FOR_APP_UPDATE=false -e TMPDIR=/work -e XDG_CACHE_HOME=/work \\`,
+        '  -v "$dir/image:/image:ro" -v "$dir/sbom:/sbom" -v "$dir/syft:/work" \\',
+        '  "$SYFT_PIN" docker-archive:/image/image.tar \\',
+        "  -o syft-json=/sbom/image.syft.json -o cyclonedx-json@1.6=/sbom/image.cdx.json",
+        'rm "$dir/image/image.tar"',
+        `jq -e '.specVersion == "1.6"' "$dir/sbom/image.cdx.json"`,
+        `jq -r '"\\(.artifacts | length) packages"' "$dir/sbom/image.syft.json"`,
+        'sha256sum "$dir/sbom/image.cdx.json"',
+        'df -h "$RUNNER_TEMP"',
+      ),
+    ],
+    [
+      "Fetch the vulnerability database",
+      "8",
+      lines(
+        'dir="$RUNNER_TEMP/scan"',
+        `docker run ${CONFINED} \\`,
+        `  ${SCANNER_USER} -e GRYPE_CHECK_FOR_APP_UPDATE=false \\`,
+        `  ${work}`,
+        '  -v "$dir/grype:/work" "$GRYPE_PIN" db update',
+        isolated,
+        `  ${SCANNER_USER} ${offline}`,
+        `  ${work}`,
+        '  -v "$dir/grype:/work" "$GRYPE_PIN" db status',
+      ),
+    ],
+    [
+      "Scan the SBOM",
+      "3",
+      lines(
+        'dir="$RUNNER_TEMP/scan"',
+        "grype() {",
+        `  ${isolated}`,
+        `    ${SCANNER_USER} ${offline}`,
+        `    ${work}`,
+        '    -v "$dir/grype:/work" -v "$dir/sbom:/sbom:ro" \\',
+        '    -v "$GITHUB_WORKSPACE/.github/scan/grype.yaml:/cfg/grype.yaml:ro" \\',
+        '    "$GRYPE_PIN" sbom:/sbom/image.syft.json -c /cfg/grype.yaml "$@"',
+        "}",
+        "if ! grype --show-suppressed -o table; then",
+        '  echo "Grype itself failed listing every match: not a finding." >&2',
+        "  exit 1",
+        "fi",
+        "set +e",
+        `grype --only-fixed --fail-on ${FAIL_ON} -o table`,
+        "code=$?",
+        "set -e",
+        'if [ "$code" -eq 2 ]; then',
+        `  echo "A fixable ${FAIL_ON} finding: fix it, or accept it in .github/scan/grype.yaml and TODO.md." >&2`,
+        'elif [ "$code" -ne 0 ]; then',
+        '  echo "Grype itself failed with code $code: not a finding." >&2',
+        "fi",
+        'exit "$code"',
+      ),
+    ],
+  ];
+}
+
+/**
+ * One accepted finding, line for line: its id, the TODO.md item it is held in, and its package and version. An
+ * `npm` package the lockfile does not hold is the base image's own npm or corepack, and names its location too.
+ */
+const ACCEPTED = [
+  /^ {2}- vulnerability: (CVE-\d{4}-\d{4,}|GHSA(?:-[23456789cfghjmpqrvwx]{4}){3})$/,
+  /^ {4}reason: "(.*TODO\.md.*)"$/,
+  /^ {4}package:$/,
+  /^ {6}name: ([\w@./+-]+)$/,
+  /^ {6}version: ([\w.:~+-]+)$/,
+  /^ {6}type: (deb|npm|binary)$/,
+];
+/** The base image's global npm folder, which no app package uses: the apps live under `/app` (ADR-0180 Decision 6). */
+const BASE_NPM = /^ {6}location: "(\/usr\/local\/lib\/node_modules\/(?:[\w@+-][\w@.*+-]*\/)*[\w@.*+-]+)"$/;
 
 /** The one condition the production-mode job keeps the browser's report on (RD-11b). */
 const BROWSER_FAILED = "failure() && steps.browser.outcome == 'failure'";
@@ -445,7 +573,7 @@ describe("the images together", () => {
     expect(existsSync(join(REPO_ROOT, ".dockerignore"))).toBe(false);
   });
 
-  it.each(IMAGE_JOBS)("are built in the $name job, which reads, builds and runs, and nothing else", (image) => {
+  it.each(IMAGE_JOBS)("are built in the $name job, which reads, builds, runs and scans, and nothing else", (image) => {
     const ci = raw(WORKFLOW);
     const job = readJob(ci, image.name);
     expect(job.unknown).toEqual([]);
@@ -453,7 +581,11 @@ describe("the images together", () => {
     expect(job.keys.get("timeout-minutes")).toBe("30");
     expect([...job.keys.keys()].sort()).toEqual(["env", "permissions", "runs-on", "steps", "timeout-minutes"]);
     expect([...job.permissions]).toEqual([["contents", "read"]]);
-    expect([...job.env]).toEqual([["REVISION", "${{ github.sha }}"]]);
+    expect([...job.env.keys()]).toEqual(["REVISION", "SYFT_PIN", "GRYPE_PIN"]);
+    expect(job.env.get("REVISION")).toBe("${{ github.sha }}");
+    for (const [name, pin] of Object.entries(SCANNERS)) {
+      expect(`${name}: ${pin.test(job.env.get(name) ?? "")}`).toBe(`${name}: true`);
+    }
 
     const [checkout, ...rest] = job.steps;
     expect(checkout?.fields.get("uses")).toBe("actions/checkout@v4");
@@ -463,9 +595,88 @@ describe("the images together", () => {
     expect(guarded).toEqual(image.guarded);
 
     for (const { command, sub } of dockerCommands(job)) {
-      expect(`${command}: ${DOCKER_COMMANDS.includes(sub)}`).toBe(`${command}: true`);
+      expect(`${command}: ${IMAGE_COMMANDS.includes(sub)}`).toBe(`${command}: true`);
     }
     expect(builds(job)).toEqual(image.builds);
+
+    // The scan comes after every functional step, on the image they tested: only the guarded steps follow it.
+    const steps = job.steps.map((s) => [
+      s.fields.get("name") ?? "",
+      s.fields.get("timeout-minutes") ?? "",
+      s.fields.get("run") ?? "",
+    ]);
+    const scan = steps.findIndex(([name]) => name === "Write the image's SBOM");
+    expect(scan).toBeGreaterThan(0);
+    expect(steps.slice(scan, scan + 3)).toEqual(scanSteps(image.tag));
+    expect(steps.slice(scan + 3).map(([name]) => name)).toEqual(image.guarded.map(([name]) => name));
+  });
+
+  it("scan each image with one pinned Syft and Grype, and reach the network only to fetch Grype's database", () => {
+    const ci = raw(WORKFLOW);
+    const jobs = IMAGE_JOBS.map((image) => ({ image, job: readJob(ci, image.name) }));
+    for (const name of Object.keys(SCANNERS)) {
+      expect(new Set(jobs.map(({ job }) => job.env.get(name))).size).toBe(1);
+    }
+    for (const { image, job } of jobs) {
+      const docker = dockerCommands(job);
+      const scanners = docker.map(({ command }) => command).filter((c) => /"\$(?:SYFT|GRYPE)_PIN"/.test(c));
+      expect(scanners).toHaveLength(4);
+      for (const command of scanners) {
+        const confined = command.replace(" --network none ", " ").startsWith(`docker run ${CONFINED} ${SCANNER_USER} `);
+        expect(`${command}: ${confined}`).toBe(`${command}: true`);
+        expect(`${command}: ${SCANNER_BANNED.test(command)}`).toBe(`${command}: false`);
+        // Each setting by `-e NAME=value`, and only those listed; a temp folder and cache on the run's own /work.
+        const words = command.split(" ");
+        const set = words.flatMap((word, i) => (word === "-e" ? [words[i + 1] ?? ""] : []));
+        const names = set.map((pair) => /^([A-Z][A-Z_]*)=\S+$/.exec(pair)?.[1] ?? pair);
+        expect(names.filter((name) => !SCANNER_ENV.includes(name))).toEqual([]);
+        expect(set.filter((pair) => pair === "TMPDIR=/work" || pair === "XDG_CACHE_HOME=/work")).toHaveLength(2);
+        expect(command.match(/ -v "\$dir\/\w+:\/work" /g) ?? []).toHaveLength(1);
+        // Every other mount is read-only, but Syft's SBOM folder, the one file it writes besides its /work.
+        const mounts = [...command.matchAll(/ -v "([^"]+)"/g)].map(([, mount = ""]) => mount);
+        const written = mounts.filter((mount) => !mount.endsWith(":ro") && !/^\$dir\/\w+:\/work$/.test(mount));
+        expect(written).toEqual(command.includes('"$SYFT_PIN"') ? ["$dir/sbom:/sbom"] : []);
+      }
+      // One run alone has a network: the database's fetch, which sees Grype's own folder and nothing else.
+      const online = scanners.filter((command) => !command.includes(" --network none "));
+      expect(online).toHaveLength(1);
+      expect(online[0]).toMatch(/ -v "\$dir\/grype:\/work" "\$GRYPE_PIN" db update$/);
+      expect(online[0]?.match(/ -v /g)).toHaveLength(1);
+      const saved = docker.filter(({ sub }) => sub === "image save").map(({ command }) => command);
+      expect(saved).toEqual([`docker image save -o "$dir/image/image.tar" ${image.tag}`]);
+    }
+  });
+
+  it("accept a finding only by id, package and version, each with its TODO.md item", () => {
+    const read = raw(".github/scan/grype.yaml")
+      .split(/\r?\n/)
+      .filter((line) => line.trim() !== "" && !line.trim().startsWith("#"));
+    const [head = "", ...entries] = read;
+    expect(["ignore: []", "ignore:"]).toContain(head);
+    if (head === "ignore: []") expect(entries).toEqual([]);
+    else expect(entries[0]?.startsWith("  - ")).toBe(true);
+    // Each entry starts at its `- vulnerability:` line: six lines, and a seventh for the base image's npm.
+    const groups: string[][] = [];
+    for (const line of entries) {
+      if (line.startsWith("  - ")) groups.push([line]);
+      else groups.at(-1)?.push(line);
+    }
+    const todo = raw("docs/decisions/TODO.md");
+    const lock = raw("pnpm-lock.yaml").split(/\r?\n/);
+    for (const group of groups) {
+      const [location, ...more] = group.slice(ACCEPTED.length);
+      const found = [...ACCEPTED, BASE_NPM].map((pattern, k) => pattern.exec(group[k] ?? ""));
+      const valid = found.slice(0, ACCEPTED.length).every((m) => m !== null) && more.length === 0;
+      const placed = location === undefined || (found[ACCEPTED.length] !== null && !location.includes(".."));
+      expect(`${group.join(" | ")}: ${valid && placed}`).toBe(`${group.join(" | ")}: true`);
+      const [id = "", , , name = "", version = "", type = ""] = found.map((m) => m?.[1] ?? "");
+      expect(`${id} in TODO.md: ${todo.includes(id)}`).toBe(`${id} in TODO.md: true`);
+      // Only an npm entry names a location. Its entry goes stale with its version: the lockfile must still hold it,
+      // unless the entry is the base image's own npm or corepack, held to the base image's global folder.
+      const locked = lock.includes(`  ${name}@${version}:`) || lock.includes(`  '${name}@${version}':`);
+      if (type !== "npm") expect(`${id}: ${location}`).toBe(`${id}: undefined`);
+      else expect(`${name}@${version}: ${locked || location !== undefined}`).toBe(`${name}@${version}: true`);
+    }
   });
 
   it.each(STAND_IN_JOBS)("are run against stand-ins in the $name job, as built and held in", (stand) => {
@@ -1100,6 +1311,7 @@ describe("the worker image", () => {
           "docker image inspect -f '{{.Size}} bytes' vtavision-worker:ci",
         ),
       ],
+      ...scanSteps("vtavision-worker:ci"),
     ]);
   });
 });

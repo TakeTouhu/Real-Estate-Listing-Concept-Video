@@ -1579,6 +1579,16 @@ migration): `sharp` 0.33.5 to 0.35.5, and pnpm overrides lifting
 (`docs/api-changes-pt-6c.md`). It lands before PT-6b's image scan. Not
 measured before CI: `sharp` 0.35.5 inside the Debian 13 images.
 
+**PT-6b — each image scanned in its job** (ADR-0180, no migration):
+`web-image` and `worker-image` each save the image they tested, write
+its SBOM with Syft and scan it with Grype, both pinned by tag and
+digest; the scan lists every finding and fails on a fixable critical
+one. Only the database fetch has a network; nothing is kept or pushed;
+still 8 checks. Not measured before CI, since nothing could be pulled
+here: whether the scanners run under the job's flags, the baseline,
+each step's time, the disk and the database's size; the first run is
+the measurement. The scanners' signatures are not yet verified.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
