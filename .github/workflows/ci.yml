@@ -614,3 +614,242 @@ jobs:
             -W -f '${Package}\t${Version}\n'
           docker run --rm --network none --read-only --entrypoint node vtavision-worker:ci --version
           docker image inspect -f '{{.Size}} bytes' vtavision-worker:ci
+
+  production-mode:
+    # The web image as built, run against stand-ins (ADR-0178), with Google's
+    # names as aliases on a network with no way out, behind a TLS front. Every
+    # value is this run's, in files, never printed; Mailpit relays nothing.
+    # Nothing is pushed: no registry, login, secret or cache.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      REVISION: ${{ github.sha }}
+      PG_IMAGE: postgres:16.16-trixie@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8
+      GCS_IMAGE: fsouza/fake-gcs-server:1.56.1@sha256:797ce226d62f947c009dc40246b30cfb456b8473d8241407f9d6f2c04e4d69ef
+      CLAMAV_IMAGE: clamav/clamav:1.5.5@sha256:64e30c0bf976198024deb3dc6d5cfe2485fb969c0f73549ba0fdb364b9469614
+      MAILPIT_IMAGE: axllent/mailpit:v1.33.1@sha256:aef2aacc11f075ec0fb6874275ee4a421e688e11a96ebb296134d1735c7761ce
+      NODE_IMAGE: node:22-trixie-slim@sha256:f0960f8dc047f358e3fb428f36ccba21732194fa5f0cac849f401e63e62fb9e6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        timeout-minutes: 10
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @app/database run db:generate
+
+      - name: Build the web image
+        timeout-minutes: 20
+        run: >-
+          docker buildx build --provenance=false --load --platform linux/amd64
+          -f apps/web/Dockerfile
+          --label "org.opencontainers.image.revision=$REVISION"
+          --tag vtavision-web:ci .
+
+      - name: Make this run's authority, leaves and settings
+        # Files only this user reads, each value masked too. The authority's key is deleted once it has signed the
+        # three leaves; each leaf is readable by the one stand-in that mounts it.
+        timeout-minutes: 1
+        run: |
+          umask 077
+          dir="$RUNNER_TEMP/rd11"
+          mkdir "$dir"
+          ec="-newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes"
+          openssl req -x509 $ec -keyout "$dir/ca.key" -out "$dir/ca.pem" -days 1 -subj /CN=ca.rd11.test
+          for leaf in gcs:storage.googleapis.com mail:mail.rd11.test app:app.rd11.test; do
+            mkdir -m 0755 "$dir/${leaf%%:*}"
+            echo "subjectAltName=DNS:${leaf#*:}" > "$dir/ext.cnf"
+            openssl req $ec -keyout "$dir/${leaf%%:*}/key.pem" -out "$dir/leaf.csr" -subj "/CN=${leaf#*:}"
+            openssl x509 -req -in "$dir/leaf.csr" -CA "$dir/ca.pem" -CAkey "$dir/ca.key" -CAcreateserial \
+              -out "$dir/${leaf%%:*}/cert.pem" -days 1 -extfile "$dir/ext.cnf"
+          done
+          rm "$dir/ca.key" "$dir/ca.srl" "$dir/leaf.csr" "$dir/ext.cnf"
+          chmod 0644 "$dir/ca.pem" "$dir"/*/cert.pem "$dir"/*/key.pem
+          for name in session health storage mfa smtp db; do openssl rand -hex 32 > "$dir/$name.secret"; done
+          openssl rand -hex 16 > "$dir/metadata.secret"
+          for name in "$dir"/*.secret; do echo "::add-mask::$(cat "$name")"; done
+          db="$(cat "$dir/db.secret")"
+          bucket="rd11-$(openssl rand -hex 3)"
+          {
+            echo "SESSION_SECRET=$(cat "$dir/session.secret")"
+            echo "HEALTHCHECK_API_TOKEN=$(cat "$dir/health.secret")"
+            echo "STORAGE_SIGNING_SECRET=$(cat "$dir/storage.secret")"
+            echo "MFA_SECRET_KEY=$(cat "$dir/mfa.secret")"
+            echo "DATABASE_URL=postgresql://rd11:$db@db.rd11.test:5432/rd11"
+            echo "APP_BASE_URL=https://app.rd11.test:8443"
+            echo "FORWARDED_FOR_TRUSTED_ENTRIES=1"
+            echo "GOOGLE_CLOUD_STORAGE_BUCKET=$bucket"
+            echo "CLAMAV_HOST=clamav.rd11.test"
+            echo "SMTP_HOST=mail.rd11.test"
+            echo "SMTP_PORT=1025"
+            echo "SMTP_TLS=starttls"
+            echo "SMTP_USER=rd11"
+            echo "SMTP_PASSWORD=$(cat "$dir/smtp.secret")"
+            echo "SMTP_EHLO_NAME=app.rd11.test"
+            echo "EMAIL_FROM=noreply@rd11.test"
+          } > "$dir/web.env"
+          printf 'POSTGRES_USER=rd11\nPOSTGRES_PASSWORD=%s\nPOSTGRES_DB=rd11\n' "$db" > "$dir/pg.env"
+          printf 'DATABASE_URL=postgresql://rd11:%s@127.0.0.1:5432/rd11\nBUCKET=%s\n' "$db" "$bucket" \
+            > "$dir/runner.env"
+          echo "RD11_METADATA_TOKEN=$(cat "$dir/metadata.secret")" > "$dir/metadata.env"
+          echo "Authorization: Bearer $(cat "$dir/health.secret")" > "$dir/ready.header"
+
+      - name: Name the app on the runner
+        timeout-minutes: 1
+        run: echo '127.0.0.1 app.rd11.test' | sudo tee -a /etc/hosts
+
+      - name: Start the stand-ins
+        timeout-minutes: 10
+        run: |
+          dir="$RUNNER_TEMP/rd11"
+          docker network create --internal --subnet 172.30.11.0/24 rd11-int
+          docker network create rd11-edge
+          # On both networks: started on the edge one, published on loopback only, then named on the internal one.
+          docker run -d --name db --network rd11-edge -p 127.0.0.1:5432:5432 --env-file "$dir/pg.env" "$PG_IMAGE"
+          docker network connect --ip 172.30.11.12 --alias db.rd11.test rd11-int db
+          docker run -d --name gcs --network rd11-edge -p 127.0.0.1:4480:8000 -v "$dir/gcs:/run/rd11/tls:ro" \
+            -e FAKE_GCS_SCHEME=both -e FAKE_GCS_PORT=443 -e FAKE_GCS_PORT_HTTP=8000 -e FAKE_GCS_BACKEND=memory \
+            -e FAKE_GCS_LOG_LEVEL=warn -e FAKE_GCS_CERT_LOCATION=/run/rd11/tls/cert.pem \
+            -e FAKE_GCS_PRIVATE_KEY_LOCATION=/run/rd11/tls/key.pem "$GCS_IMAGE"
+          docker network connect --ip 172.30.11.10 --alias storage.googleapis.com rd11-int gcs
+          docker run -d --name mailpit --network rd11-edge -p 127.0.0.1:8025:8025 -v "$dir/mail:/run/rd11/tls:ro" \
+            -e MP_SMTP_TLS_CERT=/run/rd11/tls/cert.pem -e MP_SMTP_TLS_KEY=/run/rd11/tls/key.pem \
+            -e MP_SMTP_REQUIRE_STARTTLS=true -e MP_SMTP_AUTH_ACCEPT_ANY=true -e MP_DISABLE_VERSION_CHECK=true \
+            "$MAILPIT_IMAGE"
+          docker network connect --ip 172.30.11.14 --alias mail.rd11.test rd11-int mailpit
+          # On the internal network only.
+          docker run -d --name clamav --network rd11-int --ip 172.30.11.13 --network-alias clamav.rd11.test \
+            -e CLAMAV_NO_FRESHCLAMD=true -e CLAMAV_NO_MILTERD=true "$CLAMAV_IMAGE"
+          docker run -d --name metadata --network rd11-int --ip 172.30.11.11 --network-alias metadata.google.internal \
+            --user 1000:1000 --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --env-file "$dir/metadata.env" -v "$GITHUB_WORKSPACE/tests/production:/srv/rd11:ro" \
+            "$NODE_IMAGE" node /srv/rd11/metadata-server.mjs
+          # Bounded waits, a second apart: ClamAV loads its signatures in about 13 s, the others in a few. A stand-in
+          # that does not answer prints its last lines, none of which holds a value of this run.
+          ready() {
+            name="$1"; tries="$2"; shift 2
+            for try in $(seq 1 "$tries"); do
+              if docker exec "$name" "$@" > /dev/null 2>&1; then return 0; fi
+              sleep 1
+            done
+            echo "$name did not answer in $tries tries" >&2
+            docker logs --tail 50 "$name" >&2
+            return 1
+          }
+          ready db 30 pg_isready -h 127.0.0.1 -U rd11 -d rd11
+          ready gcs 30 wget -q -O /dev/null http://127.0.0.1:8000/_internal/healthcheck
+          ready mailpit 30 /mailpit readyz
+          ready clamav 90 clamdcheck.sh
+          ready metadata 30 node -e "require('node:http').get('http://127.0.0.1/',
+            (r) => process.exit(r.statusCode === 404 ? 0 : 1)).on('error', () => process.exit(1))"
+
+      - name: Apply the migrations and make the bucket from the runner
+        timeout-minutes: 5
+        run: |
+          set -a; . "$RUNNER_TEMP/rd11/runner.env"; set +a
+          pnpm --filter @app/database run db:migrate
+          curl -sS --fail -o /dev/null -X POST -H 'content-type: application/json' \
+            --data "{\"name\":\"$BUCKET\"}" 'http://127.0.0.1:4480/storage/v1/b?project=rd11'
+
+      - name: Start the web app behind the front
+        timeout-minutes: 5
+        run: |
+          dir="$RUNNER_TEMP/rd11"
+          # As built: its entrypoint and start check, the web-image job's flags, and this run's authority by one name.
+          docker run -d --name web --network rd11-int --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --env-file "$dir/web.env" -v "$dir/ca.pem:/run/rd11/ca.pem:ro" -e NODE_EXTRA_CA_CERTS=/run/rd11/ca.pem \
+            vtavision-web:ci
+          docker run -d --name front --network rd11-edge -p 127.0.0.1:8443:8443 --user 1000:1000 --read-only \
+            --cap-drop ALL --security-opt no-new-privileges -v "$dir/app:/run/rd11/tls:ro" \
+            -v "$GITHUB_WORKSPACE/tests/production:/srv/rd11:ro" "$NODE_IMAGE" node /srv/rd11/tls-front.mjs
+          docker network connect --ip 172.30.11.15 rd11-int front
+          # At most 30 tries a second apart, through the front, trusting this run's authority alone.
+          for try in $(seq 1 30); do
+            if curl -sS -f -o /dev/null --cacert "$dir/ca.pem" https://app.rd11.test:8443/api/health; then break; fi
+            if [ "$try" -eq 30 ]; then docker logs front; exit 1; fi
+            sleep 1
+          done
+          # The start check let it start and did not end it: it still runs five seconds later.
+          sleep 5
+          docker exec web true
+
+      - name: Check liveness, readiness, the names and the way out
+        timeout-minutes: 2
+        run: |
+          umask 077
+          dir="$RUNNER_TEMP/rd11"
+          expect() {
+            want="$1"; shift
+            got="$(curl -sS --cacert "$dir/ca.pem" -o "$dir/answer" -w '%{http_code}' "$@")"
+            echo "${*: -1} answers $got, $want expected"
+            test "$got" = "$want"
+          }
+          expect 200 https://app.rd11.test:8443/api/health
+          expect 401 https://app.rd11.test:8443/api/health/ready
+          # With a client's own X-Forwarded-For entry, which the front keeps and appends to, and no log may hold.
+          ready=0
+          expect 200 -H @"$dir/ready.header" -H 'X-Forwarded-For: 203.0.113.7' \
+            https://app.rd11.test:8443/api/health/ready && ready=1
+          # Each check before the verdict; if not ready, the metadata stand-in's last lines (no value) too.
+          jq -r '.checks[] | "\(.name): ok=\(.ok), \(.detail)"' "$dir/answer" || true
+          if [ "$ready" != 1 ]; then docker logs --tail 50 metadata >&2; exit 1; fi
+          jq -e '.status == "ready" and (.checks | length) == 5 and all(.checks[]; .ok)' "$dir/answer"
+          jq -e '.checks[] | select(.name == "storage") | .detail == "adapter=gcs, answers"' "$dir/answer"
+          test "$(docker exec web getent hosts storage.googleapis.com | awk '{ print $1 }')" = 172.30.11.10
+          test "$(docker exec web getent hosts metadata.google.internal | awk '{ print $1 }')" = 172.30.11.11
+          # TEST-NET-1 (RFC 5737): the internal network has no route out.
+          docker exec web node -e "require('node:net').connect(443, '192.0.2.1').on('connect', () => process.exit(1))
+            .on('error', (e) => { console.log(e.code); process.exit(/^E(NET|HOST)UNREACH$/.test(e.code) ? 0 : 1); })"
+          # The adapter asked for its token as Cloud Run's metadata server requires, and sent it no credential.
+          docker logs metadata > "$dir/metadata.log" 2>&1
+          grep -cF '"path":"/computeMetadata/v1/instance/service-accounts/default/token","flavor":"Google"' \
+            "$dir/metadata.log"
+          if grep -qF '"authorization":true' "$dir/metadata.log"; then exit 1; fi
+          # ClamAV answers at the address the web app scans with.
+          docker exec web node -e "const s = require('node:net').connect(3310, 'clamav.rd11.test'); let a = '';
+            s.on('connect', () => s.end('zPING\0')).on('data', (d) => (a += d))
+            .on('end', () => process.exit(a.startsWith('PONG') ? 0 : 1))"
+
+      - name: Read the server's log
+        timeout-minutes: 1
+        run: |
+          umask 077
+          dir="$RUNNER_TEMP/rd11"
+          docker logs web > "$dir/web.log" 2>&1
+          # No secret, database password, metadata token or client-sent address reached it, and no failure.
+          { cat "$dir"/*.secret; echo 203.0.113.7; } > "$dir/values"
+          test "$(grep -c . "$dir/values")" -eq 8
+          if grep -qFf "$dir/values" "$dir/web.log"; then
+            : > "$dir/leaked"
+            echo "A value of this run reached the log" >&2
+            exit 1
+          fi
+          for word in '"component":"request"' CLIENT_ADDRESS_UNAVAILABLE ORIGIN_REFUSED '"component":"readiness"'; do
+            if grep -qF "$word" "$dir/web.log"; then echo "The log holds $word" >&2; exit 1; fi
+          done
+
+      - name: Stop the stand-ins
+        if: always()
+        # The web log is printed unless the step above found a value of this run in it; those values are
+        # throwaway and masked, but a value changed on its way into the log would escape the mask.
+        timeout-minutes: 5
+        run: |
+          if [ ! -e "$RUNNER_TEMP/rd11/leaked" ]; then docker logs web || true; fi
+          docker rm -f web front metadata clamav mailpit gcs db || true
+          docker network rm rd11-int rd11-edge || true
+          rm -rf "$RUNNER_TEMP/rd11"

@@ -3537,3 +3537,11 @@ access to Docker Hub, Debian's mirror and the npm registry
 Dockerfile, its ignore file, `apps/worker/image/`, the job and the
 guard's worker rules go, and the composer's `-r` with its unit tests;
 the checks return to 12. Nothing was stored, pushed or deployed.
+
+## RD-11a — the production image against stand-ins
+
+**No migration** (ADR-0178); nothing deployed or pushed. With CI's new
+`production-mode` job a pull request shows 16 checks. **Rolling back:**
+the job, the files under `tests/production/`, the guard's stand-in rules
+and helpers (`STAND_IN_JOBS`, `dockerCommands`, `builds`, `ranImage`),
+and the `TODO.md` flip, amendments and items of RD-11a go; 14 checks.

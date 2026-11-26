@@ -488,6 +488,15 @@ docker exec <container> node -e \
 image copies; `pnpm --filter @app/web start` (`next start`) only warns
 about it, and nothing runs it.
 
+CI's `production-mode` job (ADR-0178) runs the image against stand-ins;
+its steps in `.github/workflows/ci.yml` are the procedure, and no script
+repeats them. By hand they need Docker with Buildx, `openssl`, `curl`,
+`jq`, `sudo` for a hosts line for `app.rd11.test`, and pnpm and Node.js
+as in section 1; set `RUNNER_TEMP` to an empty private folder,
+`GITHUB_WORKSPACE` to the checkout, and the job's `env:` values
+(`REVISION` and the five `*_IMAGE` pins). Never give them a real
+credential.
+
 ## 7. Build and check the worker's image (optional)
 
 The worker's image (ADR-0176) carries Debian 13's FFmpeg and the six

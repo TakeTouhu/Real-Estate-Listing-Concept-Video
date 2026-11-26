@@ -1535,6 +1535,13 @@ RD-10a (#212) the rules and the web image, RD-10b (#214) relative
 redirects, and RD-10c the worker image; what it leaves open is in
 `TODO.md`, "Open in RD-10". Planned, not done: RD-11.
 
+**RD-11a — the production image against stand-ins** (ADR-0178, no
+migration): the `production-mode` job runs the web image as built behind
+a TLS front, Google's names aliases of stand-ins on a network with no
+way out, and requires readiness `ready` and a clean log; a pull request
+shows 16 checks. Not measured before CI: every Docker step. Planned, not
+done: RD-11b, RD-11c.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

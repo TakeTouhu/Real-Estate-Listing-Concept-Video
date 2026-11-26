@@ -2038,7 +2038,7 @@ into on 2026-11-17.
 
 ## Open in RD-3d — what the web app's Cloud Storage leaves open
 
-- [ ] **Run the production image against Google's names redirected.**
+- [x] **Run the production image against Google's names redirected.**
       ADR-0159 Decision 7 measured a production build in a network
       namespace by hand, with the start hook skipped, since the start check
       refuses every production start until RD-5 and RD-6. RD-11's
@@ -2059,6 +2059,11 @@ into on 2026-11-17.
       takes reaches only Next.js's raw output. RD-11 reads the log for
       both and treats each as a finding to explain; it may stop its
       database once to see one live.*
+      *Done in RD-11a (ADR-0178): CI's `production-mode` job runs it with
+      its start check, Google's two names aliases of stand-ins on a network
+      with no way out, and `FORWARDED_FOR_TRUSTED_ENTRIES` 1 behind one TLS
+      front that appends one entry. Reading Next.js's raw lines (ADR-0178
+      Decision 10) and stopping the database are RD-11b's.*
 - [ ] **Give the worker the same construction rules.** RD-4 gives the
       worker Cloud Storage. It is to build Google's store only where both
       `NODE_ENV` values say production, and refuse the emulator where
@@ -2085,6 +2090,14 @@ into on 2026-11-17.
       keeps its copies, Clean Masters and videos in the emulator's bucket,
       where the web app keeps its photos. It refuses both stores together.
       CI's `database` job runs the pipeline's suite on both stores.*
+
+## Open in RD-11a — what the production-mode test leaves open
+
+- [ ] **Pin the `postgres:16` services of `database` and `e2e`.** They
+      float; `production-mode` pins its own by digest (ADR-0178).
+- [ ] **Decide whether the page policy gains `upgrade-insecure-requests`.**
+      ADR-0174 Decision 10 left it out for an `http://localhost` run that
+      cannot exist (ADR-0178 Decision 6). Not decided; nothing changed.
 
 ## Open in the unknown-failure PR — what logging unknown failures leaves open
 
@@ -2155,6 +2168,7 @@ into on 2026-11-17.
       Decision 3).*
 - [ ] **Decide how migrations run in production.** The web image holds
       no Prisma CLI; RD-11 applies them from the runner. Part 2.
+      *Amended in RD-11a (ADR-0178): CI applies them from the runner.*
 - [ ] **Set the server's keep-alive against the load balancer's.**
       `server.js` reads `KEEP_ALIVE_TIMEOUT`; the image sets none.
       Part 2, with the deployment.
