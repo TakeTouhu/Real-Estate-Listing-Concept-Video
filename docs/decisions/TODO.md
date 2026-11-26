@@ -2383,6 +2383,18 @@ into on 2026-11-17.
       development `console.error` wrapper). Come back to it when the peak
       heap passes about 8 GB or the `e2e` job's restart check fires.
 
+## Open in PT-7c2 — what the report endpoint leaves open
+
+- [ ] **The upload `PUT` still reads its whole body** before checking
+      its size ("Open in RD-8"); PT-7c2 did not change it. The report
+      endpoint's `readBounded` (`apps/web/src/lib/csp-report.ts`), which
+      stops at a byte cap and never throws, may be reused there.
+- [ ] **An edge rate rule for `/api/csp-report` belongs to PT-10.**
+      ADR-0189's sampler bounds the lines without a value, not the
+      requests; a limit per client address or per time window needs the
+      product owner's values (proposal PT-12b, T8), so none is applied
+      in the app.
+
 ## Open in RD-10 — what the container images leave open
 
 - [ ] **Refresh the base image's digest.** The web image uses
@@ -2537,6 +2549,11 @@ into on 2026-11-17.
 - [ ] **No CSP violation report endpoint**: it would be a new
       unauthenticated `POST`; reconsider with part 2's observability.
       A refusal in a customer's browser is seen by no one until then.
+      *Amended in PT-7c2 (ADR-0189): the endpoint exists,
+      `POST /api/csp-report`, logging only categories of reports from
+      `APP_BASE_URL`'s own pages. Nothing reports to it until PT-7c3 adds
+      the policies' report directives, so refusals are still seen by no
+      one until then.*
 - [ ] **`style-src` allows `'unsafe-inline'`** for Next.js's own
       fallback pages, which render an inline `<style>` without a nonce;
       tighten when Next.js nonces them.

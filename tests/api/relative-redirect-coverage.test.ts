@@ -116,8 +116,8 @@ describe("relative redirects' coverage", () => {
   const files = sources();
   const routes = files.filter(isRoute);
 
-  it("reads every route file of the web app: 50 today", () => {
-    expect(routes).toHaveLength(50);
+  it("reads every route file of the web app: 51 today", () => {
+    expect(routes).toHaveLength(51);
   });
 
   it("finds no redirect outside the helper, and nothing built on a request's address", () => {

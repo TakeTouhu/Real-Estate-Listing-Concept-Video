@@ -105,6 +105,17 @@ Example response:
 
 This endpoint must verify the current WaveSpeedAI-supported signature or authentication mechanism, deduplicate events, and resolve jobs using internal provider references.
 
+### Browser reports
+
+- `POST /api/csp-report` — built in PT-7c2 (ADR-0189). Browsers' page
+  policy violation reports, `application/csp-report` or
+  `application/reports+json`. Unauthenticated by nature, so outside
+  the organization scope, the audit log and the origin check; it reads
+  no cookie. Answers `204` with no body, `400`, `413` (over 16 KiB) or
+  `415`, and logs only categories of reports from `APP_BASE_URL`'s own
+  pages (`docs/api-changes-pt-7c2.md`). Nothing reports to it until
+  PT-7c3.
+
 ## Error envelope
 
 ```json

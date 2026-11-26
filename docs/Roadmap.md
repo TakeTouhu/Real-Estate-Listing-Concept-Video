@@ -1699,6 +1699,19 @@ is unchanged. HSTS `includeSubDomains` and `preload` wait on
 the product owner's domain decision (T2) as PT-7c5, so PT-7c is not
 done until PT-7c5 is done or dropped.
 
+**PT-7c2 — Browsers report page policy violations to an endpoint that
+logs only categories** (ADR-0189, no migration): `POST /api/csp-report`
+takes `application/csp-report` and `application/reports+json`, reads
+at most 16 KiB with a reader that never throws, and answers `204`,
+`400`, `413` or `415` (`docs/api-changes-pt-7c2.md`). Reports from
+pages not on `APP_BASE_URL`'s origin are dropped; the rest are counted
+by five categories, and a request writes one `INFO` line only when a
+category's count in that instance reaches a power of two, so 4,104
+keys bound the lines with no clock and no limiter. It reads no cookie,
+session or database, and logs no address, token or nonce. `zod` joins
+the web app. Nothing reports to it until PT-7c3, which also takes the
+`page` category, moved there because this milestone passed its size.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

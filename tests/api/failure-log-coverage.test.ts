@@ -1,13 +1,13 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, sep } from "node:path";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppError } from "@app/shared";
 
 /**
  * A request that fails for a reason the app does not know is logged
  * (ADR-0177 Decision 5). Every `catch` clause and every `.catch(` call in a
- * route file, a server page or layout and `lib/mfa.ts` takes one of these
+ * route file, a server page or layout, `lib/mfa.ts` and `lib/csp-report.ts` takes one of these
  * shapes, read as TypeScript parses the file, so a comment or a string never
  * counts:
  *
@@ -33,22 +33,31 @@ import { AppError } from "@app/shared";
 const UNLOGGED: Readonly<Record<string, readonly string[]>> = {
   // Cancels a stream whose client has gone: no request is left to answer.
   "app/api/storage/download/route.ts": ["body.cancel().catch(() => undefined)"],
+  // A report's reader and parser never throw: a body that cannot be read or is not JSON is a 400 with no line, never
+  // an error line an unauthenticated client could cause at will (ADR-0189); a stream past the cap is cancelled.
+  "lib/csp-report.ts": [
+    "reader.cancel().catch(() => undefined)",
+    'catch { return { kind: "unreadable" }; }',
+    "catch { return undefined; }",
+  ],
 };
 
 const WEB = join(__dirname, "..", "..", "apps", "web", "src");
 const MFA = "lib/mfa.ts";
+const CSP = "lib/csp-report.ts";
 const HELPERS = new Set(["appErrorToResponse", "logRequestFailure"]);
 /** The codes whose default status is under 500: the only ones a page may answer itself (ADR-0177 Decision 5). */
 const EXPECTED = new Set(["UNAUTHENTICATED", "FORBIDDEN", "NOT_FOUND", "VALIDATION_FAILED", "RATE_LIMITED"]);
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
 
-type Kind = "route" | "page" | "mfa";
+type Kind = "route" | "page" | "mfa" | "lib";
 
 /** Where the helpers may come from. */
 const SOURCES: Readonly<Record<Kind, readonly string[]>> = {
   route: ["@/lib/http", "@/lib/failure-log"],
   page: ["@/lib/http", "@/lib/failure-log"],
   mfa: ["./http", "./failure-log"],
+  lib: ["./http", "./failure-log"],
 };
 
 interface Catch {
@@ -61,7 +70,7 @@ interface Catch {
 const parse = (text: string) =>
   ts.createSourceFile("source.tsx", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
-/** The files read, by their path under `src` with `/`: route files, server pages and layouts, and `lib/mfa.ts`. */
+/** The files read, by their path under `src` with `/`: route files, server pages and layouts, and the two libs. */
 function files(): string[] {
   const all = readdirSync(join(WEB, "app"), { recursive: true, encoding: "utf8" }).map((path) =>
     `app/${path.split(sep).join("/")}`,
@@ -71,10 +80,11 @@ function files(): string[] {
     if (!/(?:^|\/)(?:page|layout)\.tsx$/.test(path)) return false;
     return !/^\s*["']use client["']/.test(readFileSync(join(WEB, path), "utf8"));
   });
-  return [...server.sort(), MFA];
+  return [...server.sort(), MFA, CSP];
 }
 
-const kindOf = (file: string): Kind => (file === MFA ? "mfa" : file.endsWith("route.ts") ? "route" : "page");
+const kindOf = (file: string): Kind =>
+  file === MFA ? "mfa" : file === CSP ? "lib" : file.endsWith("route.ts") ? "route" : "page";
 
 /** `/api/auth/login` for `app/api/auth/login/route.ts`; `/` for `app/page.tsx`. */
 const pathOf = (file: string) => `/${file.split("/").slice(1, -1).join("/")}`;
@@ -90,6 +100,7 @@ function methodOf(node: ts.Node): string | undefined {
 /** The key a helper must be given here: a string, or the identifier `route` in `lib/mfa.ts`. */
 function keyOf(kind: Kind, file: string, node: ts.Node): string | undefined {
   if (kind === "mfa") return "route";
+  if (kind === "lib") return undefined;
   if (kind === "page") return `GET ${pathOf(file)}`;
   const method = methodOf(node);
   return method === undefined ? undefined : `${method} ${pathOf(file)}`;
@@ -376,11 +387,29 @@ describe("the failure log's coverage", () => {
   const all = files();
   const found = all.flatMap((file) => catches(read(file), file));
 
-  it("reads every catch in route files, server pages and layouts, and lib/mfa.ts: 48 today", () => {
-    expect(all.filter((file) => kindOf(file) === "route")).toHaveLength(50);
-    expect(found).toHaveLength(48);
+  it("reads every catch in route files, server pages and layouts, and the two libs: 52 today", () => {
+    expect(all.filter((file) => kindOf(file) === "route")).toHaveLength(51);
+    expect(found).toHaveLength(52);
     const byKind = (kind: Kind) => found.filter(({ file }) => kindOf(file) === kind).length;
-    expect([byKind("route"), byKind("page"), byKind("mfa")]).toEqual([33, 13, 2]);
+    expect([byKind("route"), byKind("page"), byKind("mfa"), byKind("lib")]).toEqual([34, 13, 2, 3]);
+  });
+
+  it("answers 400 with no line, never an error, to a report whose stream errors after one chunk", async () => {
+    const { POST } = await import("@/app/api/csp-report/route");
+    const lines: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((line: string) => void lines.push(line));
+    vi.spyOn(console, "error").mockImplementation((line: string) => void lines.push(line));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"csp-report":'));
+        controller.error(new Error("the client went away"));
+      },
+    });
+    const init = { method: "POST", headers: { "content-type": "application/csp-report" }, body, duplex: "half" };
+    const response = await POST(new Request("https://app.example.test/api/csp-report", init as RequestInit));
+    expect(response.status).toBe(400);
+    expect(lines).toEqual([]);
+    vi.restoreAllMocks();
   });
 
   it("finds every catch logged, a body read, a page's rethrow or listed, and the list exact", () => {
