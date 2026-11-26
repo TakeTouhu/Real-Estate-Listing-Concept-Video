@@ -2483,6 +2483,10 @@ into on 2026-11-17.
       values and schema; the seed sits at the last migration, so only
       migrations from 36 on will run on seeded rows; PT-8b2 seeds the
       rest.*
+      *Amended in PT-8b2 (ADR-0191 Decision 4): the seed now fills every
+      table, the property, media, storyboard, generation, FX, Unit
+      reservation and allocation tables included, and the coverage test
+      requires it.*
 - [ ] **Record the migration production holds, so CI upgrades from it**
       (G1/G3; ADR-0191 Decision 1). Until then CI takes the checked-out
       commit's first parent as the previous release. Part 2, with G1.

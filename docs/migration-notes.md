@@ -453,6 +453,8 @@ runs `seed/check.sql`, the checksum check and a `pg_dump --schema-only`
 comparison with the fresh database. **A new table needs a row in a seed
 file at its level, or a place on the PT-8b2 list in
 `tests/migrations/seed-coverage.test.ts`, or the coverage test fails.**
+Since PT-8b2 that list is gone: every table is seeded, and a new table
+needs a row in a seed file at its level.
 
 A merged migration is never edited, renamed or deleted: it is undone by
 a new migration, never by a revert (ADR-0191 Decision 2).
@@ -3870,3 +3872,19 @@ migration: the step, the job's variable and its comment go from
 workflow tests go; `api-changes-pt-8b1.md` and the PT-8b1 lines of this
 file, the Roadmap, `local-setup.md`, the part 2 gap analysis and
 `TODO.md` go.
+
+## PT-8b2 — The seed covers every table
+
+**No migration** (ADR-0191 Decision 4); nothing deployed or pushed; no
+setting, image, route, CI step or dependency changes; still 8 checks.
+`tests/migrations/seed/00000000000035.sql` gains 211 rows in the 21
+tables PT-8b1 left, the property, media, storyboard, generation, FX,
+Unit reservation and allocation tables; `seed/check.sql` checks them;
+the PT-8b2 list leaves `seed-coverage.test.ts`, which now requires
+every table to be seeded (`docs/api-changes-pt-8b2.md`). A pull request
+whose new migration cannot carry these rows, or changes one of their
+values without listing it in `check.sql`, now fails. **Rolling back**
+is a revert, allowed because this PR adds no migration: the seed, the
+check and the test return to PT-8b1's text; `api-changes-pt-8b2.md`
+and the PT-8b2 lines of this file, the Roadmap, the part 2 gap analysis
+and `TODO.md` go.
