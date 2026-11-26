@@ -114,9 +114,9 @@ stays as it is, and only the grammar it may move within is written.
 The plan the product owner approved on 2026-11-26 lists PT-7c as
 depending on T0 only, "each a CTO call". HSTS `includeSubDomains` and
 `preload` bind the product owner's whole domain, so that part moved to
-the product owner, after T2, as PT-7c5. It is to be told to the
-product owner with T2, and PT-7c5 joins T2's "Unblocks" the next time
-the owner summary is sent; this PR does not tell them. The part 2 gap
+the product owner, after T2, as PT-7c5. The product owner was told on
+2026-11-26 (13:36Z, in the project thread); PT-7c5 joins T2's
+"Unblocks" the next time the owner summary is sent. The part 2 gap
 analysis records it under "Deviations from the approved plan" (since
 PT-7c1).
 

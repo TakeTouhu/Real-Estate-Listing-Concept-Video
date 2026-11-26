@@ -62,4 +62,6 @@ that need no answer and no account go first, starting with PT-6a.
   even once PT-7c1 to PT-7c4 have merged (recorded in PT-7c1).
   *Amended in PT-7c4: ADR-0190 Decision 5 records this change of the
   row, and Decision 3 the rule PT-7c5 follows, with the question for
-  the product owner, mail link tracking under the apex included.*
+  the product owner, mail link tracking under the apex included. The
+  product owner was told on 2026-11-26, 13:36Z, in the project
+  thread.*
