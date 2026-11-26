@@ -1,5 +1,5 @@
 import { NextResponse, type MiddlewareConfig, type NextRequest } from "next/server";
-import { newNonce, pageContentSecurityPolicy } from "./lib/security-headers";
+import { newNonce, pageContentSecurityPolicy, REPORTING_ENDPOINTS } from "./lib/security-headers";
 
 /**
  * The pages' Content Security Policy, with a fresh nonce per request (RD-9e,
@@ -16,6 +16,10 @@ import { newNonce, pageContentSecurityPolicy } from "./lib/security-headers";
  * a payload, not a document, and get none; a browser's document prefetch or
  * prerender (`Purpose: prefetch`) does.
  *
+ * Every page answer also names where the policy's `report-to` group posts
+ * (`Reporting-Endpoints`, ADR-0189): a relative address, so the middleware
+ * reads no setting. `/api` gets none, as it gets no page policy.
+ *
  * Runs on the Edge runtime and imports nothing but the policy itself; the
  * origin check stays in each route (Decision 6).
  */
@@ -25,6 +29,7 @@ export function middleware(request: NextRequest): NextResponse {
   requestHeaders.set("content-security-policy", policy);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set("content-security-policy", policy);
+  response.headers.set("reporting-endpoints", REPORTING_ENDPOINTS);
   return response;
 }
 

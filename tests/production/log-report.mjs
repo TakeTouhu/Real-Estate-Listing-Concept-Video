@@ -10,8 +10,12 @@
  * line (PT-7b3, ADR-0187; exactly one each), and on any `WARNING` but a
  * refusal by the client address's limit or readiness's database probe
  * answering `P1001` or `P1017` during the outage (CI's first run read both:
- * a stopped server closes the open connection, then refuses new ones). A
- * listed value in the log (one per line of each `values` file) fails it with
+ * a stopped server closes the open connection, then refuses new ones). It
+ * requires exactly one `csp-report` line per report mechanism, each `INFO`,
+ * naming one violation, the sign-in page's with an inline script refused, as
+ * the report step posts them (PT-7c3, ADR-0189), and fails on any other
+ * `csp-report` line: one for the report from another origin's page among them.
+ * A listed value in the log (one per line of each `values` file) fails it with
  * exit 2 and prints nothing more. Node.js built-ins only.
  */
 import { appendFileSync, readFileSync } from "node:fs";
@@ -33,6 +37,14 @@ const WARNINGS = [
   { component: "readiness", probe: "database", code: "P1017" },
 ];
 const SEVERITIES = ["DEBUG", "INFO", "WARNING", "ERROR"];
+/** The report step's two accepted reports, one per mechanism (PT-7c3). */
+const REPORTS = ["report-uri", "report-to"];
+/** Whether a `csp-report` line is one the report step causes: one violation, the sign-in page's, inline refused. */
+const expectedReport = (entry) => {
+  const [only, ...more] = Array.isArray(entry.violations) ? entry.violations : [];
+  const named = entry.severity === "INFO" && entry.dropped === 0 && more.length === 0;
+  return named && only?.page === "/login" && only.blocked === "inline" ? REPORTS.indexOf(only.mechanism) : -1;
+};
 /** A field's value as printed: a plain word or route, else hidden. */
 const shown = (value) => (typeof value === "string" && /^[\w ./:[\]-]{1,80}$/.test(value) ? value : "(other)");
 
@@ -48,6 +60,7 @@ const counts = new Map();
 const problems = [];
 let outages = 0;
 const uncaught = UNCAUGHT.map(() => 0);
+const reports = REPORTS.map(() => 0);
 for (const line of log.split("\n").map((each) => each.trim()).filter((each) => each !== "")) {
   let entry;
   try {
@@ -66,6 +79,11 @@ for (const line of log.split("\n").map((each) => each.trim()).filter((each) => e
   if (entry.severity === "ERROR" && matches(entry, OUTAGE)) outages += 1;
   else if (entry.severity === "ERROR" && which !== -1) uncaught[which] += 1;
   else if (entry.severity === "ERROR") problems.push(`an error line: ${row}`);
+  if (entry.component === "csp-report") {
+    const mechanism = expectedReport(entry);
+    if (mechanism === -1) problems.push(`a page policy report line: ${row}`);
+    else reports[mechanism] += 1;
+  }
   if (entry.severity === "WARNING" && !WARNINGS.some((wanted) => matches(entry, wanted))) {
     problems.push(`a warning: ${row}`);
   }
@@ -73,6 +91,9 @@ for (const line of log.split("\n").map((each) => each.trim()).filter((each) => e
 if (outages !== 1) problems.push(`${outages} lines for the sign-in during the database outage, 1 expected`);
 UNCAUGHT.forEach(([component], i) => {
   if (uncaught[i] !== 1) problems.push(`${uncaught[i]} ${component} lines for the error no catch took, 1 expected`);
+});
+REPORTS.forEach((mechanism, i) => {
+  if (reports[i] !== 1) problems.push(`${reports[i]} ${mechanism} lines for the sign-in page's report, 1 expected`);
 });
 
 const table = [`| ${FIELDS.join(" | ")} | lines |`, `|${" --- |".repeat(FIELDS.length + 1)}`];

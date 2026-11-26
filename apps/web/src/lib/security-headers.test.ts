@@ -1,21 +1,29 @@
 import { getScriptNonceFromHeader } from "next/dist/server/app-render/get-script-nonce-from-header";
 import { describe, expect, it } from "vitest";
-import { NONCE_BYTES, NONCE_PATTERN, newNonce, pageContentSecurityPolicy } from "./security-headers";
+import {
+  CSP_REPORT_GROUP,
+  CSP_REPORT_PATH,
+  NONCE_BYTES,
+  NONCE_PATTERN,
+  newNonce,
+  pageContentSecurityPolicy,
+} from "./security-headers";
 
 const NONCE = "AAECAwQFBgcICQoLDA0ODw==";
 
-/** The production policy, exactly (ADR-0174 Decision 10). */
+/** The production policy, exactly (ADR-0174 Decision 10), reporting to the endpoint (ADR-0189, PT-7c3). */
 const PRODUCTION =
   "default-src 'self'; script-src 'self' 'nonce-AAECAwQFBgcICQoLDA0ODw==' 'strict-dynamic'; " +
   "style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'; " +
-  "object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'";
+  "object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; " +
+  "report-uri /api/csp-report; report-to csp";
 
 /** `next dev`'s: the same, plus `eval` and the Fast Refresh socket. */
 const DEVELOPMENT =
   "default-src 'self'; script-src 'self' 'nonce-AAECAwQFBgcICQoLDA0ODw==' 'strict-dynamic' 'unsafe-eval'; " +
   "style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; " +
   "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'; " +
-  "frame-ancestors 'none'";
+  "frame-ancestors 'none'; report-uri /api/csp-report; report-to csp";
 
 /** A policy as a map from directive to its sources. */
 function directives(policy: string): Map<string, string[]> {
@@ -49,11 +57,14 @@ describe("pageContentSecurityPolicy", () => {
     expect(styles).toEqual(["'self'", "'unsafe-inline'"]);
   });
 
-  it.each(["production", "development"])("is enforced, with nothing to report to, under NODE_ENV=%s", (nodeEnv) => {
+  it.each(["production", "development"])("is enforced, and reports to the endpoint, under NODE_ENV=%s", (nodeEnv) => {
     const policy = pageContentSecurityPolicy(NONCE, nodeEnv);
-    for (const left of ["report-uri", "report-to", "upgrade-insecure-requests", "sandbox"]) {
-      expect(directives(policy).has(left)).toBe(false);
-    }
+    // Both mechanisms, to one endpoint on the page's own origin; the group is never `default` (PT-7c3).
+    expect(directives(policy).get("report-uri")).toEqual(["/api/csp-report"]);
+    expect(directives(policy).get("report-to")).toEqual(["csp"]);
+    expect([CSP_REPORT_PATH, CSP_REPORT_GROUP]).toEqual(["/api/csp-report", "csp"]);
+    // Until PT-7c4.
+    for (const left of ["upgrade-insecure-requests", "sandbox"]) expect(directives(policy).has(left)).toBe(false);
     expect(policy).not.toMatch(/https?:|\*/);
   });
 

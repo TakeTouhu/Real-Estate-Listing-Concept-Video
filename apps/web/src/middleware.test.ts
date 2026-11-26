@@ -69,6 +69,8 @@ describe("the middleware's matcher", () => {
       const unmatched = env === "production" && (next || url === "/favicon.ico");
       const configured = await unstable_getResponseFromNextConfig({ url: `${BASE}${url}`, nextConfig });
       expect(configured.headers.get("content-security-policy")).toBe(api || unmatched ? API_POLICY : null);
+      // Nor a report endpoint: the API policy reports to nothing (PT-7c3).
+      expect(configured.headers.get("reporting-endpoints")).toBeNull();
       expect(matches(url)).toBe(!api && !NOT_PAGES.includes(url));
     },
   );
@@ -101,6 +103,22 @@ describe("middleware", () => {
     expect(forwarded).not.toContain("chosenbytheclient");
     // Every other request header goes on unchanged.
     expect(response.headers.get("x-middleware-request-cookie")).toBe("session=s");
+  });
+
+  it.each(ENVIRONMENTS)("names the report-to group's endpoint on every page answer, under NODE_ENV=%s", (env) => {
+    vi.stubEnv("NODE_ENV", env);
+    for (const url of PAGES) {
+      const response = middleware(new NextRequest(`${BASE}${url}`));
+      expect(response.headers.get("reporting-endpoints")).toBe('csp="/api/csp-report"');
+      // The request goes on without it: it is for the browser alone.
+      expect(response.headers.get("x-middleware-request-reporting-endpoints")).toBeNull();
+      const policy = response.headers.get("content-security-policy") ?? "";
+      const group = /(?:^|; )report-to ([^;]+)/.exec(policy)?.[1];
+      const named = /^([a-z][a-z0-9_-]*)="([^"]+)"$/.exec(response.headers.get("reporting-endpoints") ?? "");
+      expect([group, named?.[1]]).toEqual(["csp", "csp"]);
+      expect(group).not.toBe("default");
+      expect(/(?:^|; )report-uri ([^;]+)/.exec(policy)?.[1]).toBe(named?.[2]);
+    }
   });
 
   it("sends next dev's policy under next dev only", () => {

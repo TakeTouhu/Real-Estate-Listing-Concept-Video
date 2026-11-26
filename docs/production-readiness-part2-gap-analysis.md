@@ -41,7 +41,7 @@ recovery budget, defect records, operator recovery and cost inputs.
 | Dependencies | no image scanner; `sharp`, `postcss` and `zod` advisories (*`sharp` and `postcss`'s `nanoid` and `source-map-js` fixed since PT-6c; each image scanned with pinned Syft and Grype, failing on a fixable critical finding, since PT-6b, ADR-0180; `zod` 4.6.7 since PT-6d*) | `TODO.md` |
 | Worker runtime | exits 2 in production; development pipeline only | `apps/worker` |
 | Bounds, moderation, recovery budget | none; a Unit can be held forever | |
-| Page policy | no report endpoint, HSTS without subdomains, the prerendered 404's scripts with no nonce, no policy on `/_next/` and `/favicon.ico`, no `upgrade-insecure-requests` (*the 404 rendered per request, its scripts nonced, and the API policy on `/_next/` and `/favicon.ico` from a build, since PT-7c1, ADR-0188; a report endpoint logging only categories since PT-7c2, ADR-0189, which nothing reports to until PT-7c3*) | `apps/web/src/lib/security-headers.ts`, `TODO.md` |
+| Page policy | no report endpoint, HSTS without subdomains, the prerendered 404's scripts with no nonce, no policy on `/_next/` and `/favicon.ico`, no `upgrade-insecure-requests` (*the 404 rendered per request, its scripts nonced, and the API policy on `/_next/` and `/favicon.ico` from a build, since PT-7c1, ADR-0188; a report endpoint logging only categories since PT-7c2, ADR-0189, which nothing reports to until PT-7c3; both page policies report to it since PT-7c3*) | `apps/web/src/lib/security-headers.ts`, `TODO.md` |
 
 ## Order
 

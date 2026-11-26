@@ -898,9 +898,12 @@ describe("the production-mode browser", () => {
     // One error no catch takes, after the outage and before the report, which requires its two lines (ADR-0187).
     const names = job.steps.map((s) => s.fields.get("name"));
     const uncaught = "Answer one error no catch takes";
-    expect(names.slice(names.indexOf(uncaught) - 1, names.indexOf(uncaught) + 2)).toEqual([
+    // Then the page policy reports, whose two lines the report requires too (PT-7c3).
+    const reports = "Post page policy reports";
+    expect(names.slice(names.indexOf(uncaught) - 1, names.indexOf(uncaught) + 3)).toEqual([
       "Stop the database, then start it again",
       uncaught,
+      reports,
       "Report the server's log",
     ]);
     expect([step(uncaught)?.fields.get("timeout-minutes"), ...run(uncaught)]).toEqual([
@@ -911,6 +914,42 @@ describe("the production-mode browser", () => {
         'https://app.rd11.test:8443/api/auth/login)"',
       'echo "$got"',
       "test \"$got\" = 500",
+    ]);
+    // One report of each kind from the sign-in page, one from another origin's page that must write no line (B1's
+    // check), one too large; this run's mark listed, so the report exits 2 if it is logged.
+    expect([step(reports)?.fields.get("timeout-minutes"), ...run(reports)]).toEqual([
+      "2",
+      "umask 077",
+      'dir="$RUNNER_TEMP/rd11"',
+      'mark="rd11-report-$(openssl rand -hex 8)"',
+      'echo "$mark" >> "$dir/all-values"',
+      "app=https://app.rd11.test:8443",
+      "uri() {",
+      'jq -nc --arg m "$mark" --arg o "$1" --arg b "$2" --arg pad "$3" \'{"csp-report": {"document-uri":',
+      '"\\($o)/login?run=\\($m)", referrer: "\\($o)/reset-password?token=\\($m)", "blocked-uri": $b,',
+      '"effective-directive": "script-src-elem", "original-policy": "script-src nonce-\\($m)",',
+      'disposition: "enforce", "source-file": "\\($o)/login?run=\\($m)", "status-code": 200,',
+      '"script-sample": $pad}}\'',
+      "}",
+      'uri "$app" inline "" > "$dir/uri.json"',
+      'uri https://elsewhere.rd11.test "$app/api/storage/download?token=$mark" "" > "$dir/elsewhere.json"',
+      "pad=\"$(head -c 17000 /dev/zero | tr '\\0' a)\"",
+      'uri "$app" "$app/api/storage/download?token=$mark" "$pad" > "$dir/large.json"',
+      'jq -nc --arg m "$mark" --arg o "$app" \'[{type: "csp-violation", age: 0, url: "\\($o)/login?run=\\($m)",',
+      'user_agent: "rd11 \\($m)", body: {documentURL: "\\($o)/login?run=\\($m)", blockedURL: "inline",',
+      'referrer: "\\($o)/reset-password?token=\\($m)", effectiveDirective: "script-src-elem",',
+      'disposition: "enforce", originalPolicy: "script-src nonce-\\($m)", sourceFile: "\\($o)/login?run=\\($m)",',
+      'statusCode: 200}}]\' > "$dir/to.json"',
+      "post() {",
+      "got=\"$(curl -sS --max-time 20 --cacert \"$dir/ca.pem\" -o /dev/null -w '%{http_code}' " +
+        '-H "Origin: $app" -H "Content-Type: $1" --data-binary @"$dir/$2" "$app/api/csp-report")"',
+      'echo "$2 answers $got, $3 expected"',
+      'test "$got" = "$3"',
+      "}",
+      "post application/csp-report uri.json 204",
+      "post application/reports+json to.json 204",
+      "post application/csp-report elsewhere.json 204",
+      "post application/csp-report large.json 413",
     ]);
   });
 });

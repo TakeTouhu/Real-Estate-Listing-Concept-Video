@@ -15,7 +15,8 @@ const run = productionRun();
 const productionPagePolicy = (nonce: string): string =>
   `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; ` +
   "img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'; object-src 'none'; " +
-  "base-uri 'none'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'";
+  "base-uri 'none'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; report-uri /api/csp-report; " +
+  "report-to csp";
 
 /**
  * The production image as built, through the TLS front, against the job's
@@ -181,6 +182,7 @@ test("a customer signs up, stores photos, has a file quarantined, invites a coll
     const policy = asked.headers()["content-security-policy"] ?? "";
     const nonce = /'nonce-([^']+)'/.exec(policy)?.[1] ?? "";
     expect([asked.status(), policy]).toEqual([status, productionPagePolicy(nonce)]);
+    expect(asked.headers()["reporting-endpoints"]).toBe('csp="/api/csp-report"');
     const scripts = (await asked.text()).match(/<script\b[^>]*>/g) ?? [];
     expect(scripts.length).toBeGreaterThan(0);
     for (const script of scripts) expect(script).toContain(` nonce="${nonce}"`);

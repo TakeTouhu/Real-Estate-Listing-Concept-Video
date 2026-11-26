@@ -45,7 +45,13 @@ const RAW = [
   "    at node:internal/deps/undici/undici:5896:27",
   "    at successSteps (node:internal/deps/undici/undici:5940:27)",
 ];
-const CLEAN = [...START, LIMIT, PROBE, OUTAGE, ...UNCAUGHT];
+/** The report step's two accepted reports as the endpoint logs them (PT-7c3): one line per mechanism. */
+const reported = (mechanism: string, fields: Record<string, unknown> = {}): string =>
+  JSON.stringify({ severity: "INFO", time: TIME, message: "Browsers reported page policy violations",
+    component: "csp-report", dropped: 0, violations: [{ mechanism, page: "/login", directive: "script-src-elem",
+      blocked: "inline", disposition: "enforce", source: "other", count: 1, total: 1, ...fields }] });
+const REPORTED = [reported("report-uri"), reported("report-to")];
+const CLEAN = [...START, LIMIT, PROBE, OUTAGE, ...UNCAUGHT, ...REPORTED];
 
 function report(lines: string[], values?: string[]) {
   const log = join(folder, "web.log");
@@ -75,7 +81,7 @@ describe("the production-mode log report", () => {
 
   it("accepts readiness's probe answering P1017 too, as CI's first run read it before P1001", () => {
     const closed = PROBE.replace("P1001", "P1017");
-    const { status, out } = report([...START, LIMIT, closed, OUTAGE, PROBE, ...UNCAUGHT]);
+    const { status, out } = report([...START, LIMIT, closed, OUTAGE, PROBE, ...UNCAUGHT, ...REPORTED]);
     expect(status).toBe(0);
     expect(out).toContain("| WARNING | readiness | P1017 |  |  |  |  | 1 |");
   });
@@ -96,7 +102,7 @@ describe("the production-mode log report", () => {
     ["a lower-case severity", [...CLEAN, json({ severity: "warning", component: "request" })]],
     ["the old level field alone", [...CLEAN, json({ level: "info", component: "request" })]],
     ["no component", [...CLEAN, json({ severity: "INFO", message: "x" })]],
-    ["no outage line", [...START, LIMIT, PROBE, ...UNCAUGHT]],
+    ["no outage line", [...START, LIMIT, PROBE, ...UNCAUGHT, ...REPORTED]],
     ["two outage lines", [...CLEAN, OUTAGE]],
     ["another error's print", [...CLEAN, PRINTED.replace("TypeError", "PrismaClientInitializationError")]],
     ["another route's uncaught error", [...CLEAN, ANSWERED.replace("/api/auth/login", "/api/auth/register")]],
@@ -115,12 +121,17 @@ describe("the production-mode log report", () => {
     ["the pair twice", [...CLEAN, ...UNCAUGHT], ["2 console lines", "2 request lines"], []],
     ["the print twice", [...CLEAN, PRINTED], ["2 console lines"], ["request lines"]],
     ["the request line twice", [...CLEAN, ANSWERED], ["2 request lines"], ["console lines"]],
-    ["the print alone", [...START, LIMIT, PROBE, OUTAGE, PRINTED], ["0 request lines"], ["console lines"]],
-    ["the request line alone", [...START, LIMIT, PROBE, OUTAGE, ANSWERED], ["0 console lines"], ["request lines"]],
-    ["neither", [...START, LIMIT, PROBE, OUTAGE], ["0 console lines", "0 request lines"], []],
+    ["the print alone", [...START, LIMIT, PROBE, OUTAGE, PRINTED, ...REPORTED], ["0 request lines"], ["console lines"]],
+    [
+      "the request line alone",
+      [...START, LIMIT, PROBE, OUTAGE, ANSWERED, ...REPORTED],
+      ["0 console lines"],
+      ["request lines"],
+    ],
+    ["neither", [...START, LIMIT, PROBE, OUTAGE, ...REPORTED], ["0 console lines", "0 request lines"], []],
     [
       "the raw print before PT-7b2",
-      [...START, LIMIT, PROBE, OUTAGE, ...RAW, ANSWERED],
+      [...START, LIMIT, PROBE, OUTAGE, ...RAW, ANSWERED, ...REPORTED],
       ["0 console lines", "raw"],
       ["request lines"],
     ],
@@ -135,6 +146,36 @@ describe("the production-mode log report", () => {
     expect(status).toBe(1);
     for (const text of named) expect(out).toContain(text);
     for (const text of unnamed) expect(out).not.toContain(text);
+  });
+
+  it("requires one line per report mechanism from the report step, and prints it by its seven fields", () => {
+    const { status, out } = report(CLEAN, ["rd11-report-0123"]);
+    expect(status).toBe(0);
+    expect(out).toContain("| INFO | csp-report |  |  |  |  |  | 2 |");
+  });
+
+  it.each([
+    ["no report-uri line", [...START, LIMIT, PROBE, OUTAGE, ...UNCAUGHT, reported("report-to")], ["0 report-uri"]],
+    ["no report line", [...START, LIMIT, PROBE, OUTAGE, ...UNCAUGHT], ["0 report-uri", "0 report-to"]],
+    ["the report-to line twice", [...CLEAN, reported("report-to")], ["2 report-to"]],
+    ["another page", [...CLEAN, reported("report-uri", { page: "(other)" })], ["a page policy report line"]],
+    ["a pattern for the sign-in page", [...START, LIMIT, PROBE, OUTAGE, ...UNCAUGHT, reported("report-to"),
+      reported("report-uri", { page: "/properties/[propertyId]" })], ["a page policy report line", "0 report-uri"]],
+    ["another blocked", [...CLEAN, reported("report-uri", { blocked: "external" })], ["a page policy report line"]],
+    ["a warning", [...CLEAN, reported("report-uri").replace('"INFO"', '"WARNING"')], ["a page policy report line"]],
+    ["two violations in a line", [...CLEAN, reported("report-uri").replace("}]}", "},{}]}")],
+      ["a page policy report line"]],
+    ["a dropped violation", [...START, LIMIT, PROBE, OUTAGE, ...UNCAUGHT, reported("report-to"),
+      reported("report-uri").replace('"dropped":0', '"dropped":1')], ["a page policy report line", "0 report-uri"]],
+  ])("fails on a page policy report log with %s, and says so", (_, lines, named) => {
+    const { status, out } = report(lines);
+    expect(status).toBe(1);
+    for (const text of named) expect(out).toContain(text);
+  });
+
+  it("stops with exit 2 on the report step's mark anywhere in the log", () => {
+    const leaked = reported("report-uri").replace('"/login"', '"/login?run=rd11-report-0123"');
+    expect(report([...CLEAN, leaked], ["rd11-report-0123"]).status).toBe(2);
   });
 
   it("prints a field that is not a plain word or route as (other)", () => {

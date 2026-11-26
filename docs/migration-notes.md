@@ -3773,3 +3773,22 @@ erroring-stream test and the route count in the relative-redirect
 guard (51 to 50) go; ADR-0189, `api-changes-pt-7c2.md`, and the PT-7c2
 lines of `API.md`, `SecurityCompliance.md`, `architecture.md`, the
 Roadmap, the part 2 gap analysis and `TODO.md` go.
+
+## PT-7c3 — The page policy reports to the endpoint
+
+**No migration** (no new ADR; ADR-0189's "Built in PT-7c3"); nothing
+deployed or pushed; no setting, dependency or image step changes.
+Browsers now post a refusal under the page policy to
+`POST /api/csp-report`: Chromium by `report-to` over `https`, other
+engines by `report-uri` *(inference for Firefox and Safari)*. Each
+accepted request may write one `INFO` line of component `csp-report`,
+now with the page's route pattern; `docs/SaaSOperations.md` has the
+query and how to read it. **Rolling back** is a revert: the two
+directives, the `Reporting-Endpoints` header and the `page` category
+go with their tests; the e2e spec, the shared
+`tests/e2e/support/dev-page-policy.ts` (its policy goes back into
+`security-headers.spec.ts`), the guard's one exception, the
+production-mode step, its pinned text and `log-report.mjs`'s required
+lines go; `api-changes-pt-7c3.md` and the PT-7c3 lines of the Roadmap,
+`API.md`, `SecurityCompliance.md`, `SaaSOperations.md`,
+`architecture.md`, the part 2 gap analysis and `TODO.md` go.

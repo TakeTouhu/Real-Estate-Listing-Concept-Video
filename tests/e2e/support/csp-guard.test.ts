@@ -16,6 +16,14 @@ const PRODUCTION_SPECS = readdirSync(PRODUCTION_DIRECTORY, { recursive: true, en
   .map((path) => path.split("\\").join("/"))
   .filter((path) => path.endsWith(".spec.ts") && !path.split("/").includes("node_modules"));
 
+/**
+ * The one spec without the guard, and why: it makes the policy refuse a script
+ * on purpose, to see the refusal reported (PT-7c3). Every other spec keeps it.
+ */
+const UNGUARDED: Readonly<Record<string, string>> = {
+  "csp-report.spec.ts": "a refusal is what it tests",
+};
+
 /** The guard's module as a spec at that path imports it. */
 function guardFrom(spec: string): string {
   const relative = posix.relative(posix.dirname(spec), "support/csp-guard");
@@ -56,11 +64,20 @@ describe("the browser test's Content Security Policy guard", () => {
 
   it("runs on every spec: each takes test from the guard, and only types from @playwright/test", () => {
     expect(SPECS.length).toBeGreaterThan(0);
-    for (const spec of SPECS) {
+    for (const spec of SPECS.filter((path) => UNGUARDED[path] === undefined)) {
       const source = readFileSync(new URL(spec, E2E_DIRECTORY), "utf8");
       const guard = escape(guardFrom(spec));
       expect(source, spec).toMatch(new RegExp(`^import \\{ expect, test \\} from (["'])${guard}\\1;?$`, "m"));
       expect(playwrightValueImports(source), spec).toEqual([]);
+    }
+  });
+
+  it("is left out of one spec alone, which takes test and expect from @playwright/test", () => {
+    expect(Object.keys(UNGUARDED)).toEqual(["csp-report.spec.ts"]);
+    for (const spec of Object.keys(UNGUARDED)) {
+      const source = readFileSync(new URL(spec, E2E_DIRECTORY), "utf8");
+      expect(playwrightValueImports(source), spec).toEqual(['import { expect, test } from "@playwright/test";']);
+      expect(source, spec).not.toMatch(/from ["'][^"']*csp-guard["']/);
     }
   });
 
