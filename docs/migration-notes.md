@@ -3558,3 +3558,10 @@ the guard's browser rules, `id`, `stop` and `start`, the CSP guard
 test's production specs, the parameters added to `owner.ts`
 (`pressVerify` with them) and `clamav.ts`, `api-changes-rd-11b.md`,
 and the `TODO.md` flip, amendments and items of RD-11b go.
+
+## RD-11c — the completion report
+
+**No migration**; documents only (`docs/production-readiness-completion.md`
+and `TODO.md` amendments). Nothing deployed or pushed; still 16 checks.
+**Rolling back:** remove the report, its pointers in the Roadmap and the
+gap analysis, and RD-11c's `TODO.md` amendments, flip and new item.
