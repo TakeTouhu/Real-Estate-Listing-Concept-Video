@@ -201,10 +201,12 @@ describe("what the start hook loads", () => {
       "instrumentation.ts",
       "lib/adapter-choice.ts",
       "lib/env.ts",
+      "lib/failure-log.ts",
       "lib/startup.ts",
     ]);
-    // The environment's schema: no storage, image, database or provider code.
-    expect([...packages]).toEqual(["@app/shared"]);
+    // The environment's schema and the dependency-free logger of `onRequestError` (ADR-0185):
+    // no storage, image, database or provider code.
+    expect([...packages].sort()).toEqual(["@app/observability", "@app/shared"]);
   });
 });
 

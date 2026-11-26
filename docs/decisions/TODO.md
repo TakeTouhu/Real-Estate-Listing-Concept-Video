@@ -2213,6 +2213,12 @@ into on 2026-11-17.
       `onRequestError` in `apps/web/src/instrumentation.ts` could add a
       JSON line but never remove the raw one, and must never take its
       `path`, which can hold a signed `?token=`, or its `headers`.
+      *Amended in PT-7b1: the JSON line exists. `onRequestError` writes
+      one `error` line, `"Next.js answered a request that failed"`, by
+      the method and the route's pattern, never the path or headers
+      (ADR-0185). The raw print stays, open for PT-7b2, as does any line
+      for a middleware error or an error outside a request, such as an
+      unhandled rejection. How Cloud Logging reads either is G1's.*
 - [x] **The logger's message, reserved keys and other URLs bypass
       `redact`.** `createLogger` writes `message` as given and lets a field
       overwrite `level`, `time` or `message`

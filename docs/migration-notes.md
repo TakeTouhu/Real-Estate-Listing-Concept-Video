@@ -3666,3 +3666,21 @@ new cases in `env.test.ts`, `startup.test.ts`, `bootstrap.test.ts` and
 `NODE_USE_SYSTEM_CA` entry in `BANNED_ENV`, and ADR-0184,
 `api-changes-pt-7a4.md` and the Roadmap, `architecture.md`,
 `.env.example` and `TODO.md` lines of PT-7a4 go.
+
+## PT-7b1 — A request error Next.js answers is logged as one JSON line
+
+**No migration** (ADR-0185); nothing deployed or pushed; still 8
+checks. The web server writes one more `ERROR` line of the component
+`request`, `"Next.js answered a request that failed"`, for each error
+no catch took that Next.js reports to `onRequestError`, answered
+500, or 200 for a payload request or a page whose shell was
+already streamed (ADR-0185); Next.js's raw print to stderr
+is unchanged. No setting is added or required. A log query that counts
+`"component":"request"` lines now also counts these; one that counts
+`"A request failed"` is unchanged. **Rolling back:** `instrumentation.ts`
+drops `onRequestError`, `failure-log.ts` drops
+`logUncaughtRequestFailure` and `uncaughtRequestFields`, their cases in
+`failure-log.test.ts` and `instrumentation.test.ts` go,
+`startup.test.ts` holds the hook to its earlier imports again, and
+ADR-0185, `api-changes-pt-7b1.md` and the Roadmap, `architecture.md`,
+`SaaSOperations.md` and `TODO.md` lines of PT-7b1 go.

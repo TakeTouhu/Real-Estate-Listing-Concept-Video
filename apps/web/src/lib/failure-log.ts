@@ -80,3 +80,88 @@ export function logRequestFailure(error: unknown, route: string, requestId: stri
   }
   return requestId;
 }
+
+/** The methods the app answers. A request's method is the client's to choose, so any other is `OTHER`. */
+const METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
+/** A route's pattern as Next.js names it, such as `/properties/[propertyId]`: never a path with a query. */
+const ROUTE_PATH = /^\/[\w./[\]()@-]{0,119}$/;
+/** The values Next.js 15.5 gives `routeType` and `renderSource` (`server/instrumentation/types.d.ts`). */
+const ROUTE_TYPES: ReadonlySet<string> = new Set(["render", "route", "action", "middleware"]);
+const RENDER_SOURCES: ReadonlySet<string> = new Set([
+  "react-server-components",
+  "react-server-components-payload",
+  "server-rendering",
+]);
+/** Next.js's hash of a server component's error, which its error page also sends: digits only. */
+const DIGEST = /^\d{1,20}$/;
+
+/** What Next.js's `onRequestError` is told of the route, as far as the line reads it. */
+export interface UncaughtRequestContext {
+  readonly routePath: string;
+  readonly routeType: string;
+  readonly renderSource?: string;
+}
+
+/** A value read from the error, or the fallback when reading it throws. */
+function safely<T>(read: () => T, fallback: T): T {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+}
+
+/** A value in the list, or `other`: the line never carries a value it has not checked. */
+function listed(values: ReadonlySet<string>, value: unknown): string {
+  return typeof value === "string" && values.has(value) ? value : "other";
+}
+
+/**
+ * The fields of an error no catch took, which Next.js reported to
+ * `onRequestError` (ADR-0185): the method and the route's pattern, the route's
+ * type and render source, the request's id, the error's name and code, its
+ * cause's name and a digest of digits. Never the request's path, which holds
+ * its query, nor its headers, nor the error's message, stack or object. A read
+ * of the context or the error that throws gives the field's fallback.
+ */
+export function uncaughtRequestFields(
+  error: unknown,
+  method: string,
+  context: UncaughtRequestContext,
+  requestId: string,
+): Record<string, string> {
+  const routePath = safely<unknown>(() => context.routePath, undefined);
+  const renderSource = safely<unknown>(() => context.renderSource, undefined);
+  const pattern = typeof routePath === "string" && ROUTE_PATH.test(routePath);
+  const causeName = safely(() => failureCauseName(error), undefined);
+  const digest = safely(() => (error as { readonly digest?: unknown } | null)?.digest, undefined);
+  return {
+    route: `${METHODS.has(method) ? method : "OTHER"} ${pattern ? routePath : "(other)"}`,
+    requestId,
+    errorName: safely(() => failureName(error), "UNNAMED"),
+    code: safely(() => failureCode(error), "UNEXPECTED"),
+    ...(causeName === undefined ? {} : { causeName }),
+    routeType: listed(ROUTE_TYPES, safely<unknown>(() => context.routeType, undefined)),
+    ...(renderSource === undefined ? {} : { renderSource: listed(RENDER_SOURCES, renderSource) }),
+    ...(typeof digest === "string" && DIGEST.test(digest) ? { digest } : {}),
+  };
+}
+
+/**
+ * Log an error that no catch took, as one `error` line of the component
+ * `request`, an `AppError` of 4xx included: whatever status Next.js answered,
+ * no catch knew the failure. Called by `onRequestError` in `instrumentation.ts`,
+ * after Next.js's own print. Waits on nothing and never throws.
+ */
+export function logUncaughtRequestFailure(
+  error: unknown,
+  method: string,
+  context: UncaughtRequestContext,
+  requestId: string = crypto.randomUUID(),
+): void {
+  try {
+    log().error("Next.js answered a request that failed", uncaughtRequestFields(error, method, context, requestId));
+  } catch {
+    // Next.js answers the same whether or not the line could be written.
+  }
+}

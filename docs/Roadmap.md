@@ -1647,6 +1647,19 @@ the image's Node.js by digest. Still open: reporting
 `NODE_EXTRA_CA_CERTS` at a production start, and `OPENSSL_MODULES`
 and `OPENSSL_ENGINES` (`TODO.md`).
 
+**PT-7b1 — A request error Next.js answers is logged as one JSON
+line** (ADR-0185, no migration): `instrumentation.ts` exports
+`onRequestError`, which in the Node.js runtime writes one `error` line
+of the component `request`, `"Next.js answered a request that
+failed"`, for every error no catch took, a 4xx `AppError` included: the
+method and the route's pattern, the route's type and render source,
+the error's name and code, its cause's name and a digest of digits;
+never the path, query, headers, message or stack
+(`docs/api-changes-pt-7b1.md`). Measured on the built standalone
+server for a route handler and a server component. Next.js's raw print
+stays, and the middleware and errors outside a request get no line;
+both are PT-7b2's. Not measured: how Cloud Logging reads the line (G1).
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
