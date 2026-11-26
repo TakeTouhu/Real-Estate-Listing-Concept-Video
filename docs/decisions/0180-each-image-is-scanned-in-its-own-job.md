@@ -176,24 +176,53 @@ for the product owner and the CTO (`TODO.md`, "Open in PT-6b").
 
 ## What was measured
 
-Filled from the first CI run before merge.
+The first CI run, on 2026-11-26 (run 45768707896, head `5117e63`),
+with the database of schema v6.1.10 built 2026-11-25 at 06:22Z:
+
+| | `web-image` | `worker-image` |
+| --- | --- | --- |
+| Packages in the SBOM | 422 | 485 |
+| Report rows | 240 | 2,273 |
+| Critical, high, medium | 0, 93, 81 | 29, 721, 1,250 |
+| Low, negligible, unknown | 11, 49, 6 | 86, 164, 23 |
+| Rows with a fixed version | 31 | 24 |
+| Rows Debian marks "won't fix" | 119 | 2,038 |
+| Gate rows: high, medium, low, unknown | 12, 17, 1, 1 | 10, 12, 1, 1 |
+| SBOM, database, scan steps | 10 s, 65 s, 6 s | 12 s, 48 s, 8 s |
+
+- The gate passed in both jobs, with no fixable critical finding;
+  nothing was suppressed (`ignore: []`).
+- Every run worked under `--user` and `--read-only` with only `/work`
+  writable. Debian rows carry CVE ids, npm rows GHSA ids.
+- The fixable rows of both images: `brace-expansion`, `glob`,
+  `ip-address`, `minimatch`, `pacote`, `picomatch`,
+  `postcss-selector-parser`, `sigstore` and `@sigstore/core`, which
+  are npm's own dependencies (*inference* from the names; the table
+  prints no location), and Debian's `libzstd1` 1.5.7+dfsg-1, fixed in
+  1.5.7+dfsg-1+deb13u1 (CVE-2026-124851, severity unknown).
+- The web image also lists `postcss` 8.4.31 (two high, two medium) and
+  `next` 15.5.28 (three medium, fixed in 15.5.29), both already in
+  `TODO.md`. A gate at `high` would fail on `postcss` today.
+- The worker image's 29 critical rows are all Debian packages marked
+  "won't fix", so the gate, which counts only fixable findings, does
+  not see them: CVE-2026-135736, CVE-2026-135743 and CVE-2026-75143 on
+  each of FFmpeg's nine packages (27 rows), CVE-2026-52490 on `libtiff6`
+  and CVE-2026-6653 on `libxml2`.
+- After the SBOM step the runner's disk was 42% used in `web-image` and
+  40% in `worker-image`, with 84 GB and 87 GB free. The database step
+  is the slow one, well inside its 8 minutes.
 
 Confirmed from the source at the pinned tags (Syft v1.57.2, Grype
-v0.122.1), not yet run: `cyclonedx-json@1.6` is accepted;
-`--show-suppressed` exists; the ignore keys `reason`, `type` and
-`location` exist; `db status` fails on a missing database or one older
-than the age limit; Grype gives its own errors code 1 and a finding at
-the `--fail-on` level code 2; the default database download limit is
-300 seconds, so the step allows 8 minutes.
+v0.122.1): `cyclonedx-json@1.6` is accepted; `--show-suppressed`
+exists; the ignore keys `reason`, `type` and `location` exist; `db
+status` fails on a missing database or one older than the age limit;
+Grype gives its own errors code 1 and a finding at the `--fail-on`
+level code 2; the default database download limit is 300 seconds, so
+the step allows 8 minutes.
 
-Not measured here, since nothing could be pulled: whether Syft and
-Grype run under `--user` and `--read-only` with only `/work` writable;
-the baseline per image at every severity, at critical and at high;
-whether finding ids come out as CVE or GHSA; whether Syft catalogues
-the `node` binary; where Syft places the base image's npm; each step's
-duration against the job's 30-minute limit, left unchanged, including
-the database's checksum on every scan run; the disk `worker-image`
-uses; and the database's size and download time.
+Not measured: whether Syft catalogues the `node` binary (no binary row
+has a finding); the path where Syft finds the base image's npm; and the
+database's size.
 
 ## Considered and not done
 
@@ -212,15 +241,16 @@ uses; and the database's size and download time.
 - **Uploading the SBOM.** Artifact storage on every commit, and an
   amendment to ADR-0175 Decision 1.
 - **Failing on `high` now.** `postcss` 8.4.31 would fail every run
-  until `next` drops its pin, if the web image carries it
-  (*inference*; not checked).
+  until `next` drops its pin; the first run lists it as two high
+  findings in the web image.
 - **Scanning the lockfile.** `zod` is bundled into Next.js's server
   chunks, so an image scan cannot see it. That is a later milestone,
   after `zod` 4.
 
 ## Consequences
 
-- Each image job takes longer; by how much, the first run shows.
+- Each image job takes about 70 to 80 seconds longer, most of it the
+  database download (first run).
 - CI can turn red with no code change: database drift, a database
   older than 120 hours, a Debian security fix on the frozen base, a
   Node.js or npm release.

@@ -2171,10 +2171,18 @@ into on 2026-11-17.
       no second source.
 - [ ] **No timed run.** A new advisory is first seen at the next push
       to `main` or pull request; nothing scans `main` between them.
-- [ ] **Record the baseline, then decide on `high`.** The first CI run
-      lists every finding per image; it is recorded in ADR-0180 before
-      merge. Moving the gate to `high` is a later reviewed PR, once
-      `postcss` 8.4.31, which `next` pins, is settled.
+- [ ] **Decide on `high`.** The first run is recorded in ADR-0180
+      ("What was measured"). Moving the gate to `high` is a later
+      reviewed PR, once `postcss` 8.4.31, which `next` pins, is
+      settled; it would also fail on npm's own dependencies in both
+      images (`brace-expansion`, `pacote`, `sigstore` and others), so
+      the move first removes npm from the images or accepts them.
+- [ ] **Critical findings Debian will not fix.** The worker image holds
+      29 critical rows the gate does not count, since none has a fix:
+      three CVEs on each of FFmpeg's nine packages, one on `libtiff6`
+      and one on `libxml2` (ADR-0180, "What was measured"). Whether
+      they reach code the worker runs, and whether FFmpeg should come
+      from elsewhere, is not assessed.
 - [ ] **Bundled dependencies are invisible to the image scan.** `zod`
       is bundled into Next.js's server chunks, so only `pnpm audit
       --prod` sees it; scanning the lockfile is a later milestone, after
@@ -2252,7 +2260,8 @@ into on 2026-11-17.
       keeping the SBOM with the deployment; who may accept a critical
       finding (a product owner and CTO question, not decided here); a
       database outage or a stale database, which turns CI red; no timed
-      run; and the baseline and the move to `high` ("Open in PT-6b").*
+      run; the move to `high`; and the critical findings Debian will
+      not fix in the worker image ("Open in PT-6b").*
 - [ ] **Act on the production dependencies' advisories.** `pnpm audit
       --prod` on 2026-11-25: 22, three critical in `next` 15.5.22, high
       ones in `sharp` 0.33.5 (fixed from 0.35.5) and `zod` 3.25.76
