@@ -31,7 +31,7 @@ recovery budget, defect records, operator recovery and cost inputs.
 
 | Area | State on `460931a` | Where |
 | --- | --- | --- |
-| Upload with no plan | allowed | `apps/web/src/lib/asset-service.ts:82-139` |
+| Upload with no plan | allowed | `packages/domain/src/property/asset-service.ts:82-139` |
 | Storage quota | no catalog field, no usage figure, no declared size kept, the original's size lost | |
 | Production video start | not built; the start route answers "not found" outside the fake kit | `apps/web/src/lib/generation-start.ts:19-25` |
 | Infrastructure code, deploy | none; CI's image guard bans push and secrets | `tests/container-images.test.ts` |

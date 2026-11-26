@@ -16,7 +16,7 @@ function head(): string[] {
 }
 
 describe("the CI workflow", () => {
-  it("runs once per commit: main's on push, a pull request's on pull_request, a newer commit cancelling its run", () => {
+  it("runs once per commit: main's on push, a pull request's on pull_request, a newer one cancelling", () => {
     expect(LINES.indexOf("jobs:")).toBeGreaterThan(0);
     expect(head()).toEqual([
       "name: CI",
@@ -39,9 +39,9 @@ describe("the CI workflow", () => {
     const pinned = LINES.map((line) => /^\s+PG_IMAGE: (\S+)$/.exec(line)?.[1]).filter(Boolean);
     expect(pinned).toHaveLength(1);
     expect(pinned[0]).toMatch(/^postgres:16\.\d+-trixie@sha256:[0-9a-f]{64}$/);
-    const services = LINES.map((line) => /^\s+image: (postgres\S*)$/.exec(line)?.[1]).filter(Boolean);
-    expect(services).toEqual([pinned[0], pinned[0]]);
-    expect(LINES.filter((line) => /\bpostgres:\d/.test(line)).map((line) => line.trim())).toEqual([
+    // Any image or PG_IMAGE line naming PostgreSQL, quoted or with a registry; never a line holding a credential.
+    const named = LINES.filter((line) => /^\s*(image|PG_IMAGE):\s*["']?\S*postgres/i.test(line));
+    expect(named.map((line) => line.trim())).toEqual([
       `image: ${pinned[0]}`,
       `image: ${pinned[0]}`,
       `PG_IMAGE: ${pinned[0]}`,

@@ -57,4 +57,9 @@ credential.
 - The pull request run tests GitHub's merge of the head into its base, not
   the head alone; the push run on `main` tests the merged commit itself.
 - A branch pushed without a pull request gets no CI until one is opened.
+- GitHub runs no `pull_request` workflow while a pull request has a merge
+  conflict, since it cannot build the merge; such a pull request shows no
+  fresh checks until the conflict is resolved.
+- Re-running an older commit's run puts it back in its pull request's
+  group, so it cancels a newer commit's run still in progress.
 - A PostgreSQL minor upgrade is one reviewed change, never a silent move.
