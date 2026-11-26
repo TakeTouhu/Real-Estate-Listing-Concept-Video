@@ -27,8 +27,9 @@ tree of #218's earlier head `0ace998e` and checked again on `c9444fc`
 (see "Test results"). No ADR, no migration, no code: documents only.
 RD-11c adds this file; five `TODO.md` amendments, three for the
 decisions under "Remaining work" (one with a checkbox flip) and two
-recording CI's run on #218, and one new item, "Open in RD-11c"; a pointer in `docs/Roadmap.md` and in the gap analysis's RD-11
-row; and its section in `docs/migration-notes.md`.
+recording CI's run on #218, and one new item, "Open in RD-11c"; a
+pointer in `docs/Roadmap.md` and in the gap analysis's RD-11 row; and
+its section in `docs/migration-notes.md`.
 
 ## RD-11: the production-mode test
 
