@@ -11,7 +11,8 @@ const REPO = join(__dirname, "..", "..");
 const SEEDS = join(__dirname, "seed");
 const MIGRATIONS = join(REPO, "packages", "database", "prisma", "migrations");
 
-/** Not yet seeded: the media, storyboard and generation tables come in PT-8b2. */
+/** Not yet seeded: the property, media, storyboard, generation and FX tables, Unit reservations and allocations
+ * included, come in PT-8b2. */
 const NOT_YET_SEEDED_PT_8B2 = [
   "properties",
   "media_assets",
@@ -71,9 +72,9 @@ describe("the upgrade seeds", () => {
 
   it("seeds every table of schema.prisma, or lists it as not yet seeded", () => {
     const tables = schemaTables();
-    expect(tables.length).toBe(41);
     const missing = tables.filter((table) => !seeded().has(table) && !NOT_YET_SEEDED_PT_8B2.includes(table));
     expect(missing).toEqual([]);
+    expect(tables.length).toBeGreaterThanOrEqual(41);
   });
 
   it("lists no table that a seed already fills, and none that schema.prisma lacks", () => {
@@ -89,10 +90,27 @@ describe("the upgrade seeds", () => {
     expect([...checked].sort()).toEqual([...seeded()].sort());
   });
 
-  it("holds data only: no DROP, TRUNCATE, ALTER or CREATE in a seed or the check", () => {
+  it("holds data only: INSERT statements in a seed, one DO block in the check, and no psql command", () => {
+    // A psql command (\set, \c, \!, anywhere on a line) or a transaction, session or COPY statement could undo
+    // `psql -1 -v ON_ERROR_STOP=1`, reach another database, or run a program with the job's environment.
+    const words = "DROP|TRUNCATE|ALTER|CREATE|COPY|PROGRAM|COMMIT|ROLLBACK|SAVEPOINT|SET|RESET|GRANT|REVOKE|CALL";
+    const banned = new RegExp(`\\b(${words})\\b`, "gi");
     for (const file of [...seedFiles(), "check.sql"]) {
-      const hits = statements(readFileSync(join(SEEDS, file), "utf8")).match(/\b(DROP|TRUNCATE|ALTER|CREATE)\b/gi);
-      expect([file, hits ?? []]).toEqual([file, []]);
+      const sql = readFileSync(join(SEEDS, file), "utf8");
+      const psql = statements(sql)
+        .split("\n")
+        .filter((line) => line.includes("\\"));
+      expect([file, psql, statements(sql).match(banned) ?? []]).toEqual([file, [], []]);
     }
+    for (const file of seedFiles()) {
+      const others = statements(readFileSync(join(SEEDS, file), "utf8"))
+        .split(";")
+        .map((statement) => statement.trim())
+        .filter((statement) => statement !== "" && !/^INSERT\s+INTO\s/i.test(statement));
+      expect([file, others]).toEqual([file, []]);
+    }
+    const check = statements(readFileSync(join(SEEDS, "check.sql"), "utf8")).trim();
+    expect(check).toMatch(/^DO \$check\$\n[\s\S]*\n\$check\$;$/);
+    expect(check.split("$check$").length).toBe(3);
   });
 });

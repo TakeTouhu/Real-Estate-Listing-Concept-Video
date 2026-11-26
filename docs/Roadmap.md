@@ -1764,12 +1764,15 @@ Still 8 checks.
 from a folder holding only them, seeds it, applies the head's set, and
 fails if a seeded row or value is lost, a checksum differs, or
 `pg_dump --schema-only` differs from the fresh database
-(`docs/api-changes-pt-8b1.md`). The seed fills the identity,
-membership, billing, Unit, invitation, MFA, rate-limit and audit
-tables, adversarially but validly; a coverage test lists the other 21
-for PT-8b2. Rehearsed by hand: a `NOT NULL` column without a default
-and a unique index over shared values each fail it, and pass on the
-fresh apply. Still 8 checks.
+(`docs/api-changes-pt-8b1.md`). The seed sits at the last migration,
+so today the head's deploy applies nothing after it (measured: "No
+pending migrations to apply"): the step guards migrations from 36 on,
+and 1–35 are not run against seeded rows. The seed fills the identity,
+membership, billing, Unit entitlement, add-on and purchase, invitation,
+MFA, rate-limit and audit tables, adversarially but validly; a coverage
+test lists the other 21 for PT-8b2. Rehearsed by hand: a `NOT NULL`
+column without a default and a unique index over shared values each
+fail it, and pass on the fresh apply. Still 8 checks.
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —

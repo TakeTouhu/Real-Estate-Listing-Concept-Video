@@ -30,7 +30,9 @@ if [[ ! "$target" =~ ^[a-z_][a-z0-9_]{0,62}$ ]] || [ "$target" = "$fresh" ]; the
   echo "the upgrade database must be a plain lower-case name other than PGDATABASE's" >&2
   exit 2
 fi
-if [ -z "${UPGRADE_DATABASE_URL:-}" ]; then
+# The URL is matched, never printed: its path, before any query, must end in the upgrade database's name.
+names_target="^[^?]*/${target}([?]|\$)"
+if [ -z "${UPGRADE_DATABASE_URL:-}" ] || [[ ! "$UPGRADE_DATABASE_URL" =~ $names_target ]]; then
   echo "UPGRADE_DATABASE_URL must name the upgrade database" >&2
   exit 2
 fi
@@ -73,8 +75,8 @@ while IFS= read -r seed; do
   deploy "$work/$level/schema.prisma"
   sql -1 -f "$seeds/$seed"
   count=$((count + 1))
-done <<< "$(find "$seeds" -mindepth 1 -maxdepth 1 -type f -regextype posix-extended -regex '.*/[0-9]{14}\.sql' \
-  -exec basename {} \; | sort)"
+done <<< "$(find "$seeds" -mindepth 1 -maxdepth 1 -type f -exec basename {} \; \
+  | { grep -E '^[0-9]{14}\.sql$' || true; } | sort)"
 
 echo "Applying the head's migrations to the seeded database:"
 deploy "$prisma/schema.prisma"

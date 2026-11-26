@@ -325,7 +325,8 @@ Storage emulator tests*), that suite runs on the emulator too, as the
 
 ### Migration checks
 
-The `database` job also runs two scripts (ADR-0191). The append-only
+The `database` job also runs three scripts (ADR-0191; the third since
+PT-8b1). The append-only
 check needs no database: it compares a parent commit's
 `packages/database/prisma` with your tree's, here `origin/main`'s.
 
@@ -365,10 +366,10 @@ committed but not applied, then exits 1. Never set
 The seeded upgrade (PT-8b1) reads that same freshly migrated database
 and creates a second one, here `revt_upgrade`, which must not exist yet.
 Prisma needs that second database's address as `UPGRADE_DATABASE_URL`;
-the script hands it to each deploy as `DATABASE_URL` and never prints
-it. Keep it in your shell's environment or a sourced file, never on the
-command line. It needs `pg_dump` of the server's major version or
-newer:
+the script refuses one whose path names another database, hands it to
+each deploy as `DATABASE_URL` and never prints it. Keep it in your
+shell's environment or a sourced file, never on the command line. It
+needs `pg_dump` of the server's major version or newer:
 
 ```bash
 export PGHOST=localhost PGUSER=revt PGDATABASE=revt_test

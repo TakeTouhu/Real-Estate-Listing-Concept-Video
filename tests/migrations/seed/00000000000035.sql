@@ -1,11 +1,12 @@
 -- Seed at migration 00000000000035_rate_limit_counters (ADR-0191 Decision 4, PT-8b1). Data only: upgrade.sh applies
 -- the migrations up to this level, runs this file in one transaction, then applies the head's remaining set.
 --
--- Adversarial but valid here: every enum value of a seeded column, NULL and a value in every nullable column, rows
--- sharing what a later uniqueness rule could refuse (addresses differing only in case, one address PENDING and EXPIRED,
--- the same reference, key or name in two organizations), and the lengths the CHECKs bound. Every value is fake:
--- example.com addresses, hex built from 5eed35, no real hash or secret. Every key holds seed35, or 5eed35 for hex, so
--- check.sql finds these rows. The media, storyboard and generation tables come in PT-8b2.
+-- Adversarial but valid here: every enum value of a seeded column and every permission the CHECKs allow, NULL and a
+-- value in every nullable column, rows sharing what a later uniqueness rule could refuse (addresses differing only in
+-- case, one address PENDING and EXPIRED, the same reference, key or name in two organizations), and the lengths the
+-- CHECKs bound. Every value is fake: example.com addresses, hex built from 5eed35, no real hash or secret. Every key
+-- holds seed35, or 5eed35 for hex, so check.sql finds these rows. The property, media, storyboard, generation and FX
+-- tables, Unit reservations and allocations included, come in PT-8b2.
 
 INSERT INTO organizations (id, name, slug, status, "mfaRequired", "createdAt", "updatedAt") VALUES
   ('org_seed35_a', 'Seed Org A', 'seed35-a', 'ACTIVE', false, '2026-01-01', '2026-01-01'),
@@ -66,6 +67,15 @@ INSERT INTO member_permission_grants ("organizationId", "userId", permission, "g
   ('org_seed35_a', 'usr_seed35_creator', 'disclosure.none', 'usr_seed35_owner', '2026-01-01'),
   ('org_seed35_a', 'usr_seed35_manager', 'billing.view', 'usr_seed35_owner', '2026-01-01');
 
+-- Every permission migration 20's CHECK allows, granted to one member.
+INSERT INTO member_permission_grants ("organizationId", "userId", permission, "grantedByUserId", "grantedAt")
+  SELECT 'org_seed35_a', 'usr_seed35_admin', p, 'usr_seed35_owner', '2026-01-01' FROM unnest(ARRAY[
+    'organization.view', 'organization.manage', 'member.view', 'member.manage', 'group.view', 'group.manage',
+    'permission.manage', 'property.view', 'property.create', 'property.edit', 'property.delete', 'asset.upload',
+    'asset.delete', 'analysis.review', 'video.view', 'video.generate', 'video.regenerate', 'video.download',
+    'disclosure.change', 'disclosure.none', 'unit.consume', 'unit.view', 'billing.view', 'billing.manage',
+    'audit.view', 'audit.export']) AS p;
+
 -- Names differing only in case, one name in two organizations, and the 1- and 100-character bounds.
 INSERT INTO groups (id, "organizationId", name, "createdByUserId", "createdAt", "updatedAt") VALUES
   ('grp_seed35_a1', 'org_seed35_a', 'Sales', 'usr_seed35_owner', '2026-01-01', '2026-01-01'),
@@ -84,6 +94,15 @@ INSERT INTO group_permissions ("groupId", "organizationId", permission, "granted
   ('grp_seed35_a1', 'org_seed35_a', 'video.generate', 'usr_seed35_owner', '2026-01-01'),
   ('grp_seed35_a2', 'org_seed35_a', 'video.generate', 'usr_seed35_owner', '2026-01-01'),
   ('grp_seed35_a1', 'org_seed35_a', 'asset.upload', 'usr_seed35_owner', '2026-01-01');
+
+-- Every permission migration 22's CHECK allows, granted to one group.
+INSERT INTO group_permissions ("groupId", "organizationId", permission, "grantedByUserId", "grantedAt")
+  SELECT 'grp_seed35_a3', 'org_seed35_a', p, 'usr_seed35_owner', '2026-01-01' FROM unnest(ARRAY[
+    'organization.view', 'organization.manage', 'member.view', 'member.manage', 'group.view', 'group.manage',
+    'permission.manage', 'property.view', 'property.create', 'property.edit', 'property.delete', 'asset.upload',
+    'asset.delete', 'analysis.review', 'video.view', 'video.generate', 'video.regenerate', 'video.download',
+    'disclosure.change', 'unit.consume', 'unit.view', 'billing.view', 'billing.manage', 'audit.view',
+    'audit.export']) AS p;
 
 -- One address in every state, a second PENDING one differing only in case, and the address PENDING elsewhere.
 INSERT INTO invitations (id, "organizationId", email, role, "tokenHash", status, "invitedByUserId", "expiresAt",
@@ -117,13 +136,14 @@ INSERT INTO organization_subscriptions (id, "organizationId", "planKey", channel
   ('sub_seed35_b', 'org_seed35_b', 'PREMIUM', 'SALES_ASSISTED', '2026-01-01', 'seed35-contract', '2026-01-01'),
   ('sub_seed35_c', 'org_seed35_c', 'ENTERPRISE', 'SALES_ASSISTED', '2026-01-01', 'x', '2026-01-01');
 
--- Adjacent periods of one organization; one cycle key in three; HQ units equal to base units, and zero.
+-- Adjacent periods of one organization; one cycle key in three, and the 1-character key; HQ units equal to base
+-- units, and zero.
 INSERT INTO unit_entitlement_periods (id, "organizationId", "billingCycleKey", "planKey", "baseUnits",
   "includedHighQualityUnits", "highQualityAddOnAvailable", "startsAt", "endsAt", "commercialReference", "createdAt")
   VALUES
   ('per_seed35_a1', 'org_seed35_a', 'seed35-2026-01', 'STANDARD', 0, 0, false, '2026-01-01', '2026-02-01', NULL,
    '2026-01-01'),
-  ('per_seed35_a2', 'org_seed35_a', 'seed35-2026-02', 'STANDARD', 30, 30, true, '2026-02-01', '2026-03-01', 'x',
+  ('per_seed35_a2', 'org_seed35_a', 'x', 'STANDARD', 30, 30, true, '2026-02-01', '2026-03-01', 'x',
    '2026-01-01'),
   ('per_seed35_b1', 'org_seed35_b', 'seed35-2026-01', 'PREMIUM', 60, 10, true, '2026-01-01', '2026-02-01',
    'seed35-contract', '2026-01-01'),

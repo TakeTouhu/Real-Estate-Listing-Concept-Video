@@ -41,9 +41,17 @@ database>`:
    in this milestone)*. It refuses a pg_dump older than the server's
    major version.
 
+The seed sits at migration 35, the last one, so today the head's
+deploy applies nothing after it (measured: "No pending migrations to
+apply"). The step guards migrations from 36 on; migrations 1–35 are not
+run against seeded rows.
+
 psql and pg_dump reach the server only through libpq's variables.
 Prisma gets `UPGRADE_DATABASE_URL` as `DATABASE_URL` for each deploy
-command alone. Neither address nor password is an argument or printed.
+command alone; the script refuses, before any deploy, a URL whose path
+does not end in `<upgrade database>`. Neither the URL nor the password
+is an argument or printed; Prisma and psql may print host, port and
+database name.
 
 The runner should have pg_dump 16.16 *(inference, not yet observed in
 a run)*: the `ubuntu-24.04` image installs PostgreSQL 16.16 from the
@@ -59,12 +67,13 @@ migration: `organizations`, `users`, `credentials`,
 `organization_subscriptions`, `unit_entitlement_periods`,
 `unit_add_on_blocks`, `unit_purchases`, `unit_purchase_cancellations`
 and `rate_limit_counters`. It holds every enum value of their enum
-columns, `NULL` and a value in every nullable column, rows sharing what
-a later uniqueness rule could refuse, and the lengths their CHECKs
-bound. Values are fake: `example.com` addresses and hex built from
-`5eed35`. `check.sql` compares each table's seeded row count and an MD5
-of its seeded columns; allowed changes are listed there with the
-migration that makes them (none yet).
+columns, every permission the CHECKs of migrations 20 and 22 allow,
+`NULL` and a value in every nullable column, rows sharing what a later
+uniqueness rule could refuse, and the lengths their CHECKs bound.
+Values are fake: `example.com` addresses and hex built from `5eed35`.
+`check.sql` compares each table's seeded row count and an MD5 of its
+seeded columns; allowed changes are listed there with the migration
+that makes them (none yet).
 
 The limit, from ADR-0191: data the level's constraints already forbid
 cannot be seeded, so a failure that needs it is not caught.
@@ -72,10 +81,13 @@ cannot be seeded, so a failure that needs it is not caught.
 ## Tests
 
 - `seed-coverage.test.ts`, offline: every table of `schema.prisma` is
-  seeded or on the PT-8b2 list (the media, storyboard and generation
-  tables, 21), never both; each seed level names one migration;
-  `check.sql` checks exactly the seeded tables; no `DROP`, `TRUNCATE`,
-  `ALTER` or `CREATE` in a seed or the check.
+  seeded or on the PT-8b2 list (the property, media, storyboard,
+  generation and FX tables, Unit reservations and allocations included,
+  21), never both; each seed level names one migration; `check.sql`
+  checks exactly the seeded tables; a seed holds only `INSERT`
+  statements and the check one `DO` block; neither holds a psql
+  command, nor `DROP`, `TRUNCATE`, `ALTER`, `CREATE`, `COPY`, a
+  transaction or session statement, `GRANT`, `REVOKE` or `CALL`.
 - `workflow.test.ts`: the step's place, command and variable, and the
   seed run with `ON_ERROR_STOP` before the head's full deploy.
 
