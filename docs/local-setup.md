@@ -337,6 +337,8 @@ images over them, in temporary directories they remove. Without FFmpeg the
 run fails: the suites cannot make their inputs, so Vitest marks each file
 failed and reports its tests as skipped. CI runs them in the `media` job on
 Ubuntu 24.04, whose FFmpeg 6.1.1 their tolerances were measured with.
+Since RD-10c (ADR-0176), CI's `worker-image` job also runs them on the
+worker image's Debian 13 FFmpeg (section 7).
 
 ### Cloud Storage emulator tests
 
@@ -485,6 +487,41 @@ docker exec <container> node -e \
 `pnpm build` now also writes `apps/web/.next/standalone`, which the
 image copies; `pnpm --filter @app/web start` (`next start`) only warns
 about it, and nothing runs it.
+
+## 7. Build and check the worker's image (optional)
+
+The worker's image (ADR-0176) carries Debian 13's FFmpeg and the six
+disclosure images, and no worker code. It needs what section 6 needs.
+Its `media-test` stage runs the media suites on the image's own FFmpeg,
+as CI's `worker-image` job does, with no network:
+
+```bash
+docker buildx build --load --platform linux/amd64 \
+  -f apps/worker/Dockerfile --target media-test -t vtavision-worker-media:local .
+docker run --rm --network none vtavision-worker-media:local
+docker buildx build --load --platform linux/amd64 \
+  -f apps/worker/Dockerfile -t vtavision-worker:local .
+docker run --rm --network none --read-only vtavision-worker:local worker-image-check
+docker run --rm --network none --read-only vtavision-worker:local   # exit code 2
+```
+
+`worker-image-check` refuses an FFmpeg of another series than `7.1`,
+one without `libx264`, an image whose SHA-256 differs from
+`apps/worker/image/disclosure-layers.sha256`, or a file the list does
+not name. That list must equal `DISCLOSURE_LAYER_ASSETS`, which
+`pnpm test` checks. Section 4e never overwrites the committed images:
+a new look is a new layer version, which changes
+`DISCLOSURE_LAYER_ASSETS`, and the list, the Dockerfile's
+`layer-v1-*.png` line and the guard test change with it. The default
+command only refuses: the worker has no production runtime until
+part 2.
+
+The image copies `apps/worker/image/check.sh` with the mode the
+checkout gave it, so build from a checkout that keeps Git's executable
+bit (`100755`). On one that drops it (Windows, or a copy or file
+system that loses modes), the base's entrypoint hands the check to
+`node`, which fails with "Cannot find module" instead of a refusal; the
+guard test fails there too.
 
 ## Notes
 

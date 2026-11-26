@@ -162,6 +162,8 @@ describe("the disclosure's argument vector", () => {
       "-map_chapters",
       "-1",
       "-an",
+      "-r",
+      "30/1",
       "-c:v",
       "libx264",
       "-preset",

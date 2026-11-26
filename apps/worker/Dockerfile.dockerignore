@@ -1,0 +1,28 @@
+# What `docker buildx build -f apps/worker/Dockerfile .` leaves out of its
+# context (ADR-0175 Decision 3, ADR-0176). The media suites' stage needs
+# `tests` and the workspace; the image itself copies only `assets/disclosure`
+# and `apps/worker/image`. BuildKit reads this file, not a root
+# .dockerignore. Patterns match from the context's root, so `**/` is what
+# reaches every depth; no line may start with `!`.
+**/.git
+.github
+**/.claude
+docs
+.pnpm-store
+**/dist
+**/out
+**/.env
+**/.env.*
+**/node_modules
+**/.next
+**/coverage
+**/.vitest
+**/playwright-report
+**/test-results
+**/.e2e
+**/.dev-storage
+**/.dev-outbox
+**/.dev-provider
+**/*.tsbuildinfo
+**/next-env.d.ts
+**/*.log

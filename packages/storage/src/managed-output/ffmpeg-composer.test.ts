@@ -28,6 +28,7 @@ import {
   MAX_COMPOSE_TIMEOUT_MS,
   createFfmpegDeliverableComposer,
   ffmpegCleanMasterArgsFor,
+  ffmpegDisclosureArgsFor,
   validateComposeTimeoutMs,
 } from "./ffmpeg-composer";
 
@@ -88,6 +89,8 @@ describe("the argument vector is exact", () => {
       "-map_chapters",
       "-1",
       "-an",
+      "-r",
+      "30/1",
       "-c:v",
       "libx264",
       "-preset",
@@ -108,6 +111,19 @@ describe("the argument vector is exact", () => {
     const args = ffmpegCleanMasterArgsFor(inputOf({ outputPath: "/tmp/x/output" }));
     expect(args[args.indexOf("-f") + 1]).toBe("mp4");
     expect(args.at(-1)).toBe("/tmp/x/output");
+  });
+
+  it("states the output rate as the profile's exact fraction, before the encoder, on both encodes", () => {
+    const profile = { ...profileOf(), frameRateNumerator: 30000, frameRateDenominator: 1001 };
+    const master = ffmpegCleanMasterArgsFor(inputOf({ profile }));
+    expect(master[master.indexOf("-r") + 1]).toBe("30000/1001");
+    expect(master.indexOf("-r")).toBeLessThan(master.indexOf("-c:v"));
+    const video = ffmpegDisclosureArgsFor(
+      { cleanMasterPath: "/x/m.mp4", outputPath: "/x/o.mp4", profile, disclosureMode: "THROUGHOUT" },
+      "/x/layer.png",
+    );
+    expect(video[video.indexOf("-r") + 1]).toBe("30000/1001");
+    expect(video.indexOf("-r")).toBeLessThan(video.indexOf("-c:v"));
   });
 
   it("carries the raster of whichever profile it is handed", () => {

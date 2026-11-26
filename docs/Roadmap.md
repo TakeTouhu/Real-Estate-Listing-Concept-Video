@@ -1514,6 +1514,27 @@ line, with nothing typed or secret in the log. No answer changed.
 Planned, not done: RD-10c, then RD-11, which reads the server's log for
 these lines.
 
+**RD-10c — the worker image's runtime layer** (ADR-0176, no migration):
+`apps/worker/Dockerfile` builds an image of ADR-0175's base, Debian 13's
+FFmpeg, its version floating within the release, and the six disclosure
+images at `/app/assets/disclosure` with a checksum list that a test
+holds equal to `DISCLOSURE_LAYER_ASSETS`. It holds no worker code: its
+default command exits 2, saying the worker has no production runtime
+until part 2, and `worker-image-check` requires FFmpeg's series `7.1`,
+`libx264` and the six checksums. The new `worker-image` job runs the
+media suites on that very FFmpeg stage with no network, the check and
+the refusal with no network and a read-only root, and pushes nothing;
+this amends ADR-0072 Decision 6, and composition stays dormant. The
+guard test lists the worker's Dockerfile and holds its job step by
+step. A pull request shows 14 checks. Not measured before CI: the
+image's build and the suites on Debian 13's FFmpeg. CI's first build
+found Debian's FFmpeg 7.1.5 writing a 3.5 s master as 3,467 ms; both
+encodes now state the profile's frame rate with `-r` (ADR-0176
+Decision 8), and no tolerance changed. RD-10 is complete:
+RD-10a (#212) the rules and the web image, RD-10b (#214) relative
+redirects, and RD-10c the worker image; what it leaves open is in
+`TODO.md`, "Open in RD-10". Planned, not done: RD-11.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

@@ -338,6 +338,7 @@ jobs:
           persist-credentials: false
 
       - name: Build the web image
+        timeout-minutes: 20
         run: >-
           docker buildx build --provenance=false --load --platform linux/amd64
           -f apps/web/Dockerfile
@@ -517,3 +518,99 @@ jobs:
         run: |
           docker logs web || true
           docker rm -f web || true
+
+  worker-image:
+    # The worker's runtime layer (ADR-0176): the pinned base, Debian 13's
+    # FFmpeg and the six disclosure images, and no worker code. The media
+    # suites run on that very FFmpeg stage with no network; the image's check
+    # and its default, which refuses, run with no network and a read-only root.
+    # Nothing is pushed: no registry, login, secret or cache.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build the media suites' stage
+        # Debian's mirror has taken minutes; a hung one fails here, not at 30.
+        timeout-minutes: 20
+        run: >-
+          docker buildx build --provenance=false --load --platform linux/amd64
+          -f apps/worker/Dockerfile --target media-test
+          --label "org.opencontainers.image.revision=$REVISION"
+          --tag vtavision-worker-media:ci .
+
+      - name: Run the media suites against the image's FFmpeg
+        # The stage runs as root, CI only; it never becomes the image.
+        timeout-minutes: 15
+        run: |
+          docker run --rm --network none --entrypoint ffmpeg vtavision-worker-media:ci -hide_banner -version
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges vtavision-worker-media:ci
+
+      - name: Build the worker image
+        timeout-minutes: 10
+        run: >-
+          docker buildx build --provenance=false --load --platform linux/amd64
+          -f apps/worker/Dockerfile
+          --label "org.opencontainers.image.revision=$REVISION"
+          --tag vtavision-worker:ci .
+
+      - name: Check that both share the FFmpeg stage
+        # The image's last three layers are its three COPY lines; every layer
+        # below them must be the media stage's, so the suites ran this FFmpeg.
+        run: |
+          media="$(docker image inspect -f '{{range .RootFS.Layers}}{{println .}}{{end}}' vtavision-worker-media:ci)"
+          worker="$(docker image inspect -f '{{range .RootFS.Layers}}{{println .}}{{end}}' vtavision-worker:ci)"
+          shared="$(printf '%s\n' "$worker" | grep . | head -n -3)"
+          count="$(printf '%s\n' "$shared" | grep -c .)"
+          test "$count" -ge 2
+          test "$(printf '%s\n' "$media" | head -n "$count")" = "$shared"
+
+      - name: Check the image's user, files, entrypoint and environment
+        run: |
+          test "$(docker image inspect -f '{{.Config.User}}' vtavision-worker:ci)" = "1000:1000"
+          test "$(docker run --rm --network none --read-only --entrypoint id vtavision-worker:ci -u)" = "1000"
+          docker run --rm --network none --read-only --entrypoint find vtavision-worker:ci \
+            /app /usr/local/bin/worker-image-check -printf '%u:%g %m %p\n'
+          loose="$(docker run --rm --network none --read-only --entrypoint find vtavision-worker:ci \
+            /app /usr/local/bin/worker-image-check ! -user 0 -o ! -group 0 -o -perm /o=w)"
+          test -z "$loose"
+          test "$(docker image inspect -f '{{json .Config.Entrypoint}}' vtavision-worker:ci)" = \
+            '["docker-entrypoint.sh"]'
+          env_json="$(docker image inspect -f '{{json .Config.Env}}' vtavision-worker:ci)"
+          if printf '%s' "$env_json" | grep -qi proxy; then
+            echo "The image's environment names a proxy." >&2
+            exit 1
+          fi
+          docker image inspect -f '{{json .Config.Cmd}}' vtavision-worker:ci
+          docker image inspect -f '{{json .Config.Labels}}' vtavision-worker:ci
+
+      - name: Run the image's check
+        timeout-minutes: 2
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            vtavision-worker:ci worker-image-check
+
+      - name: Refuse to run by default
+        timeout-minutes: 2
+        run: |
+          set +e
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            vtavision-worker:ci > "$RUNNER_TEMP/refused.log" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/refused.log"
+          test "$code" -eq 2
+          grep -qF "The worker has no production runtime until part 2 (ADR-0151 Decision 4)." "$RUNNER_TEMP/refused.log"
+
+      - name: Print what the image holds
+        run: |
+          docker run --rm --network none --read-only --entrypoint dpkg-query vtavision-worker:ci \
+            -W -f '${Package}\t${Version}\n'
+          docker run --rm --network none --read-only --entrypoint node vtavision-worker:ci --version
+          docker image inspect -f '{{.Size}} bytes' vtavision-worker:ci

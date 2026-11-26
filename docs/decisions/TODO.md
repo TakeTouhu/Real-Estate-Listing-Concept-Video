@@ -2127,6 +2127,8 @@ into on 2026-11-17.
       Nothing tells anyone that the tag has moved; a person bumps it, at
       once for a Node.js or OpenSSL security release. Who, and how often
       otherwise, is not decided.
+      *Amended in RD-10c (ADR-0176): the worker image shares the same
+      digest, and the guard test requires one digest for both.*
 - [ ] **A deployment must not replace the web image's entrypoint.** It
       strips `NEXT_PHASE` (ADR-0175 Decision 5); a platform command
       that starts `node apps/web/server.js` directly brings back the
@@ -2165,6 +2167,13 @@ into on 2026-11-17.
       (RD-9e) lets it through. A link on the store's own address would
       be refused after the post, so a change to store-signed links must
       widen `form-action` or change the download form.
+- [ ] **Give the worker image its code.** It carries the base, FFmpeg
+      and the disclosure images, and its default command refuses
+      (ADR-0176). Part 2 adds the code and how it runs (`tsx` or a
+      bundle), the two names and `ca-certificates`, its start check,
+      and the dormancy guard's amendment for launching FFmpeg.
+      Composition's activation also waits on counsel's answer on
+      FFmpeg's licensing (the counsel review item).
 
 ## Open in RD-9 — what the origin check and the headers leave open
 
@@ -2562,6 +2571,13 @@ them is **built**. Each item below records the settled decision and what remains
       container duration differs from the frames by more than one frame
       would have every video refused as `DURATION_INVALID`, each holding its
       reservation.*
+      *Amended in RD-10c (ADR-0176): the worker image carries Debian 13's
+      FFmpeg and the six images at `/app/assets/disclosure`, with their
+      checksums, and CI runs the media suites through
+      `vitest.media.config.ts`, as `pnpm test:media` does, the runner
+      suite included, against that very FFmpeg on every build. Passing
+      the directory to the composer, running the suites on the FFmpeg a
+      deployment runs, and activating composition stay part 2's.*
 - [ ] **Re-measure the Clean Master's quality on the provider's real output.**
       `CLEAN_MASTER_CRF` 16 (ADR-0075 Decision 1) was chosen on three synthetic
       clips, the hardest an 8 Mbps encode of grainy footage: a loss of 0.25 dB
@@ -4137,6 +4153,9 @@ be reconciled in a runtime work package.
       source-material warranties, and the subprocessor list. The purpose is to
       validate the responsibility boundary, **not** to make VTaVision an
       external-publication approver.
+      *Amended in RD-10c (ADR-0176): FFmpeg's licensing (GPL, H.264) for
+      the worker image's Debian build is a question for this review,
+      before composition is activated.*
 - [ ] **Publish and maintain a subprocessor list** (Google Cloud, Stripe, the
       active AI provider(s), email-delivery vendors, other material processors),
       with a formal update mechanism, and version Terms/Privacy/Consent so that

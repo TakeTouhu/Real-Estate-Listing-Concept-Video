@@ -38,7 +38,7 @@ production scheduler activation and live Stripe charges stay BLOCKED
 | Readiness | a provider self-check and whether the MFA key is set; not the database or storage (*both are asked since RD-2b, ADR-0152, and the database within a limit since RD-2c, ADR-0153; what the start check refuses is given since RD-2d, ADR-0154; the web app's own database client is asked to connect since RD-2e, ADR-0155*) | `apps/web/src/lib/health.ts` |
 | Same-origin check | on 20 of the 45 route files with a mutating handler; sign-in, sign-up, password reset, email verification, MFA, organization creation, uploads, analysis review, storyboard and video projects rely on `SameSite=Lax` alone (the entry in `docs/decisions/TODO.md` still names two routes) (*every cookie-based change but the token-authorized upload `PUT` since RD-9c, ADR-0174; the signed-in work routes since RD-9b*) | `apps/web/src/lib/same-origin.ts` |
 | Security headers | none app-wide; the download route sets its own `Content-Security-Policy` and `nosniff` (*app-wide headers and an API policy since RD-9d and a page Content Security Policy with a nonce since RD-9e, ADR-0174; the download route keeps its own*) | `apps/web/src/app/api/storage/download/route.ts` |
-| Container images | none; `infra/` holds a README only (*the web app's image is built and run in CI, pushed nowhere, since RD-10a, ADR-0175*) | `apps/web/Dockerfile` |
+| Container images | none; `infra/` holds a README only (*the web app's image is built and run in CI, pushed nowhere, since RD-10a, ADR-0175; the worker's runtime layer, with Debian 13's FFmpeg, since RD-10c, ADR-0176*) | `apps/web/Dockerfile`, `apps/worker/Dockerfile` |
 | Image analysis, prompt moderation | the offline adapters (ADR-0009, ADR-0014); not refused in production, and not replaced by this plan | `@app/ai-providers`, `@app/domain` |
 | Content moderation (ADR-0052 Decision 15) | **none**: no check for the prohibited-content categories, of prompts or photos | |
 
@@ -58,7 +58,7 @@ changed lines.
 | RD-7 | Rate limiter in PostgreSQL; sign-in, reset, verification resend, MFA (*the rule: RD-7a, ADR-0169; the counters table: RD-7b; settings, client address and subjects: RD-7c, ADR-0170; sign-in and MFA codes: RD-7d, ADR-0171; reset and verification emails: RD-7e, ADR-0172*) | 1 |
 | RD-8 | Rate limits on invitations, uploads, analysis, generation start, downloads, Unit purchase (*sign-up per client address: RD-8a, ADR-0173; the signed-in limiter client, the JSON answer and uploads: RD-8b; invitations: RD-8c; analysis: RD-8d; downloads: RD-8e; generation start: RD-8f; Unit purchase: RD-8g*) | none |
 | RD-9 | Same-origin on every cookie-based change; security headers (*the rule and the refusal log: RD-9a, ADR-0174; the signed-in work routes: RD-9b; sign-in, sign-up, MFA and the account links: RD-9c; fixed headers and the API policy: RD-9d; the page Content Security Policy: RD-9e*) | none |
-| RD-10 | Container images for the web app and the worker, built in CI (*the common rules, the web image and its CI job: RD-10a, ADR-0175*) | none |
+| RD-10 | Container images for the web app and the worker, built in CI (*the common rules, the web image and its CI job: RD-10a, ADR-0175; the worker image and its CI job: RD-10c, ADR-0176*) | none |
 | RD-11 | A production-mode test against the emulators; completion report | none |
 
 The worker has no production runtime on the base: its start file runs a
