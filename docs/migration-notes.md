@@ -429,6 +429,25 @@ Since Phase 3A-2a this runs in CI in the `database` job against a PostgreSQL 16
 service container, after `prisma migrate deploy` has been applied to an empty
 database. Verified for this branch: **`No difference detected.` (exit 0)**.
 
+Since PT-8a (ADR-0191) the same job also checks two things Prisma cannot
+see:
+
+- **Checksums.** Right after the fresh apply,
+  `tests/migrations/checksums.sh packages/database/prisma/migrations`
+  compares every finished, not rolled-back `_prisma_migrations` row with
+  the SHA-256 of the committed `migration.sql` of that name, and fails
+  on a mismatch, a missing or extra name, or a name applied twice.
+- **Append-only.** After the drift check,
+  `tests/migrations/append-only.sh` compares the first parent's
+  `packages/database/prisma` (extracted with `git archive`) with this
+  commit's. Every parent folder must be unchanged, byte for byte, and
+  `migration_lock.toml` too. Each new name must sort after the parent's
+  last in byte order, match `^[0-9]{14}_[a-z0-9_]+$` and hold none of
+  `mfa`, `queue`, `delivery`, `recovery` or `phase`.
+
+A merged migration is never edited, renamed or deleted: it is undone by
+a new migration, never by a revert (ADR-0191 Decision 2).
+
 ## Operational notes
 
 - Storage objects are **not** managed by migrations. Physical deletion of
@@ -3810,3 +3829,19 @@ the HSTS grammar tests go; ADR-0190, `api-changes-pt-7c4.md` and the
 PT-7c4 lines of the Roadmap, `local-setup.md`, `architecture.md`,
 `SecurityCompliance.md`, the part 2 gap analysis and `TODO.md` go, its
 flipped item back to `[ ]`.
+
+## PT-8a — Migrations are append-only; CI checks the applied checksums
+
+**No migration** (ADR-0191); nothing deployed or pushed; no setting,
+image, route or dependency changes; still 8 checks. CI's `database`
+job checks out the first parent too (`fetch-depth: 2`) with no Git
+credentials kept, checks the applied checksums after the fresh apply,
+and refuses a change to any migration the first parent held (see
+"Schema/migration parity"). A pull request that edits, renames or
+deletes a migration folder, or adds one that sorts before the last,
+now fails that job. **Rolling back** is a revert: the checkout's
+`with:` and the two steps go from `ci.yml`, the job's comment returns
+to its earlier text, and `tests/migrations/` goes with its two scripts
+and two tests; ADR-0191, `api-changes-pt-8a.md` and the PT-8a lines of
+this file, the Roadmap, `local-setup.md`, the part 2 gap analysis and
+`TODO.md` go, its new item included.

@@ -2473,6 +2473,12 @@ into on 2026-11-17.
 - [ ] **Decide how migrations run in production.** The web image holds
       no Prisma CLI; RD-11 applies them from the runner. Part 2.
       *Amended in RD-11a (ADR-0178): CI applies them from the runner.*
+      *Amended in PT-8a (ADR-0191): CI checks that migrations are
+      append-only and that the applied checksums match the committed
+      files; the migration image is PT-8c's.*
+- [ ] **Record the migration production holds, so CI upgrades from it**
+      (G1/G3; ADR-0191 Decision 1). Until then CI takes the checked-out
+      commit's first parent as the previous release. Part 2, with G1.
 - [ ] **Set the server's keep-alive against the load balancer's.**
       `server.js` reads `KEEP_ALIVE_TIMEOUT`; the image sets none.
       Part 2, with the deployment.

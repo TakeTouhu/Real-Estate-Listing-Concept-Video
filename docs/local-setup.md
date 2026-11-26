@@ -323,6 +323,39 @@ needs `ffmpeg` and `ffprobe` on the `PATH` (ADR-0107); on Ubuntu,
 Storage emulator tests*), that suite runs on the emulator too, as the
 `database` job runs it; without it, on the folder alone (ADR-0162).
 
+### Migration checks
+
+The `database` job also runs two scripts (ADR-0191). The append-only
+check needs no database: it compares a parent commit's
+`packages/database/prisma` with your tree's, here `origin/main`'s.
+
+```bash
+mkdir -p /tmp/parent
+git archive "$(git rev-parse origin/main)" packages/database/prisma | tar -x -C /tmp/parent
+bash tests/migrations/append-only.sh /tmp/parent/packages/database/prisma packages/database/prisma
+```
+
+It names each changed, deleted or renamed migration, and each new name
+that sorts too early or breaks the naming rule, then exits 1.
+
+The checksum check reads a **disposable** database that the migrations
+were just applied to, the one `DATABASE_URL` names for Prisma. psql
+reaches it through libpq's own variables, so no address goes on the
+command line; a password, if the database needs one, belongs in
+`~/.pgpass` rather than the shell:
+
+```bash
+export PGHOST=localhost PGUSER=revt PGDATABASE=revt_test
+pnpm --filter @app/database run db:migrate
+bash tests/migrations/checksums.sh packages/database/prisma/migrations
+```
+
+It names each applied migration whose checksum is not its
+`migration.sql`'s SHA-256, and each name applied but not committed or
+committed but not applied, then exits 1. Never set
+`PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK`, and never run `migrate reset` or
+`db push`, against a database anyone else uses.
+
 ### Media tests
 
 The suites that run the real `ffmpeg` and `ffprobe` are opt-in too (ADR-0072).
