@@ -2137,6 +2137,16 @@ into on 2026-11-17.
       run's topology is drawn only in
       `docs/production-readiness-completion.md`. Adding them is open.
 
+## Open in PT-6c — what the `sharp` upgrade leaves open
+
+- [ ] **The pipeline test's "GPS" fixture holds no GPS.** libvips
+      drops the `GPS: { GPSLatitudeRef: "N" }` that
+      `packages/storage/src/media-pipeline.integration.test.ts` writes,
+      on 0.33.5 and 0.35.5 alike, so its "strips EXIF/GPS" case proves
+      GPS only through the EXIF check. The pipeline strips a real GPS
+      block (measured in PT-6c's review); a fixture that carries one is
+      open.
+
 ## Open in the unknown-failure PR — what logging unknown failures leaves open
 
 - [ ] **Errors the app does not catch are printed raw by Next.js.** The
@@ -2215,6 +2225,17 @@ into on 2026-11-17.
       a route handler's `Content-Length`, so a move to 15.5.29 or
       later first decides how downloads keep their length (ADR-0115
       Decision 3).*
+      *Amended in PT-6c (`docs/api-changes-pt-6c.md`): `sharp` 0.35.5 and
+      overrides lifting `nanoid` to 3.3.18 and `source-map-js` to 1.2.2
+      take `pnpm audit --prod` from 16 (11 high, 5 moderate) to 8 (3 high,
+      5 moderate). Open: `postcss` 8.4.31, which `next` pins (8.5.23 is
+      past its four), `zod` (PT-6d) and `next`'s three moderates. The
+      overrides can go once `next` stops pinning `postcss` 8.4.31. pnpm 11
+      no longer reads `package.json`'s `pnpm` field, so a move to it must
+      carry the overrides, which the lockfile records, and
+      `onlyBuiltDependencies`, which becomes `allowBuilds`; without it
+      pnpm 11, whose `strictDepBuilds` is on by default, refuses the
+      install scripts of `esbuild` and Prisma's packages.*
 - [ ] **Decide how migrations run in production.** The web image holds
       no Prisma CLI; RD-11 applies them from the runner. Part 2.
       *Amended in RD-11a (ADR-0178): CI applies them from the runner.*
