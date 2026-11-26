@@ -585,7 +585,11 @@ let cached: ServerEnv | undefined;
  */
 export function loadServerEnv(source: NodeJS.ProcessEnv = process.env): ServerEnv {
   if (cached) return cached;
-  const parsed = serverEnvSchema.safeParse(source);
+  // An unset required setting reads `Required`, as in zod 3: the image's refusal check and ADR-0175 hold those
+  // words (PT-6d). Every other refusal keeps the schema's or zod 4's own words.
+  const parsed = serverEnvSchema.safeParse(source, {
+    error: (issue) => (issue.code === "invalid_type" && issue.input === undefined ? "Required" : undefined),
+  });
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`)

@@ -33,6 +33,12 @@ words of every refusal the schema writes itself.
 
 - `ZodIssueCode.custom`, deprecated in `zod` 4, becomes the literal
   `"custom"` in each `addIssue`.
+- `loadServerEnv` keeps `zod` 3's `Required` for an unset required
+  setting, through an error map on its own parse; `zod` 4 would write
+  `Invalid input: expected string, received undefined`. The web
+  image's CI check and ADR-0175 hold `SESSION_SECRET: Required`, and
+  the first CI run of this change failed on it. `serverEnvSchema`
+  parsed directly writes `zod` 4's words.
 - `LOG_PRETTY`'s default is the text `"false"`. `zod` 4's `default`
   returns its value without parsing it, so it would return the text,
   not `false`; `prefault` parses it as `zod` 3's `default` did.
@@ -82,13 +88,12 @@ every `addIssue` and refinement; the three uncovered branches are a
 cached result, an issue with no path and an address that does not
 parse reaching `isGoogleApiAddress`, which the schema never sends it.
 
-Result: 3,148 identical (858 taken, 2,290 refused alike); none refused
-before is taken now; no taken value differs. Of the 498 others, 302
+Result: 3,188 identical (858 taken, 2,330 refused alike); none refused
+before is taken now; no taken value differs. Of the 458 others, 262
 are refused alike, in `zod`'s own words, which changed:
 
 | Before (`zod` 3) | After (`zod` 4) | When |
 | --- | --- | --- |
-| `Required` | `Invalid input: expected string, received undefined` | a secret unset |
 | `String must contain at least 1 character(s)` | `Too small: expected string to have >=1 characters` | `SHARED_STORAGE_DIR`, `EMAIL_OUTBOX_DIR`, `WAVESPEED_API_KEY`, `WAVESPEED_VIDEO_MODEL_ID` or `WAVESPEED_WEBHOOK_SECRET` empty |
 | `Number must be greater than 0` | `Too small: expected number to be >0` | a number setting 0 or below, or empty |
 | `Expected number, received nan` | `Invalid input: expected number, received NaN` | not a number |
@@ -127,10 +132,11 @@ below is refused with one more line, `Too small: expected int to be
 >=-9007199254740991`, beside `Too small: expected number to be >0`;
 `zod` 3 wrote only `Number must be greater than 0`.
 
-`env.test.ts` adds the default of `LOG_PRETTY`, an address kept as
-written and one wrapped in no-break spaces refused, a host with a
-Latin-1 letter taken after `URL.canParse` has run often, the words of
-a `LOG_PRETTY` refusal and the safe-integer bound.
+`env.test.ts` adds `Required` for an unset setting, the default of
+`LOG_PRETTY`, an address kept as written and one wrapped in no-break
+spaces refused, a host with a Latin-1 letter taken after
+`URL.canParse` has run often, the words of a `LOG_PRETTY` refusal and
+the safe-integer bound.
 
 ## What was not measured
 

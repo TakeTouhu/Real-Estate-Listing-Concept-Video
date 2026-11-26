@@ -581,6 +581,14 @@ describe("loadServerEnv", () => {
     return "";
   };
 
+  it("reads an unset required setting as Required, as the image's refusal check expects (PT-6d)", () => {
+    const message = messageOf({ NODE_ENV: "production" });
+    expect(message).toContain("  - SESSION_SECRET: Required");
+    expect(message).toContain("  - HEALTHCHECK_API_TOKEN: Required");
+    expect(message).toContain("  - STORAGE_SIGNING_SECRET: Required");
+    expect(messageOf({ ...base, SESSION_SECRET: "short" })).not.toContain("Required");
+  });
+
   it("names each invalid variable and what is wrong with it, and repeats none of their values", () => {
     // Every setting that holds a secret, an address or a path, each invalid and each carrying a marker.
     const invalid = {
