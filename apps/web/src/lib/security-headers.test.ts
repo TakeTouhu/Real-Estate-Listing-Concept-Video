@@ -11,14 +11,17 @@ import {
 
 const NONCE = "AAECAwQFBgcICQoLDA0ODw==";
 
-/** The production policy, exactly (ADR-0174 Decision 10), reporting to the endpoint (ADR-0189, PT-7c3). */
+/**
+ * The production policy, exactly (ADR-0174 Decision 10), reporting to the endpoint (ADR-0189, PT-7c3) and upgrading
+ * insecure requests (ADR-0190, PT-7c4).
+ */
 const PRODUCTION =
   "default-src 'self'; script-src 'self' 'nonce-AAECAwQFBgcICQoLDA0ODw==' 'strict-dynamic'; " +
   "style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; connect-src 'self'; " +
   "object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'; frame-ancestors 'none'; " +
-  "report-uri /api/csp-report; report-to csp";
+  "report-uri /api/csp-report; report-to csp; upgrade-insecure-requests";
 
-/** `next dev`'s: the same, plus `eval` and the Fast Refresh socket. */
+/** `next dev`'s: the same but `upgrade-insecure-requests`, plus `eval` and the Fast Refresh socket. */
 const DEVELOPMENT =
   "default-src 'self'; script-src 'self' 'nonce-AAECAwQFBgcICQoLDA0ODw==' 'strict-dynamic' 'unsafe-eval'; " +
   "style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; " +
@@ -63,9 +66,18 @@ describe("pageContentSecurityPolicy", () => {
     expect(directives(policy).get("report-uri")).toEqual(["/api/csp-report"]);
     expect(directives(policy).get("report-to")).toEqual(["csp"]);
     expect([CSP_REPORT_PATH, CSP_REPORT_GROUP]).toEqual(["/api/csp-report", "csp"]);
-    // Until PT-7c4.
-    for (const left of ["upgrade-insecure-requests", "sandbox"]) expect(directives(policy).has(left)).toBe(false);
+    expect(directives(policy).has("sandbox")).toBe(false);
     expect(policy).not.toMatch(/https?:|\*/);
+  });
+
+  it("upgrades insecure requests in every policy but next dev's, as its last directive, with no sources", () => {
+    for (const nodeEnv of ["production", "test", "", undefined]) {
+      const policy = pageContentSecurityPolicy(NONCE, nodeEnv);
+      expect(policy.endsWith("; upgrade-insecure-requests")).toBe(true);
+      expect(directives(policy).get("upgrade-insecure-requests")).toEqual([]);
+    }
+    // `next dev` serves plain http, where the upgrade would break its own files (ADR-0190).
+    expect(pageContentSecurityPolicy(NONCE, "development")).not.toContain("upgrade-insecure-requests");
   });
 
   it("gives Next.js the nonce it reads from the request", () => {

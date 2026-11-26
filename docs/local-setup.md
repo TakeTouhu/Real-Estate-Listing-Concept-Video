@@ -488,6 +488,15 @@ docker exec <container> node -e \
 image copies; `pnpm --filter @app/web start` (`next start`) only warns
 about it, and nothing runs it.
 
+A production build's page policy ends with `upgrade-insecure-requests`
+(ADR-0190), so a browser asks the page's own files over `https`.
+Measured with Chromium 153 on `next start` over plain `http`:
+`http://localhost` and `http://127.0.0.1` are not upgraded and the page
+works, but any other name (a LAN address, a hosts-file name) loses its
+scripts and styles and does not hydrate. Other browsers were not
+measured. To work on the app in a browser, use `next dev`
+(`pnpm dev`), whose policy has no such directive.
+
 CI's `production-mode` job (ADR-0178) runs the image against stand-ins;
 its steps in `.github/workflows/ci.yml` are the procedure, and no script
 repeats them. By hand they need Docker with Buildx, `openssl`, `curl`,

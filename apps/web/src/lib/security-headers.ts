@@ -11,11 +11,14 @@
  * Next.js's own fallback page renders an inline `<style>` without a nonce.
  *
  * `next dev` (`NODE_ENV=development`) also needs `eval` and its Fast Refresh
- * socket; every other `NODE_ENV` gets the production policy. The `/api` policy
- * is the configuration's (`fixed-headers.mjs`), never this one, and reports to
- * nothing: an unknown `/api` address answers Next.js's HTML 404 under
- * `default-src 'none'; sandbox`, so a report directive there would report every
- * such visit, from an opaque origin (ADR-0189, PT-7c3).
+ * socket; every other `NODE_ENV` gets the production policy, which alone ends
+ * with `upgrade-insecure-requests`: a browser asks any `http://` address a page
+ * names over `https` instead (ADR-0190). `next dev` serves plain `http`, where
+ * that would break its own files. The `/api` policy is the configuration's
+ * (`fixed-headers.mjs`), never this one, and reports to nothing: an unknown
+ * `/api` address answers Next.js's HTML 404 under `default-src 'none'; sandbox`,
+ * so a report directive there would report every such visit, from an opaque
+ * origin (ADR-0189, PT-7c3).
  *
  * Both page policies report a refusal to `POST /api/csp-report` (ADR-0189):
  * by `report-uri`, and by `report-to` to the group the middleware names in
@@ -50,7 +53,7 @@ export function newNonce(): string {
 
 type Directive = readonly [name: string, ...sources: string[]];
 
-/** The policy in every environment; `{nonce}` is replaced per request. */
+/** The directives of every page policy; `{nonce}` is replaced per request. */
 const PRODUCTION_DIRECTIVES: readonly Directive[] = [
   ["default-src", "'self'"],
   ["script-src", "'self'", "'nonce-{nonce}'", "'strict-dynamic'"],
@@ -69,6 +72,9 @@ const PRODUCTION_DIRECTIVES: readonly Directive[] = [
   ["report-to", CSP_REPORT_GROUP],
 ];
 
+/** What every policy but `next dev`'s ends with: no sources (ADR-0190). */
+const PRODUCTION_ONLY: Directive = ["upgrade-insecure-requests"];
+
 /**
  * What `next dev` adds, never sent by a production build: `eval` for its source
  * maps and React's development stacks, and the Fast Refresh socket at
@@ -86,7 +92,8 @@ const DEVELOPMENT_ADDITIONS: Readonly<Record<string, readonly string[]>> = {
 export function pageContentSecurityPolicy(nonce: string, nodeEnv: string | undefined): string {
   if (!NONCE_PATTERN.test(nonce)) throw new Error("A page policy needs a base64 nonce");
   const development = nodeEnv === "development";
-  return PRODUCTION_DIRECTIVES.map(([name, ...sources]) => {
+  const directives = development ? PRODUCTION_DIRECTIVES : [...PRODUCTION_DIRECTIVES, PRODUCTION_ONLY];
+  return directives.map(([name, ...sources]) => {
     const all = development ? [...sources, ...(DEVELOPMENT_ADDITIONS[name] ?? [])] : sources;
     return [name, ...all.map((source) => source.replace("{nonce}", nonce))].join(" ");
   }).join("; ");

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import nextConfig from "../next.config.mjs";
-import { API_POLICY, fixedHeaderRules } from "../fixed-headers.mjs";
+import { API_POLICY, STRICT_TRANSPORT_SECURITY, fixedHeaderRules } from "../fixed-headers.mjs";
 
 /** The rules `next.config.mjs` gives Next.js, read under the `NODE_ENV` given. */
 async function configuredRules(nodeEnv: string): Promise<{ source: string; headers: Map<string, string> }[]> {
@@ -39,6 +39,23 @@ const HANDLER_HEADERS = [
 ];
 
 const directives = (policy: string): string[] => policy.split(";").map((directive) => directive.trim());
+
+/** One year in seconds, the least `max-age` HSTS may carry (ADR-0190). */
+const ONE_YEAR = 31_536_000;
+
+/**
+ * The HSTS values ADR-0190 allows: `max-age` first and at least a year, then at most `includeSubDomains`, as that
+ * literal token, and `preload` only beside it; nothing else, nothing twice. `max-age=0`, which withdraws HSTS in an
+ * emergency, is refused: sending it means editing this test, deliberately.
+ */
+function allowedHsts(value: string): boolean {
+  const [first = "", ...tokens] = value.split(";").map((token) => token.trim());
+  const maxAge = /^max-age=([1-9][0-9]*)$/.exec(first)?.[1];
+  if (maxAge === undefined || Number(maxAge) < ONE_YEAR) return false;
+  if (new Set(tokens).size !== tokens.length) return false;
+  if (!tokens.every((token) => token === "includeSubDomains" || token === "preload")) return false;
+  return !tokens.includes("preload") || tokens.includes("includeSubDomains");
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -87,6 +104,44 @@ describe("next.config.mjs", () => {
       expect(headersOf(await configuredRules(nodeEnv), "/:path*").has("strict-transport-security")).toBe(false);
     }
     expect(fixedHeaderRules(undefined)[0]?.headers.map(({ key }) => key)).not.toContain("Strict-Transport-Security");
+  });
+
+  it("sends an HSTS value of the allowed grammar, from a production build only", async () => {
+    expect(allowedHsts(STRICT_TRANSPORT_SECURITY)).toBe(true);
+    expect(headersOf(await configuredRules("production"), "/:path*").get("strict-transport-security")).toBe(
+      STRICT_TRANSPORT_SECURITY,
+    );
+    for (const nodeEnv of ["development", "test", ""]) {
+      expect(headersOf(await configuredRules(nodeEnv), "/:path*").has("strict-transport-security")).toBe(false);
+    }
+  });
+
+  it("allows only at least a year, includeSubDomains, and preload beside it in the HSTS grammar", () => {
+    for (const allowed of [
+      "max-age=31536000",
+      "max-age=63072000; includeSubDomains",
+      "max-age=63072000; includeSubDomains; preload",
+      "max-age=63072000;preload;includeSubDomains",
+    ]) {
+      expect(allowedHsts(allowed), allowed).toBe(true);
+    }
+    for (const refused of [
+      "max-age=0",
+      "max-age=300",
+      "max-age=31535999",
+      "max-age=031536000",
+      "max-age=31536000; preload",
+      "max-age=31536000; includeSubdomains",
+      "max-age=31536000; includeSubDomain",
+      "max-age=31536000; includeSubDomains; includeSubDomains",
+      "max-age=31536000; max-age=31536000",
+      "max-age=31536000; includeSubDomains; preload; report",
+      "includeSubDomains; max-age=31536000",
+      "max-age=31536000;",
+      "",
+    ]) {
+      expect(allowedHsts(refused), refused).toBe(false);
+    }
   });
 
   it.each(ENVIRONMENTS)("names no header a handler decides, and never no-referrer, under NODE_ENV=%s", async (env) => {

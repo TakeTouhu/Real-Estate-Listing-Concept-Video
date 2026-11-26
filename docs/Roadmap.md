@@ -1731,6 +1731,19 @@ log must not hold. A real browser's report from a second origin was
 measured once, outside CI, against the endpoint's function: it
 arrived, naming that origin's page, and wrote no line.
 
+**PT-7c4 — Pages upgrade insecure requests; HSTS for subdomains waits
+for the domain** (ADR-0190, no migration): the production page policy
+ends with `upgrade-insecure-requests`; `next dev`'s and the API policy
+are unchanged (`docs/api-changes-pt-7c4.md`). Measured in Chromium 153
+on a production build: through a TLS front `/login` and the 404
+hydrate with no refusal; over plain `http` a loopback address is not
+upgraded, and any other name loses its own files. HSTS stays
+`max-age=31536000`; a test holds its grammar (at least a year,
+`includeSubDomains`, `preload` only beside it, `max-age=0` refused).
+ADR-0190 writes the rule for PT-7c5, which waits on the product
+owner's domain decision (T2). PT-7c is done in code, and not done until
+PT-7c5 is done or dropped.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

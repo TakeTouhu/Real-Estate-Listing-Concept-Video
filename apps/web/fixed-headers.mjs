@@ -43,7 +43,8 @@ export const API_POLICY = "default-src 'none'; frame-ancestors 'none'; sandbox";
 /**
  * Production builds only, for the app's own host: no `includeSubDomains` and no
  * `preload` while the public domain is not chosen (Decision 12). A browser
- * ignores it over plain `http`.
+ * ignores it over plain `http`. When either may be added is ADR-0190's rule;
+ * `next-config.test.ts` pins the grammar the value may move within.
  */
 export const STRICT_TRANSPORT_SECURITY = "max-age=31536000";
 

@@ -3792,3 +3792,19 @@ production-mode step, its pinned text and `log-report.mjs`'s required
 lines go; `api-changes-pt-7c3.md` and the PT-7c3 lines of the Roadmap,
 `API.md`, `SecurityCompliance.md`, `SaaSOperations.md`,
 `architecture.md`, the part 2 gap analysis and `TODO.md` go.
+
+## PT-7c4 — Pages upgrade insecure requests; HSTS for subdomains waits for the domain
+
+**No migration** (ADR-0190); nothing deployed or pushed; no setting,
+dependency or image step changes. The production page policy ends with
+`upgrade-insecure-requests`. A production build served over plain
+`http` and opened in a browser on any name but a loopback one now
+loses its own scripts and styles, which are asked over `https`
+(measured in Chromium 153); no supported path does that, and
+`next dev` is unchanged. HSTS is unchanged. **Rolling back** is a
+revert: the directive and its test go, the production literals in
+`security-headers.test.ts` and the `production-mode` spec lose it, and
+the HSTS grammar tests go; ADR-0190, `api-changes-pt-7c4.md` and the
+PT-7c4 lines of the Roadmap, `local-setup.md`, `architecture.md`,
+`SecurityCompliance.md`, the part 2 gap analysis and `TODO.md` go, its
+flipped item back to `[ ]`.
