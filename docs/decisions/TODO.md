@@ -2215,6 +2215,15 @@ into on 2026-11-17.
       a route handler's `Content-Length`, so a move to 15.5.29 or
       later first decides how downloads keep their length (ADR-0115
       Decision 3).*
+      *Amended in PT-6c (`docs/api-changes-pt-6c.md`): `sharp` 0.35.5 and
+      overrides lifting `nanoid` to 3.3.18 and `source-map-js` to 1.2.2
+      take `pnpm audit --prod` from 16 (11 high, 5 moderate) to 8 (3 high,
+      5 moderate). Open: `postcss` 8.4.31, which `next` pins (8.5.23 is
+      past its four), `zod` (PT-6d) and `next`'s three moderates. The
+      overrides can go once `next` stops pinning `postcss` 8.4.31. pnpm 11
+      no longer reads `package.json`'s `pnpm` field, so a move to it must
+      carry the overrides and `onlyBuiltDependencies`; a missed one fails
+      under `--frozen-lockfile`.*
 - [ ] **Decide how migrations run in production.** The web image holds
       no Prisma CLI; RD-11 applies them from the runner. Part 2.
       *Amended in RD-11a (ADR-0178): CI applies them from the runner.*

@@ -1572,6 +1572,13 @@ request's run. `database` and `e2e` run `production-mode`'s pinned
 PostgreSQL. Not measured before CI: the cancellation itself. Planned, not
 done: the rest of part 2.
 
+**PT-6c — `sharp` 0.35.5 and two patch overrides** (no ADR, no
+migration): `sharp` 0.33.5 to 0.35.5, and pnpm overrides lifting
+`nanoid` and `source-map-js` to their fixed patch releases;
+`pnpm audit --prod` goes from 16 findings to 8
+(`docs/api-changes-pt-6c.md`). It lands before PT-6b's image scan. Not
+measured before CI: `sharp` 0.35.5 inside the Debian 13 images.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

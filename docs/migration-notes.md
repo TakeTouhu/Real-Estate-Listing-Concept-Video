@@ -3575,3 +3575,14 @@ returns to every branch, its comment and `concurrency` go, `database`
 and `e2e` return to `postgres:16`, and `tests/ci-workflow.test.ts`,
 ADR-0179, the part 2 gap analysis, the README and Roadmap lines and the
 `TODO.md` flip of PT-6a go; 16 checks again.
+
+## PT-6c — `sharp` 0.35.5 and two patch overrides
+
+**No migration**; nothing deployed or pushed; still 8 checks. A
+development machine runs `pnpm install`; an image built from this
+lockfile holds `sharp` 0.35.5. **Rolling back:** the two `sharp`
+versions, the `overrides` block of `package.json`, the `Exif` import
+of `media-pipeline.integration.test.ts`, the lockfile,
+`tests/dependency-overrides.test.ts`, `api-changes-pt-6c.md`, and the
+Roadmap, gap analysis and `TODO.md` lines of PT-6c go; the 8
+advisories come back.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import sharp from "sharp";
+import sharp, { type Exif } from "sharp";
 import {
   AssetService,
   AuthService,
@@ -32,7 +32,7 @@ async function jpegWithMetadata(width: number, height: number): Promise<Buffer> 
       exif: {
         IFD0: { Copyright: "Test", Make: "TestCam" },
         GPS: { GPSLatitudeRef: "N" },
-      } as unknown as sharp.Exif,
+      } as unknown as Exif,
       orientation: 6,
     })
     .jpeg()
