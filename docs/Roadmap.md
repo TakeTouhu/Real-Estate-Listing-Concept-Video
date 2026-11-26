@@ -1745,6 +1745,19 @@ ADR-0190 writes the rule for PT-7c5, which waits on the product
 owner's domain decision (T2). PT-7c is done in code, and not done until
 PT-7c5 is done or dropped.
 
+**PT-8a — Migrations are append-only; CI checks the applied checksums**
+(ADR-0191, no migration): the `database` job checks out the first
+parent too and refuses a change to any migration that parent held: an
+edit, a rename, a deletion, a changed lock file, or a new name that
+sorts before the last or breaks the naming rule
+(`docs/api-changes-pt-8a.md`). After the fresh apply it compares every
+applied row's checksum with the committed file's SHA-256. Prisma itself
+passed an edited applied file and an out-of-order new one (measured).
+No unseeded upgrade is added: under the guard it would run the same SQL
+as the fresh apply. The seeded upgrade is PT-8b's. The first parent
+stands for the previous release until production records its own.
+Still 8 checks.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

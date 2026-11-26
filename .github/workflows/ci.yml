@@ -178,8 +178,10 @@ jobs:
 
   database:
     # Live PostgreSQL: proves the migrations apply to an empty database, that
-    # the committed schema has no drift, and that the Prisma repositories obey
-    # their tenant-scoping contract. Throwaway credentials only. The development
+    # it holds each one with its committed file's checksum, that no migration
+    # the first parent held changed (ADR-0191), that the committed schema has
+    # no drift, and that the Prisma repositories obey their tenant-scoping
+    # contract. Throwaway credentials only. The development
     # pipeline's suite also runs FFmpeg (ADR-0107), so this job installs it on
     # the same Ubuntu 24.04 as the media job. That suite runs on the Cloud
     # Storage emulator too, a service as in the storage job (ADR-0162).
@@ -217,6 +219,10 @@ jobs:
       GOOGLE_CLOUD_STORAGE_TEST_ENDPOINT: http://127.0.0.1:4443
     steps:
       - uses: actions/checkout@v4
+        # The first parent too, for the append-only check; no later step needs Git credentials (ADR-0191).
+        with:
+          fetch-depth: 2
+          persist-credentials: false
 
       - name: Install FFmpeg
         # The package mirror has been slow, and has hung, here before: a hang fails the job instead of holding it.
@@ -246,11 +252,32 @@ jobs:
       - name: Apply migrations to an empty database
         run: pnpm --filter @app/database run db:migrate
 
+      - name: Check the applied migrations' checksums
+        # Each finished row of _prisma_migrations against the SHA-256 of its committed file; names only are printed.
+        timeout-minutes: 2
+        run: >-
+          PGPASSWORD=revt-ci-local PGHOST=localhost PGUSER=revt PGDATABASE=revt
+          bash tests/migrations/checksums.sh packages/database/prisma/migrations
+
       - name: Create shadow database for the drift check
         run: PGPASSWORD=revt-ci-local psql -h localhost -U revt -d revt -c 'CREATE DATABASE revt_shadow'
 
       - name: Verify committed migrations match the schema
         run: pnpm --filter @app/database exec prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "$SHADOW_DATABASE_URL" --exit-code
+
+      - name: Check that no applied migration changed
+        # The first parent stands for the previous release until production records its own (ADR-0191 Decision 1).
+        # "shell: bash" runs it with pipefail, so a failed git archive fails the step whatever tar reads.
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          if ! git rev-parse --verify --quiet 'HEAD^1^{commit}' > /dev/null; then
+            echo "::error::The first parent, HEAD^1, is not in the checkout: the job needs fetch-depth: 2."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/parent"
+          git archive "$(git rev-parse HEAD^1)" packages/database/prisma | tar -x -C "$RUNNER_TEMP/parent"
+          bash tests/migrations/append-only.sh "$RUNNER_TEMP/parent/packages/database/prisma" packages/database/prisma
 
       - name: Database integration tests
         run: pnpm run test:db
