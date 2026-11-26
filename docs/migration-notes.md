@@ -3636,3 +3636,16 @@ URL with no query unchanged, the new cases in `logger.test.ts` and
 `redact.test.ts` and `tests/observability/constant-log-messages.test.ts`
 go, and ADR-0182, `api-changes-pt-7a2.md` and the Roadmap, gap analysis
 and `TODO.md` lines of PT-7a2 go.
+
+## PT-7a3 — Liveness names the Cloud Run revision
+
+**No migration** (ADR-0183); nothing deployed or pushed; still 8
+checks. `GET /api/health` gains `revision`, `null` wherever
+`K_REVISION` is unset or not a revision's shape. No setting is added or
+required. A monitor that compares the exact liveness body must accept
+the new key; none is known (*inference*: nothing is deployed, and no
+consumer in the repository reads the body). **Rolling back:**
+`health.ts` drops `revision` and the second parameter of
+`buildLiveness`, the new cases in `health.test.ts` go, and ADR-0183,
+`api-changes-pt-7a3.md` and the Roadmap and `TODO.md` lines of PT-7a3
+go.

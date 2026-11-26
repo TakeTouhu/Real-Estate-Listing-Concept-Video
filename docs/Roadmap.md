@@ -1619,6 +1619,19 @@ when it has no query (`docs/api-changes-pt-7a2.md`). Still open: a URL
 inside a longer field string, and whether value patterns are wanted
 (`TODO.md`).
 
+**PT-7a3 — Liveness names the Cloud Run revision** (ADR-0183, no
+migration): `GET /api/health` answers `revision` between `version` and
+`time`: Cloud Run's `K_REVISION` when it matches
+`^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$`, otherwise `null`, read on each
+request (`docs/api-changes-pt-7a3.md`). The probe takes no token, so it
+shows the service name and a deploy count; readiness only was weighed
+and not chosen. Not measured: a real revision name, since nothing is
+deployed; G1 is the first measurement. Still open: whether and how
+liveness names the build commit, which reaches the image today only as
+a label the process cannot read and not through an `ARG` (ADR-0175
+Decision 3), and the worker's own names on a Cloud Run job or worker
+pool (`TODO.md`).
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

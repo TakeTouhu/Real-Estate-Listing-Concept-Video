@@ -2355,6 +2355,26 @@ into on 2026-11-17.
       Part 2, with the deployment.
 - [ ] **Give liveness a build revision.** It reports version `0.0.0`
       in the image; the revision is only an image label.
+      *Amended in PT-7a3: liveness now answers `revision`, Cloud Run's
+      `K_REVISION` when it has a revision's shape, otherwise `null`
+      (ADR-0183). That names a deploy, not a build: two revisions can
+      run one image, and the commit is still not reported, so this item
+      stays open.*
+- [ ] **Decide whether and how liveness names the build commit.** The
+      simplest route, an `ARG`, is forbidden by ADR-0175 Decision 3 and
+      `tests/container-images.test.ts`. Today the commit reaches the
+      image only as the `org.opencontainers.image.revision` label,
+      which the process cannot read. Another route, such as a setting
+      given at deploy time or a file in the build context, is not
+      chosen (ADR-0183 Decision 4). PT-7a3 names only the Cloud Run
+      revision.
+- [ ] **The worker gets other Cloud Run names than `K_REVISION`.** Run
+      as a Cloud Run job it gets `CLOUD_RUN_JOB` and
+      `CLOUD_RUN_EXECUTION`; run as a worker pool,
+      `CLOUD_RUN_WORKER_POOL` and `CLOUD_RUN_REVISION` (Cloud Run's
+      container runtime contract, read on 2026-11-26). The worker has
+      no liveness probe and reports neither. Decide with the worker's
+      runtime which it reports, and where.
 - [ ] **Widen `form-action` before a store signs download links.** The
       download form posts, then is sent to the signed link. Every
       adapter signs a link on the app today
