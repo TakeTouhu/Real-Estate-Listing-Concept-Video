@@ -1713,6 +1713,20 @@ session or database, and logs no address, token or nonce. `zod` joins
 the web app. Nothing reports to it until PT-7c3, which also takes the
 `page` category, moved there because this milestone passed its size.
 
+**PT-7c3 — The page policy reports to the endpoint** (no new ADR;
+ADR-0189's "Built in PT-7c3"; no migration): both page policies end
+with `report-uri /api/csp-report; report-to csp`, and every page
+answer carries `Reporting-Endpoints: csp="/api/csp-report"`, relative,
+so the middleware reads no setting; the API policy reports to nothing
+(`docs/api-changes-pt-7c3.md`). Chromium was measured to resolve the
+relative address over `https` and to register no endpoint over plain
+`http`, so `next dev` pages report nothing. The line gains the `page`
+category, the route pattern from the app's 17 pages or `(other)`,
+which raises the key bound to 73,872. A browser test proves a real
+`report-uri` post and its `204`; the production-mode job posts one
+report of each kind, one from another origin's page that must write no
+line, and one too large, with a run-unique mark the log must not hold.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

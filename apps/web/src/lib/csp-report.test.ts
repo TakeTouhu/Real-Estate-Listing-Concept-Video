@@ -1,9 +1,13 @@
+import { readdirSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answerCspReport,
   blockedCategory,
   directiveCategory,
   dispositionCategory,
+  OTHER_PAGE,
+  PAGE_PATTERNS,
+  pageCategory,
   readBounded,
   resetCspReportCountsForTests,
   sourceCategory,
@@ -64,9 +68,9 @@ describe("answerCspReport's line", () => {
   it("writes one INFO line of categories for a report-uri body, and never a secret it carried", async () => {
     const sink = logged();
     const secrets = reportUri({
-      "document-uri": `${BASE}/reset-password?token=s3cret`,
+      "document-uri": `${BASE}/properties/${UUID}/review?token=s3cret`,
       "blocked-uri": `${BASE}/api/storage/download?token=s3cret`,
-      referrer: `${BASE}/properties/${UUID}/review?q=s3cret`,
+      referrer: `${BASE}/reset-password?token=s3cret`,
       "script-sample": "s3cret sample",
       "original-policy": "script-src 'nonce-N0nceS3cret' 'strict-dynamic'",
       "source-file": `${BASE}/_next/static/chunks/app.js?token=s3cret`,
@@ -77,11 +81,13 @@ describe("answerCspReport's line", () => {
     const line = JSON.parse(sink[0] ?? "{}") as Record<string, unknown>;
     expect(line).toMatchObject({ severity: "INFO", component: "csp-report", dropped: 0 });
     expect(line.message).toBe("Browsers reported page policy violations");
-    expect(line.violations).toEqual([{ mechanism: "report-uri", directive: "script-src-elem", blocked: "self",
-      disposition: "enforce", source: "other", count: 1, total: 1 }]);
-    for (const secret of ["s3cret", "token", "N0nce", "nonce", "?", "/", "reset", UUID, "app.example"]) {
+    expect(line.violations).toEqual([{ mechanism: "report-uri", page: "/properties/[propertyId]/review",
+      directive: "script-src-elem", blocked: "self", disposition: "enforce", source: "other", count: 1, total: 1 }]);
+    for (const secret of ["s3cret", "token", "N0nce", "nonce", "?", "reset", UUID, "app.example"]) {
       expect(sink[0]).not.toContain(secret);
     }
+    // The page's pattern is the line's one path.
+    expect(sink[0]?.replace('"page":"/properties/[propertyId]/review"', "")).not.toContain("/");
   });
 
   it("reads report-to's csp-violation entries only, ten at most, and counts the rest as dropped", async () => {
@@ -90,8 +96,8 @@ describe("answerCspReport's line", () => {
     expect(await answer(JSON.stringify(batch), "application/reports+json; charset=utf-8")).toBe(204);
     const line = JSON.parse(sink[0] ?? "{}") as { violations: Record<string, unknown>[]; dropped: number };
     expect(line.dropped).toBe(2);
-    expect(line.violations).toEqual([{ mechanism: "report-to", directive: "script-src-elem", blocked: "inline",
-      disposition: "other", source: "none", count: 10, total: 10 }]);
+    expect(line.violations).toEqual([{ mechanism: "report-to", page: "/login", directive: "script-src-elem",
+      blocked: "inline", disposition: "other", source: "none", count: 10, total: 10 }]);
   });
 
   it("drops, with no line, every report whose page is not on APP_BASE_URL's origin, or with none set", async () => {
@@ -192,6 +198,41 @@ describe("bodies shaped like the specifications'", () => {
   });
 });
 
+/**
+ * Bodies as Chromium 153 (headless) sent them in PT-7c3, for an inline script
+ * refused on a page at `/login?run=1` over HTTPS, with this origin put in.
+ * Neither names a column.
+ */
+describe("bodies captured from Chromium", () => {
+  const POLICY = "script-src 'nonce-N0nceS3cret'; report-uri /api/csp-report; report-to csp";
+  const expected = (mechanism: string) => ({ mechanism, page: "/login", directive: "script-src-elem",
+    blocked: "inline", disposition: "enforce", source: "other", count: 1, total: 1 });
+
+  it("counts report-uri's", async () => {
+    const sink = logged();
+    const body = JSON.stringify({ "csp-report": {
+      "document-uri": `${BASE}/login?run=1`, referrer: "", "violated-directive": "script-src-elem",
+      "effective-directive": "script-src-elem", "original-policy": POLICY, disposition: "enforce",
+      "blocked-uri": "inline", "line-number": 1, "source-file": `${BASE}/login`, "status-code": 200,
+      "script-sample": "",
+    } });
+    expect(await answer(body)).toBe(204);
+    expect(JSON.parse(sink[0] ?? "{}")).toMatchObject({ dropped: 0, violations: [expected("report-uri")] });
+  });
+
+  it("counts report-to's", async () => {
+    const sink = logged();
+    const body = JSON.stringify([{ age: 0, body: {
+      blockedURL: "inline", disposition: "enforce", documentURL: `${BASE}/login?run=1`,
+      effectiveDirective: "script-src-elem", lineNumber: 1, originalPolicy: POLICY, referrer: "", sample: "",
+      sourceFile: `${BASE}/login`, statusCode: 200,
+    }, type: "csp-violation", url: `${BASE}/login?run=1`, user_agent: "Mozilla/5.0 HeadlessChrome/153.0.0.0" }]);
+    expect(await answer(body, "application/reports+json")).toBe(204);
+    expect(JSON.parse(sink[0] ?? "{}")).toMatchObject({ dropped: 0, violations: [expected("report-to")] });
+    expect(sink[0]).not.toContain("Chrome");
+  });
+});
+
 describe("the categories", () => {
   it("names a directive on the list and nothing else", () => {
     expect(directiveCategory("Script-Src-Elem")).toBe("script-src-elem");
@@ -209,6 +250,45 @@ describe("the categories", () => {
     };
     for (const [blocked, category] of Object.entries(cases)) expect([blocked, blockedCategory(blocked, BASE)])
       .toEqual([blocked, category]);
+  });
+
+  it("names a page by its route pattern, never by its path, query or ids", () => {
+    const cases: Record<string, string> = {
+      [`${BASE}/`]: "/", [`${BASE}/login?token=s3cret#x`]: "/login", [`${BASE}/login/mfa`]: "/login/mfa",
+      [`${BASE}/properties/${UUID}/review`]: "/properties/[propertyId]/review",
+      [`${BASE}/properties/${UUID}/video-projects/${UUID}/start`]:
+        "/properties/[propertyId]/video-projects/[projectId]/start",
+      [`${BASE}/organizations/${UUID}/members/${UUID}/permissions`]:
+        "/organizations/[organizationId]/members/[userId]/permissions",
+      [`${BASE}/properties/${UUID}/x`]: OTHER_PAGE, [`${BASE}/properties`]: OTHER_PAGE,
+      [`${BASE}/properties/a%2Fb/review`]: OTHER_PAGE, [`${BASE}/login/`]: OTHER_PAGE,
+      [`${BASE}/properties/${"a".repeat(65)}`]: OTHER_PAGE, [`${BASE}/${"a".repeat(199)}`]: OTHER_PAGE,
+      [`${BASE}/properties/${UUID}/video-projects/${"a".repeat(150)}`]: OTHER_PAGE,
+      "https://evil.example/login": OTHER_PAGE, "http://app.example.test/login": OTHER_PAGE, "not a url": OTHER_PAGE,
+    };
+    for (const [document, page] of Object.entries(cases)) expect([document, pageCategory(document, BASE)])
+      .toEqual([document, page]);
+    expect(pageCategory(undefined, BASE)).toBe(OTHER_PAGE);
+  });
+
+  it("knows every page of the app, and nothing else", () => {
+    const pages = readdirSync(new URL("../app/", import.meta.url), { recursive: true, encoding: "utf8" })
+      .map((path) => path.split("\\").join("/"))
+      .filter((path) => path === "page.tsx" || path.endsWith("/page.tsx"))
+      .map((path) => `/${path.slice(0, -"page.tsx".length)}`.replace(/(.)\/$/, "$1"));
+    expect([...PAGE_PATTERNS].sort()).toEqual(pages.sort());
+    expect(new Set(PAGE_PATTERNS).size).toBe(PAGE_PATTERNS.length);
+  });
+
+  it("logs a page's pattern, and the page of any path off the list as (other), never the path", async () => {
+    const sink = logged();
+    const pageOf = (line: string | undefined) =>
+      (JSON.parse(line ?? "{}") as { violations: { page: string }[] }).violations[0]?.page;
+    expect(await answer(reportUri({ "document-uri": `${BASE}/properties/${UUID}/review?token=s3cret` }))).toBe(204);
+    expect(await answer(reportUri({ "document-uri": `${BASE}/properties/${UUID}/x?token=s3cret` }))).toBe(204);
+    expect(await answer(reportUri({ "document-uri": `${BASE}/${"p".repeat(200)}?token=s3cret` }))).toBe(204);
+    expect(sink.map(pageOf)).toEqual(["/properties/[propertyId]/review", OTHER_PAGE, OTHER_PAGE]);
+    for (const secret of ["s3cret", "token", UUID, "/x", "ppp"]) expect(sink.join("\n")).not.toContain(secret);
   });
 
   it("names a source next-static only for our own built scripts", () => {

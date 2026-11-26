@@ -6,7 +6,8 @@ import { createLogger, type Logger } from "@app/observability";
  * (ADR-0189). Unauthenticated by nature: no cookie, session, database or
  * limiter is read. The body is read up to a byte cap and never kept; a report
  * whose page is not on `APP_BASE_URL`'s origin is dropped; the rest are
- * counted by derived categories only, and a request writes at most one line,
+ * counted by derived categories only, the page by its route pattern, never its
+ * address (PT-7c3), and a request writes at most one line,
  * when one of its categories reaches 1, 2, 4, 8 ... reports in this process.
  */
 
@@ -26,6 +27,22 @@ const DIRECTIVES: ReadonlySet<string> = new Set([
 const KEYWORDS: ReadonlySet<string> = new Set(["inline", "eval", "wasm-eval", "data", "blob", "self"]);
 const EXTENSIONS: ReadonlySet<string> = new Set(["chrome-extension", "moz-extension", "safari-web-extension"]);
 const NEXT_STATIC = /^\/_next\/static\/[A-Za-z0-9._/-]{1,160}$/;
+/** The app's pages, one route pattern per `page.tsx` under `apps/web/src/app`; a test holds the list to the files. */
+export const PAGE_PATTERNS: readonly string[] = [
+  ...["/", "/accept-invitation", "/login", "/login/mfa", "/reset-password", "/security", "/verify-email"],
+  ...["/organizations/[organizationId]/groups", "/organizations/[organizationId]/members"],
+  "/organizations/[organizationId]/members/[userId]/permissions",
+  ...["/organizations/[organizationId]/units", "/organizations/[organizationId]/units/buy"],
+  ...["/properties/[propertyId]", "/properties/[propertyId]/review", "/properties/[propertyId]/video-projects"],
+  "/properties/[propertyId]/video-projects/[projectId]",
+  "/properties/[propertyId]/video-projects/[projectId]/start",
+];
+/** The page category of anything not on the list, on another origin, or with a path over {@link MAX_PAGE_PATH}. */
+export const OTHER_PAGE = "(other)";
+/** The longest path read for its pattern, in characters: the longest pattern with two 64-character ids (162) fits. */
+const MAX_PAGE_PATH = 180;
+/** What a dynamic segment (`[propertyId]`) matches: an id, never an encoded or empty segment. */
+const ID_SEGMENT = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** What a bounded read gave: the text, or why there is none. */
 export type BoundedRead =
@@ -140,6 +157,24 @@ export function blockedCategory(value: string | undefined, origin: string): stri
   return originOf(value) === origin ? "self" : "external";
 }
 
+/**
+ * The page's route pattern, matched segment by segment, from {@link PAGE_PATTERNS}: never its path, query or ids.
+ * `(other)` for any other path, another origin or a path over {@link MAX_PAGE_PATH} characters.
+ */
+export function pageCategory(value: string | undefined, origin: string): string {
+  const url = value === undefined ? null : URL.parse(value);
+  if (url === null || url.origin !== origin || url.pathname.length > MAX_PAGE_PATH) return OTHER_PAGE;
+  const segments = url.pathname.split("/");
+  const matches = (pattern: string) => {
+    const wanted = pattern.split("/");
+    return wanted.length === segments.length && wanted.every((part, i) => {
+      const segment = segments[i] ?? "";
+      return part.startsWith("[") ? ID_SEGMENT.test(segment) : part === segment;
+    });
+  };
+  return PAGE_PATTERNS.find(matches) ?? OTHER_PAGE;
+}
+
 /** Where the refused code came from: our own built scripts, an extension, nowhere named, or anything else. */
 export function sourceCategory(value: string | undefined, origin: string): string {
   if (value === undefined || value === "") return "none";
@@ -149,7 +184,7 @@ export function sourceCategory(value: string | undefined, origin: string): strin
 }
 
 /** A violation's category key: each value from a fixed list, so the keys are finite (ADR-0189 Decision 4). */
-type Categories = Readonly<Record<"mechanism" | "directive" | "blocked" | "disposition" | "source", string>>;
+type Categories = Readonly<Record<"mechanism" | "page" | "directive" | "blocked" | "disposition" | "source", string>>;
 
 /** Reports seen by this process, by category key, since it started: the sampler's only state. */
 const seen = new Map<string, number>();
@@ -201,6 +236,7 @@ export async function answerCspReport(
     if (violation.document === undefined || origin === undefined || originOf(violation.document) !== origin) continue;
     const categories: Categories = {
       mechanism: type === REPORT_URI ? "report-uri" : "report-to",
+      page: pageCategory(violation.document, origin),
       directive: directiveCategory(violation.directive),
       blocked: blockedCategory(violation.blocked, origin),
       disposition: dispositionCategory(violation.disposition),

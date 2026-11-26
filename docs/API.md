@@ -114,7 +114,8 @@ This endpoint must verify the current WaveSpeedAI-supported signature or authent
   no cookie. Answers `204` with no body, `400`, `413` (over 16 KiB) or
   `415`, and logs only categories of reports from `APP_BASE_URL`'s own
   pages (`docs/api-changes-pt-7c2.md`). Nothing reports to it until
-  PT-7c3.
+  PT-7c3. Since PT-7c3 both page policies report to it, and every page
+  answer names it in `Reporting-Endpoints` (`docs/api-changes-pt-7c3.md`).
 
 ## Error envelope
 

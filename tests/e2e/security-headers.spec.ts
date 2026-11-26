@@ -17,12 +17,15 @@ const EVERY_ANSWER = {
 /** The API policy (Decision 9): the download route's own `default-src 'none'; sandbox`, and no framing. */
 const API_POLICY = "default-src 'none'; frame-ancestors 'none'; sandbox";
 
-/** `next dev`'s page policy (Decision 10), which serves this test, for a nonce. */
+/** `next dev`'s page policy (Decision 10), which serves this test, for a nonce; it reports (ADR-0189, PT-7c3). */
 const devPagePolicy = (nonce: string): string =>
   `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'; ` +
   "style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self'; " +
   "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-src 'none'; " +
-  "frame-ancestors 'none'";
+  "frame-ancestors 'none'; report-uri /api/csp-report; report-to csp";
+
+/** Where a page's `report-to` group posts: on every page answer, never on the API's (PT-7c3). */
+const REPORTING_ENDPOINTS = 'csp="/api/csp-report"';
 
 /** Every `Content-Security-Policy` an answer carries: one source of headers each, never two (RD-9e). */
 async function policiesOf(answer: Response | APIResponse): Promise<string[]> {
@@ -52,12 +55,14 @@ test("pages, the API and a signed download link carry the fixed security headers
   expectFixedHeaders(pageHeaders);
   // The API policy forbids scripts: it is never a page's.
   expect(await policiesOf(login)).toEqual([expect.not.stringContaining("sandbox")]);
+  expect(pageHeaders["reporting-endpoints"]).toBe(REPORTING_ENDPOINTS);
 
   const health = await request.get("/api/health");
   expect(health.status()).toBe(200);
   expectFixedHeaders(health.headers());
   // The middleware never runs for the API: the configuration's policy is the only one.
   expect(await policiesOf(health)).toEqual([API_POLICY]);
+  expect(health.headers()["reporting-endpoints"]).toBeUndefined();
 
   // A link the web app's own signer makes, to an object in its shared folder. It is asked from Node, outside
   // Playwright's recorded steps, and only its answer is read: the link is never printed (ADR-0121 Decision 1).
@@ -114,6 +119,7 @@ test("a page carries the page policy, with a new nonce on every script of each l
     const nonce = /'nonce-([^']+)'/.exec(policies[0] ?? "")?.[1] ?? "";
     expect(nonce).toMatch(/^[A-Za-z0-9+/]{22}==$/);
     expect(policies[0]).toBe(devPagePolicy(nonce));
+    expect(await answer.headerValue("reporting-endpoints")).toBe(REPORTING_ENDPOINTS);
     nonces.push(nonce);
 
     const scripts = (await answer.text()).match(/<script\b[^>]*>/g) ?? [];

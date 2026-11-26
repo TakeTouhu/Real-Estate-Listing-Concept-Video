@@ -2546,7 +2546,7 @@ into on 2026-11-17.
       nonce on every script. A 404 is asked outside the browser (below).
       Measured on a production build behind the front in the lab; on
       the image, CI's first run is the first.*
-- [ ] **No CSP violation report endpoint**: it would be a new
+- [x] **No CSP violation report endpoint**: it would be a new
       unauthenticated `POST`; reconsider with part 2's observability.
       A refusal in a customer's browser is seen by no one until then.
       *Amended in PT-7c2 (ADR-0189): the endpoint exists,
@@ -2554,6 +2554,11 @@ into on 2026-11-17.
       `APP_BASE_URL`'s own pages. Nothing reports to it until PT-7c3 adds
       the policies' report directives, so refusals are still seen by no
       one until then.*
+      *Amended in PT-7c3: done. Both page policies report to the
+      endpoint (`report-uri` and `report-to csp`, with
+      `Reporting-Endpoints` on every page), and its line names the page
+      by route pattern. Chromium sends nothing from a plain-`http` page,
+      so `next dev` reports nothing (`docs/api-changes-pt-7c3.md`).*
 - [ ] **`style-src` allows `'unsafe-inline'`** for Next.js's own
       fallback pages, which render an inline `<style>` without a nonce;
       tighten when Next.js nonces them.

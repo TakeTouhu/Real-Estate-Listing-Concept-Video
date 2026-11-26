@@ -12,10 +12,29 @@
  *
  * `next dev` (`NODE_ENV=development`) also needs `eval` and its Fast Refresh
  * socket; every other `NODE_ENV` gets the production policy. The `/api` policy
- * is the configuration's (`fixed-headers.mjs`), never this one.
+ * is the configuration's (`fixed-headers.mjs`), never this one, and reports to
+ * nothing: an unknown `/api` address answers Next.js's HTML 404 under
+ * `default-src 'none'; sandbox`, so a report directive there would report every
+ * such visit, from an opaque origin (ADR-0189, PT-7c3).
+ *
+ * Both page policies report a refusal to `POST /api/csp-report` (ADR-0189):
+ * by `report-uri`, and by `report-to` to the group the middleware names in
+ * `Reporting-Endpoints`. A browser that knows `report-to` uses it alone.
  *
  * Imports nothing: the middleware runs on the Edge runtime.
  */
+
+/** The address a page's refusals are reported to (ADR-0189). */
+export const CSP_REPORT_PATH = "/api/csp-report";
+
+/** The `Reporting-Endpoints` group `report-to` names: never `default`, which other reports use. */
+export const CSP_REPORT_GROUP = "csp";
+
+/**
+ * The `Reporting-Endpoints` header every page answer carries: the group `report-to` names, at a relative address,
+ * which a browser resolves against the page's own (measured in Chromium, PT-7c3).
+ */
+export const REPORTING_ENDPOINTS = `${CSP_REPORT_GROUP}="${CSP_REPORT_PATH}"`;
 
 /** The bytes of randomness in a nonce. */
 export const NONCE_BYTES = 16;
@@ -46,6 +65,8 @@ const PRODUCTION_DIRECTIVES: readonly Directive[] = [
   ["form-action", "'self'"],
   ["frame-src", "'none'"],
   ["frame-ancestors", "'none'"],
+  ["report-uri", CSP_REPORT_PATH],
+  ["report-to", CSP_REPORT_GROUP],
 ];
 
 /**

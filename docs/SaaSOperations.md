@@ -191,6 +191,31 @@ error, raw until PT-7b2, is a line of the component `console`, `"The
 web server printed an error"`, with the error's name and up to 50 stack
 frames, never its message; a warning likewise (ADR-0186).
 
+Browsers report what the page policy refused to `POST /api/csp-report`
+(ADR-0189, since PT-7c3). The endpoint writes at most one `INFO` line
+per request, component `csp-report`, `"Browsers reported page policy
+violations"`. The operator's query in Cloud Logging is
+`jsonPayload.component="csp-report"` *(inference: Cloud Run reads a
+JSON line on standard output as `jsonPayload`; no deployment exists
+yet to run it)*. Each line lists the category keys (`mechanism`,
+`page`, `directive`, `blocked`, `disposition`, `source`) whose count
+in that instance reached 1, 2, 4, 8 ... with this request:
+
+- `count` is how many of this request's reports had the key; `total`
+  is that instance's running count for it since it started. A key
+  with n reports writes only ⌊log₂ n⌋ + 1 lines, so read the largest
+  `total` per key and instance as at least that many reports and
+  fewer than twice as many, not by counting lines. A restart or a new
+  instance starts again at 1.
+- `dropped` counts `csp-violation` entries past the tenth in one
+  batch, unread.
+- Every line is untrusted: anyone can post a report naming our origin.
+  No alert may fire on one line, and a flood on a key folds real
+  reports into its `total`.
+- `blocked` or `source` `extension` is a customer's browser extension,
+  not our page. A new key with `source` `next-static` or `none` on a
+  known `page`, after a deployment, is the one to look at first.
+
 ## Worker operations
 
 There is no queue to operate: work is discovered by scanning for

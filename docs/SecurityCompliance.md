@@ -178,6 +178,11 @@ release and **is not activated** (ADR-0054 Decision 2).
   test proves the development policy, and RD-11 is to prove the
   production one. Dependency scanning is not part 1's: CI has no audit,
   CodeQL or Dependabot step.*
+  *Amended in PT-7c3: both page policies report a refusal to
+  `POST /api/csp-report` (`report-uri` and `report-to csp`, with a
+  `Reporting-Endpoints` header on every page); the API policy reports
+  to nothing. The endpoint logs categories only, the page as its route
+  pattern, never its address, query or ids (ADR-0189).*
 - **Defense-in-depth rate limiting** across account, organization, IP and
   endpoint/action dimensions, covering login, password reset, MFA recovery,
   uploads, generation, downloads and billing. Login failures use progressive
