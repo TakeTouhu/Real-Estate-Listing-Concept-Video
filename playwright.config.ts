@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { E2E_BASE_URL, E2E_PORT, e2eEnvironment } from "./tests/e2e/support/environment";
+import { E2E_BASE_URL, E2E_PORT, devServerNodeOptions, e2eEnvironment } from "./tests/e2e/support/environment";
 
 /** This process's environment, for Chromium, under a UTF-8 locale. */
 const browserEnvironment: Record<string, string> = {
@@ -45,7 +45,8 @@ export default defineConfig({
   webServer: {
     command: `pnpm --filter @app/web exec next dev --port ${E2E_PORT}`,
     url: `${E2E_BASE_URL}/api/health`,
-    env: e2eEnvironment(),
+    // A heap limit above Next.js's own where memory allows, so `next dev` does not restart in a test.
+    env: { ...e2eEnvironment(), NODE_OPTIONS: devServerNodeOptions() },
     reuseExistingServer: false,
     timeout: 180_000,
     // `next dev` logs each request's address, signed links included: only its errors are shown.

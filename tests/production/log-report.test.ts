@@ -22,7 +22,30 @@ const OUTAGE = json({
   code: "P1017",
   causeName: "PrismaClientKnownRequestError",
 });
-const CLEAN = [...START, LIMIT, PROBE, OUTAGE];
+/** The error no catch takes, as PT-7b3's step causes it: the console bridge's line, then `onRequestError`'s. */
+const PRINTED = json({
+  severity: "ERROR",
+  component: "console",
+  method: "error",
+  errorName: "TypeError",
+  code: "UNEXPECTED",
+});
+const ANSWERED = json({
+  severity: "ERROR",
+  component: "request",
+  route: "POST /api/auth/login",
+  errorName: "TypeError",
+  code: "UNEXPECTED",
+  routeType: "route",
+});
+const UNCAUGHT = [PRINTED, ANSWERED];
+/** The same error as Next.js printed it to stderr before PT-7b2 (Node.js 22.23.4's undici). */
+const RAW = [
+  "TypeError: Failed to parse body as FormData.",
+  "    at node:internal/deps/undici/undici:5896:27",
+  "    at successSteps (node:internal/deps/undici/undici:5940:27)",
+];
+const CLEAN = [...START, LIMIT, PROBE, OUTAGE, ...UNCAUGHT];
 
 function report(lines: string[], values?: string[]) {
   const log = join(folder, "web.log");
@@ -52,7 +75,7 @@ describe("the production-mode log report", () => {
 
   it("accepts readiness's probe answering P1017 too, as CI's first run read it before P1001", () => {
     const closed = PROBE.replace("P1001", "P1017");
-    const { status, out } = report([...START, LIMIT, closed, OUTAGE, PROBE]);
+    const { status, out } = report([...START, LIMIT, closed, OUTAGE, PROBE, ...UNCAUGHT]);
     expect(status).toBe(0);
     expect(out).toContain("| WARNING | readiness | P1017 |  |  |  |  | 1 |");
   });
@@ -73,10 +96,45 @@ describe("the production-mode log report", () => {
     ["a lower-case severity", [...CLEAN, json({ severity: "warning", component: "request" })]],
     ["the old level field alone", [...CLEAN, json({ level: "info", component: "request" })]],
     ["no component", [...CLEAN, json({ severity: "INFO", message: "x" })]],
-    ["no outage line", [...START, LIMIT, PROBE]],
+    ["no outage line", [...START, LIMIT, PROBE, ...UNCAUGHT]],
     ["two outage lines", [...CLEAN, OUTAGE]],
+    ["another error's print", [...CLEAN, PRINTED.replace("TypeError", "PrismaClientInitializationError")]],
+    ["another route's uncaught error", [...CLEAN, ANSWERED.replace("/api/auth/login", "/api/auth/register")]],
   ])("fails on %s", (_, lines) => {
     expect(report(lines).status).toBe(1);
+  });
+
+  it("counts the error no catch takes by its two lines, once each", () => {
+    const { status, out } = report(CLEAN);
+    expect(status).toBe(0);
+    expect(out).toContain("| ERROR | console | UNEXPECTED |  | TypeError |  |  | 1 |");
+    expect(out).toContain("| ERROR | request | UNEXPECTED | POST /api/auth/login | TypeError |  |  | 1 |");
+  });
+
+  it.each([
+    ["the pair twice", [...CLEAN, ...UNCAUGHT], ["2 console lines", "2 request lines"], []],
+    ["the print twice", [...CLEAN, PRINTED], ["2 console lines"], ["request lines"]],
+    ["the request line twice", [...CLEAN, ANSWERED], ["2 request lines"], ["console lines"]],
+    ["the print alone", [...START, LIMIT, PROBE, OUTAGE, PRINTED], ["0 request lines"], ["console lines"]],
+    ["the request line alone", [...START, LIMIT, PROBE, OUTAGE, ANSWERED], ["0 console lines"], ["request lines"]],
+    ["neither", [...START, LIMIT, PROBE, OUTAGE], ["0 console lines", "0 request lines"], []],
+    [
+      "the raw print before PT-7b2",
+      [...START, LIMIT, PROBE, OUTAGE, ...RAW, ANSWERED],
+      ["0 console lines", "raw"],
+      ["request lines"],
+    ],
+    [
+      "the raw print beside the pair",
+      [...CLEAN, ...RAW],
+      ["a raw line that is not a start line"],
+      ["console lines", "request lines"],
+    ],
+  ])("fails on %s, and says so, naming no count that holds", (_, lines, named, unnamed) => {
+    const { status, out } = report(lines);
+    expect(status).toBe(1);
+    for (const text of named) expect(out).toContain(text);
+    for (const text of unnamed) expect(out).not.toContain(text);
   });
 
   it("prints a field that is not a plain word or route as (other)", () => {

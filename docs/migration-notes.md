@@ -3705,3 +3705,26 @@ install and its test cases; `console-bridge.ts` and its test go;
 `architecture.md`, `SaaSOperations.md`, the part 2 gap analysis and
 `TODO.md` go, its two flipped items back to `[ ]`. The raw print
 returns.
+
+## PT-7b3 — The production-mode job answers one error no catch takes
+
+**No migration** (ADR-0187); nothing deployed or pushed; no setting,
+image or route changes. CI's `production-mode` job gains one step,
+"Answer one error no catch takes", which expects `500`, and
+`tests/production/log-report.mjs` requires its `console` and `request`
+`TypeError` lines once each. **Rolling back:** the step goes from
+`ci.yml` with its pin in `tests/container-images.test.ts`; the report
+drops `UNCAUGHT` and its count, its header comment returns to its
+PT-7b2 text, and its test the new cases and the pair in `CLEAN`; ADR-0187 and
+`api-changes-pt-7b3.md` go, and the PT-7b3 lines of the Roadmap and
+`TODO.md`; `architecture.md`'s production-mode row returns to its
+PT-7b2 text. Dropping only the step fails the report, which requires
+its two lines.
+The browser tests' `next dev` gets a larger heap limit
+(`devServerNodeOptions` in `tests/e2e/support/environment.ts`, used by
+`playwright.config.ts`), and the `e2e` job's "Browser tests" step
+fails a run in which `next dev` restarted near its heap limit. **Rolling
+that back:** the step returns to `pnpm run test:e2e`, the web server's
+`env` to `e2eEnvironment()`, and the function and its test go with the
+"Amended in PT-7b3" note on the lost-press item of `TODO.md` and its
+"Find what keeps" item.

@@ -896,6 +896,23 @@ describe("the production-mode browser", () => {
         'if [ "$try" -eq 30 ]; then echo "readiness did not recover in 30 tries" >&2; exit 1; fi',
       ]),
     );
+    // One error no catch takes, after the outage and before the report, which requires its two lines (ADR-0187).
+    const names = job.steps.map((s) => s.fields.get("name"));
+    const uncaught = "Answer one error no catch takes";
+    expect(names.slice(names.indexOf(uncaught) - 1, names.indexOf(uncaught) + 2)).toEqual([
+      "Stop the database, then start it again",
+      uncaught,
+      "Report the server's log",
+    ]);
+    expect([step(uncaught)?.fields.get("timeout-minutes"), ...run(uncaught)]).toEqual([
+      "2",
+      'dir="$RUNNER_TEMP/rd11"',
+      "got=\"$(curl -sS --max-time 20 --cacert \"$dir/ca.pem\" -o /dev/null -w '%{http_code}' " +
+        "-H 'Origin: https://app.rd11.test:8443' -H 'Content-Type: multipart/form-data' --data 'x' " +
+        'https://app.rd11.test:8443/api/auth/login)"',
+      'echo "$got"',
+      "test \"$got\" = 500",
+    ]);
   });
 });
 

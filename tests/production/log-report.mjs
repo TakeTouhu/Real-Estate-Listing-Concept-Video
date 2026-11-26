@@ -5,12 +5,14 @@
  * of Next.js's start lines, and a JSON line must have one of the logger's four
  * severities (PT-7a, ADR-0181) and a component. It fails on any other line,
  * on any `ERROR` line but the one the database outage step causes (exactly
- * one), and on any `WARNING` but a refusal by the client address's limit or
- * readiness's database probe answering `P1001` or `P1017` during the outage
- * (CI's first run read both: a stopped server closes the open connection,
- * then refuses new ones). A listed value in the log (one per line of each
- * `values` file) fails it with exit 2 and prints nothing more. Node.js
- * built-ins only.
+ * one) and the two of the error no catch takes, which the uncaught-error step
+ * causes: Next.js's print through the console bridge and `onRequestError`'s
+ * line (PT-7b3, ADR-0187; exactly one each), and on any `WARNING` but a
+ * refusal by the client address's limit or readiness's database probe
+ * answering `P1001` or `P1017` during the outage (CI's first run read both:
+ * a stopped server closes the open connection, then refuses new ones). A
+ * listed value in the log (one per line of each `values` file) fails it with
+ * exit 2 and prints nothing more. Node.js built-ins only.
  */
 import { appendFileSync, readFileSync } from "node:fs";
 import process from "node:process";
@@ -19,6 +21,11 @@ const FIELDS = ["severity", "component", "code", "route", "errorName", "causeNam
 const START_LINES = [/^▲ Next\.js 15\.\d+\.\d+$/, /^- Local: +http:\/\/localhost:3000$/];
 START_LINES.push(/^- Network: +http:\/\/0\.0\.0\.0:3000$/, /^✓ Starting\.\.\.$/, /^✓ Ready in \d+(?:\.\d+)?m?s$/);
 const OUTAGE = { component: "request", route: "POST /api/auth/login", errorName: "RateLimiterUnavailable" };
+/** A multipart sign-in with no boundary: `request.formData()` throws outside the route's `try` (ADR-0187). */
+const UNCAUGHT = [
+  ["console", { component: "console", method: "error", errorName: "TypeError" }],
+  ["request", { component: "request", route: "POST /api/auth/login", errorName: "TypeError" }],
+];
 const matches = (entry, wanted) => Object.entries(wanted).every(([name, value]) => entry[name] === value);
 const WARNINGS = [
   { component: "rate-limit", code: "RATE_LIMITED", dimension: "client" },
@@ -40,6 +47,7 @@ if (values.some((value) => log.includes(value))) {
 const counts = new Map();
 const problems = [];
 let outages = 0;
+const uncaught = UNCAUGHT.map(() => 0);
 for (const line of log.split("\n").map((each) => each.trim()).filter((each) => each !== "")) {
   let entry;
   try {
@@ -54,13 +62,18 @@ for (const line of log.split("\n").map((each) => each.trim()).filter((each) => e
   const row = FIELDS.map((name) => (entry[name] === undefined ? "" : shown(entry[name]))).join(" | ");
   counts.set(row, (counts.get(row) ?? 0) + 1);
   if (!SEVERITIES.includes(entry.severity) || typeof entry.component !== "string") problems.push(`a JSON line: ${row}`);
+  const which = UNCAUGHT.findIndex(([, wanted]) => matches(entry, wanted));
   if (entry.severity === "ERROR" && matches(entry, OUTAGE)) outages += 1;
+  else if (entry.severity === "ERROR" && which !== -1) uncaught[which] += 1;
   else if (entry.severity === "ERROR") problems.push(`an error line: ${row}`);
   if (entry.severity === "WARNING" && !WARNINGS.some((wanted) => matches(entry, wanted))) {
     problems.push(`a warning: ${row}`);
   }
 }
 if (outages !== 1) problems.push(`${outages} lines for the sign-in during the database outage, 1 expected`);
+UNCAUGHT.forEach(([component], i) => {
+  if (uncaught[i] !== 1) problems.push(`${uncaught[i]} ${component} lines for the error no catch took, 1 expected`);
+});
 
 const table = [`| ${FIELDS.join(" | ")} | lines |`, `|${" --- |".repeat(FIELDS.length + 1)}`];
 for (const [row, count] of [...counts].sort()) table.push(`| ${row} | ${count} |`);
