@@ -2232,9 +2232,10 @@ into on 2026-11-17.
       past its four), `zod` (PT-6d) and `next`'s three moderates. The
       overrides can go once `next` stops pinning `postcss` 8.4.31. pnpm 11
       no longer reads `package.json`'s `pnpm` field, so a move to it must
-      carry the overrides, whose loss fails under `--frozen-lockfile`, and
-      `onlyBuiltDependencies`, which becomes `allowBuilds` and whose loss
-      fails nothing.*
+      carry the overrides, which the lockfile records, and
+      `onlyBuiltDependencies`, which becomes `allowBuilds`; without it
+      pnpm 11, whose `strictDepBuilds` is on by default, refuses the
+      install scripts of `esbuild` and Prisma's packages.*
 - [ ] **Decide how migrations run in production.** The web image holds
       no Prisma CLI; RD-11 applies them from the runner. Part 2.
       *Amended in RD-11a (ADR-0178): CI applies them from the runner.*

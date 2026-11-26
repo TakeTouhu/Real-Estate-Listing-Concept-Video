@@ -68,10 +68,11 @@ On Ubuntu, outside Docker, with 0.33.5 and 0.35.5 side by side:
   at most 3 bits apart on the rest, under the duplicate threshold of 6
   (`DUPLICATE_HAMMING_THRESHOLD`, `packages/domain/src/property/media.ts`).
   The normalized JPEGs are equal, so the difference is in the 8-by-8
-  reduction. `Asset.perceptualHash` is stored, but nothing is deployed,
-  so no production hash from 0.33.5 exists to compare with. A local or
-  seeded database keeps its 0.33.5 hashes, which can sit up to 3 bits
-  from the same photograph uploaded again.
+  reduction. `MediaAsset.perceptualHash` is stored, but nothing is
+  deployed, so no production hash from 0.33.5 exists to compare with. A
+  local database keeps the 0.33.5 hashes of its uploads, which can sit
+  a few bits (up to 3 as measured here) from the same photograph
+  uploaded again.
 - The six disclosure layers re-render byte-identical to the committed
   files with the bundled `FONTCONFIG_FILE` (ADR-0071's pins hold).
 - EXIF, GPS, ICC and XMP are still stripped. A JPEG followed by a ZIP
