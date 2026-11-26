@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * The patch overrides of PT-6c and the one sharp the lockfile holds, read as text. Each override lifts only the
- * versions below its fix to that fix, so it stops applying once every dependent asks for a fixed version.
+ * The patch overrides of PT-6c and the one sharp the lockfile holds, read as text, and the one zod it holds (PT-6d),
+ * a direct pin rather than an override. Each override lifts only the versions below its fix to that fix, so it stops
+ * applying once every dependent asks for a fixed version.
  */
 const ROOT = join(__dirname, "..");
 const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
@@ -40,5 +41,12 @@ describe("the dependency overrides", () => {
   it("leave one sharp in the lockfile, the fixed 0.35.5", () => {
     const sharp = section("packages").filter((line) => /^ {2}sharp@/.test(line));
     expect(sharp).toEqual(["  sharp@0.35.5:"]);
+  });
+});
+
+describe("the zod pin (PT-6d)", () => {
+  it("leaves one zod in the lockfile, the fixed 4.6.7", () => {
+    const zod = section("packages").filter((line) => /^ {2}zod@/.test(line));
+    expect(zod).toEqual(["  zod@4.6.7:"]);
   });
 });

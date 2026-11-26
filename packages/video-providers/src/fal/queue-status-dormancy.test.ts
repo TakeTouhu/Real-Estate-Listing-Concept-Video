@@ -162,7 +162,7 @@ describe("no fal credential exists in production", () => {
     const env = readFileSync(join(REPO_ROOT, "packages", "shared", "src", "env.ts"), "utf8");
     // The enum is the gate. Adding "fal" to it is the single edit that would
     // make every other dormancy claim in this file worth re-reading.
-    expect(env).toContain('z.enum(["fake", "wavespeed"])');
+    expect(env).toContain('VIDEO_PROVIDER: oneOf(["fake", "wavespeed"])');
   });
 
   it("is never read from process.env by the adapter", () => {
