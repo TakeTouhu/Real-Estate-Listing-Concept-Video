@@ -271,6 +271,8 @@ const commands = (run: string): string[] =>
 
 /** The only Docker commands the job may run; the build is held word for word below. */
 const DOCKER_COMMANDS = ["run", "exec", "logs", "rm", "image inspect", "buildx build"];
+/** A stand-in job's commands besides: its networks, read as two words like `image` and `buildx` (ADR-0178). */
+const STAND_IN_COMMANDS = [...DOCKER_COMMANDS, "network create", "network connect", "network rm"];
 const BUILD = new RegExp(
   [
     "^docker buildx build --provenance=false --load --platform linux/amd64 -f (\\S+)(?: --target ([\\w-]+))?",
@@ -301,6 +303,119 @@ const IMAGE_JOBS = [
     guarded: [],
   },
 ];
+
+/**
+ * Each job that runs an image against stand-ins (ADR-0178, amending ADR-0175
+ * Decision 1): what it builds, the actions it uses in order, its steps run
+ * whatever happened before them, and each container and network word for word.
+ */
+const STAND_IN_JOBS = [
+  {
+    name: "production-mode",
+    builds: [["apps/web/Dockerfile", ""]],
+    actions: ["actions/checkout@v4", "pnpm/action-setup@v4", "actions/setup-node@v4"],
+    guarded: [["Stop the stand-ins", "always()"]],
+    runs: [
+      ["--name db --network rd11-edge -p 127.0.0.1:5432:5432", '--env-file "$dir/pg.env" "$PG_IMAGE"'],
+      [
+        '--name gcs --network rd11-edge -p 127.0.0.1:4480:8000 -v "$dir/gcs:/run/rd11/tls:ro" -e FAKE_GCS_SCHEME=both',
+        "-e FAKE_GCS_PORT=443 -e FAKE_GCS_PORT_HTTP=8000 -e FAKE_GCS_BACKEND=memory -e FAKE_GCS_LOG_LEVEL=warn",
+        "-e FAKE_GCS_CERT_LOCATION=/run/rd11/tls/cert.pem",
+        '-e FAKE_GCS_PRIVATE_KEY_LOCATION=/run/rd11/tls/key.pem "$GCS_IMAGE"',
+      ],
+      [
+        '--name mailpit --network rd11-edge -p 127.0.0.1:8025:8025 -v "$dir/mail:/run/rd11/tls:ro"',
+        "-e MP_SMTP_TLS_CERT=/run/rd11/tls/cert.pem -e MP_SMTP_TLS_KEY=/run/rd11/tls/key.pem",
+        "-e MP_SMTP_REQUIRE_STARTTLS=true -e MP_SMTP_AUTH_ACCEPT_ANY=true",
+        '-e MP_DISABLE_VERSION_CHECK=true "$MAILPIT_IMAGE"',
+      ],
+      [
+        "--name clamav --network rd11-int --ip 172.30.11.13 --network-alias clamav.rd11.test",
+        '-e CLAMAV_NO_FRESHCLAMD=true -e CLAMAV_NO_MILTERD=true "$CLAMAV_IMAGE"',
+      ],
+      [
+        "--name metadata --network rd11-int --ip 172.30.11.11 --network-alias metadata.google.internal",
+        '--user 1000:1000 --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$dir/metadata.env"',
+        '-v "$GITHUB_WORKSPACE/tests/production:/srv/rd11:ro" "$NODE_IMAGE" node /srv/rd11/metadata-server.mjs',
+      ],
+      [
+        "--name web --network rd11-int --read-only --cap-drop ALL --security-opt no-new-privileges",
+        '--env-file "$dir/web.env" -v "$dir/ca.pem:/run/rd11/ca.pem:ro" -e NODE_EXTRA_CA_CERTS=/run/rd11/ca.pem',
+        "vtavision-web:ci",
+      ],
+      [
+        "--name front --network rd11-edge -p 127.0.0.1:8443:8443 --user 1000:1000 --read-only --cap-drop ALL",
+        '--security-opt no-new-privileges -v "$dir/app:/run/rd11/tls:ro"',
+        '-v "$GITHUB_WORKSPACE/tests/production:/srv/rd11:ro" "$NODE_IMAGE" node /srv/rd11/tls-front.mjs',
+      ],
+    ].map((words) => ["docker run -d", ...words].join(" ")),
+    networks: [
+      "create --internal --subnet 172.30.11.0/24 rd11-int",
+      "create rd11-edge",
+      "connect --ip 172.30.11.12 --alias db.rd11.test rd11-int db",
+      "connect --ip 172.30.11.10 --alias storage.googleapis.com rd11-int gcs",
+      "connect --ip 172.30.11.14 --alias mail.rd11.test rd11-int mailpit",
+      "connect --ip 172.30.11.15 rd11-int front",
+      "rm rd11-int rd11-edge || true",
+    ].map((words) => `docker network ${words}`),
+  },
+];
+/** What would widen trust, turn a check off, point the store elsewhere or reach the host, anywhere in such a job. */
+const BANNED_STAND_IN = new RegExp(
+  [
+    "NODE_TLS_REJECT_UNAUTHORIZED|NODE_OPTIONS|SSL_CERT_|GOOGLE_CLOUD_STORAGE_ENDPOINT|--insecure|\\s-k\\b",
+    "--no-check-certificate|rejectUnauthorized|createRequire",
+    "--privileged|docker\\.sock|--(?:network|net)[= ]host|--cap-add|--entrypoint|services:",
+  ].join("|"),
+);
+/** `-k` alone or among other one-letter flags, in a command that asks over the network. */
+const INSECURE_FLAG = /(?:^|\s)-[A-Za-z]*k[A-Za-z]*(?=\s|$)/;
+/** The only places such a job names Google's store: its leaf, its alias inside the job's network, its lookup in web. */
+const GOOGLE_NAMED = [
+  "gcs:storage.googleapis.com",
+  "--alias storage.googleapis.com",
+  "docker exec web getent hosts storage.googleapis.com",
+];
+/** A stand-in run's options that take a value, then those that take none; any other option is refused. */
+const RUN_OPTIONS = ["--name", "--network", "-p", "-v", "-e", "--env-file", "--ip", "--network-alias", "--user"]
+  .concat(["--cap-drop", "--security-opt"]);
+const RUN_FLAGS = ["-d", "--read-only"];
+
+/** What a `docker run` runs: the first word after its options, and the words after it; undefined on another option. */
+function ranImage(command: string): { readonly image: string; readonly rest: string } | undefined {
+  const words = command.split(" ").slice(2);
+  let i = 0;
+  while (words[i]?.startsWith("-") === true) {
+    const word = words[i] ?? "";
+    if (RUN_OPTIONS.includes(word)) i += 2;
+    else if (RUN_FLAGS.includes(word)) i += 1;
+    else return undefined;
+  }
+  return { image: words[i] ?? "", rest: words.slice(i + 1).join(" ") };
+}
+
+/** Each Docker command in a job's steps, with its sub-command: two words for `image`, `buildx` and `network`. */
+function dockerCommands(job: Job): { readonly command: string; readonly sub: string }[] {
+  const found: { command: string; sub: string }[] = [];
+  for (const command of job.steps.flatMap((s) => commands(s.fields.get("run") ?? ""))) {
+    for (const [, one = "", two = ""] of command.matchAll(/\bdocker\s+(\S+)(?:\s+(\S+))?/g)) {
+      found.push({ command, sub: ["image", "buildx", "network"].includes(one) ? `${one} ${two}` : one });
+    }
+  }
+  return found;
+}
+
+/** What a job builds, each build held to the one guarded command. */
+function builds(job: Job): string[][] {
+  const built: string[][] = [];
+  for (const { command, sub } of dockerCommands(job)) {
+    if (sub !== "buildx build") continue;
+    const build = BUILD.exec(command);
+    expect(`${command}: ${build !== null}`).toBe(`${command}: true`);
+    if (build !== null) built.push([build[1] ?? "", build[2] ?? ""]);
+  }
+  return built;
+}
 
 describe("the images together", () => {
   it("use one base digest", () => {
@@ -333,25 +448,89 @@ describe("the images together", () => {
     const guarded = job.steps.filter((s) => s.fields.has("if")).map((s) => [s.fields.get("name"), s.fields.get("if")]);
     expect(guarded).toEqual(image.guarded);
 
-    const built: string[][] = [];
-    for (const command of job.steps.flatMap((s) => commands(s.fields.get("run") ?? ""))) {
-      for (const [, one = "", two = ""] of command.matchAll(/\bdocker\s+(\S+)(?:\s+(\S+))?/g)) {
-        const sub = one === "image" || one === "buildx" ? `${one} ${two}` : one;
-        expect(`${command}: ${DOCKER_COMMANDS.includes(sub)}`).toBe(`${command}: true`);
-        if (sub !== "buildx build") continue;
-        const build = BUILD.exec(command);
-        expect(`${command}: ${build !== null}`).toBe(`${command}: true`);
-        if (build !== null) built.push([build[1] ?? "", build[2] ?? ""]);
-      }
+    for (const { command, sub } of dockerCommands(job)) {
+      expect(`${command}: ${DOCKER_COMMANDS.includes(sub)}`).toBe(`${command}: true`);
     }
-    expect(built).toEqual(image.builds);
+    expect(builds(job)).toEqual(image.builds);
+  });
+
+  it.each(STAND_IN_JOBS)("are run against stand-ins in the $name job, as built and held in", (stand) => {
+    const ci = raw(WORKFLOW);
+    const job = readJob(ci, stand.name);
+    const text = ci.split(/\r?\n/).slice(job.first, job.last).join("\n");
+    expect(job.unknown).toEqual([]);
+    expect(job.keys.get("runs-on")).toBe("ubuntu-24.04");
+    expect(job.keys.get("timeout-minutes")).toBe("60");
+    expect([...job.keys.keys()].sort()).toEqual(["env", "permissions", "runs-on", "steps", "timeout-minutes"]);
+    expect([...job.permissions]).toEqual([["contents", "read"]]);
+
+    // The commit, and every image it runs by tag and index digest: Node.js's is the images' base, and the three
+    // stand-ins the storage job runs are the very pins it runs.
+    const images = [...job.env].filter(([name]) => name !== "REVISION");
+    expect(job.env.get("REVISION")).toBe("${{ github.sha }}");
+    const names = ["PG_IMAGE", "GCS_IMAGE", "CLAMAV_IMAGE", "MAILPIT_IMAGE", "NODE_IMAGE"];
+    expect(images.map(([name]) => name)).toEqual(names);
+    for (const [name, image] of images) expect(`${name}: ${PINNED.test(image)}`).toBe(`${name}: true`);
+    expect(job.env.get("NODE_IMAGE")).toBe(`node:22-trixie-slim@${DIGEST}`);
+    expect(job.env.get("PG_IMAGE")).toMatch(/^postgres:16\.\d+-trixie@/);
+    for (const name of ["GCS_IMAGE", "CLAMAV_IMAGE", "MAILPIT_IMAGE"]) {
+      expect(ci.split(/\r?\n/).map((line) => line.trim())).toContain(`image: ${job.env.get(name)}`);
+    }
+
+    const [checkout] = job.steps;
+    expect([...(checkout?.with ?? [])]).toEqual([["persist-credentials", "false"]]);
+    expect(job.steps.flatMap((s) => s.fields.get("uses") ?? [])).toEqual(stand.actions);
+    const guarded = job.steps.filter((s) => s.fields.has("if")).map((s) => [s.fields.get("name"), s.fields.get("if")]);
+    expect(guarded).toEqual(stand.guarded);
+    const bounded = (s: Step): boolean => /^[1-9]\d*$/.test(s.fields.get("timeout-minutes") ?? "");
+    const unbounded = job.steps.filter((s) => s.fields.has("run") && !bounded(s));
+    expect(unbounded.map((s) => s.fields.get("name"))).toEqual([]);
+
+    const docker = dockerCommands(job);
+    for (const { command, sub } of docker) {
+      expect(`${command}: ${STAND_IN_COMMANDS.includes(sub)}`).toBe(`${command}: true`);
+      // Into a container as it runs, never as another user or with more.
+      expect(command).not.toMatch(/\bdocker exec -/);
+    }
+    expect(builds(job)).toEqual(stand.builds);
+    // Every container is the image built here or a pinned one, and each is held word for word: the web image runs
+    // as built, with the web-image job's flags, on the internal network alone. So is each network.
+    const runs = docker.filter(({ sub }) => sub === "run").map(({ command }) => command);
+    for (const command of runs) {
+      const ran = ranImage(command) ?? { image: "", rest: "" };
+      const pinned = /^"\$([A-Z]+_IMAGE)"$/.exec(ran.image)?.[1];
+      const image = ran.image === "vtavision-web:ci" || (pinned !== undefined && job.env.has(pinned));
+      const rest = ran.rest === "" || (pinned === "NODE_IMAGE" && /^node \/srv\/rd11\/[\w-]+\.mjs$/.test(ran.rest));
+      expect(`${command}: ${image && rest}`).toBe(`${command}: true`);
+    }
+    expect(runs).toEqual(stand.runs);
+    const networks = docker.filter(({ sub }) => sub.startsWith("network ")).map(({ command }) => command);
+    expect(networks).toEqual(stand.networks);
+    // Each Node.js stand-in runs a file of tests/production: Node.js's built-ins alone, and no timer.
+    for (const command of runs.filter((c) => c.includes('"$NODE_IMAGE"'))) {
+      const file = / node \/srv\/rd11\/([\w-]+\.mjs)$/.exec(command)?.[1] ?? "none";
+      const there = existsSync(join(REPO_ROOT, "tests/production", file));
+      expect(`${command}: ${there}`).toBe(`${command}: true`);
+      const source = there ? raw(`tests/production/${file}`) : "";
+      const imports = source.split("\n").filter((l) => /\bimport\b|\bfrom\b|require/.test(l) && !l.startsWith(" * "));
+      expect(imports.filter((l) => !/^import (?:\w+|\{ \w+(?:, \w+)* \}) from "node:[\w/]+";$/.test(l))).toEqual([]);
+      expect(source).not.toMatch(/createRequire|process\.binding|set(?:Timeout|Interval)|timers/);
+    }
+
+    expect(text.split("\n").filter((line) => BANNED_STAND_IN.test(line))).toEqual([]);
+    const all = job.steps.flatMap((s) => commands(s.fields.get("run") ?? ""));
+    const asking = all.filter((command) => /\b(?:curl|wget|expect)\b/.test(command));
+    expect(asking.filter((command) => INSECURE_FLAG.test(command))).toEqual([]);
+    const named = GOOGLE_NAMED.reduce((rest, name) => rest.split(name).join(""), text);
+    expect(named).not.toMatch(/googleapis|google\.com|googleusercontent/i);
   });
 
   it("are every one built by a job, with no docker outside those jobs, and nothing pushed or cached", () => {
     const ci = raw(WORKFLOW);
-    const built = new Set(IMAGE_JOBS.flatMap((image) => image.builds.map(([file]) => file)));
+    const all = [...IMAGE_JOBS, ...STAND_IN_JOBS];
+    const built = new Set(all.flatMap((image) => image.builds.map(([file]) => file)));
     expect([...built].sort()).toEqual([...DOCKERFILES].sort());
-    const jobs = IMAGE_JOBS.map((image) => readJob(ci, image.name));
+    const jobs = all.map((image) => readJob(ci, image.name));
     const outside = ci.split(/\r?\n/).filter((_, i) => jobs.every((job) => i < job.first || i >= job.last));
     expect(outside.filter((line) => /docker/i.test(line))).toEqual([]);
     expect(ci.split(/\r?\n/).filter((line) => BANNED_WORKFLOW.test(line))).toEqual([]);
