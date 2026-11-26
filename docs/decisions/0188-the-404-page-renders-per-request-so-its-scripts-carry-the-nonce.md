@@ -98,11 +98,12 @@ A future Next.js that prerendered `/_not-found` despite the layout
 
 ## Decision 4 — The API policy on `/_next/` and the icon, production builds only
 
-The middleware does not run for `/_next`, under `/_next/` or for
-`/favicon.ico`, so an address there that names no file (`/_next`,
-`/_next/nothing`, and
-`/favicon.ico`, which the app does not have) was answered with
-Next.js's 404 page and no policy at all. A production build's
+Before this PR the middleware did not run under `/_next/` or for
+`/favicon.ico`, so an address there that names no file
+(`/_next/nothing`, and `/favicon.ico`, which the app does not have)
+was answered with Next.js's 404 page and no policy at all. The bare
+`/_next`, which the matcher's former `_next/` term did not skip, got
+the page policy. A production build's
 `fixed-headers.mjs` now sends the existing `API_POLICY`
 (`default-src 'none'; frame-ancestors 'none'; sandbox`) on
 `/_next/:path*` and `/favicon.ico`; no new policy string is written.
