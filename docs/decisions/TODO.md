@@ -2093,8 +2093,10 @@ into on 2026-11-17.
 
 ## Open in RD-11a — what the production-mode test leaves open
 
-- [ ] **Pin the `postgres:16` services of `database` and `e2e`.** They
+- [x] **Pin the `postgres:16` services of `database` and `e2e`.** They
       float; `production-mode` pins its own by digest (ADR-0178).
+      *Both run `production-mode`'s `PG_IMAGE` by tag and digest since
+      PT-6a (ADR-0179 Decision 3).*
 - [ ] **Decide whether the page policy gains `upgrade-insecure-requests`.**
       ADR-0174 Decision 10 left it out for an `http://localhost` run that
       cannot exist (ADR-0178 Decision 6). Not decided; nothing changed.

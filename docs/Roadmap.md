@@ -1562,6 +1562,16 @@ artifact upload. Planned, not done: RD-11c.
 The plan is complete; its record is
 `docs/production-readiness-completion.md`.
 
+Production readiness, part 2, approved by the product owner on
+2026-11-26: `docs/production-readiness-part2-gap-analysis.md`.
+
+**PT-6a — CI once per commit** (ADR-0179, no migration): the workflow runs
+on `pull_request` and on `push` to `main` only, so a pull request's commit
+runs once and shows eight checks; a newer commit cancels its pull
+request's run. `database` and `e2e` run `production-mode`'s pinned
+PostgreSQL. Not measured before CI: the cancellation itself. Planned, not
+done: the rest of part 2.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
