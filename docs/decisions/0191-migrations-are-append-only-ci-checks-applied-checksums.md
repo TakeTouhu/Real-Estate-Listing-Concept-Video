@@ -86,7 +86,7 @@ folder with no row or a name applied twice exits 1. It prints names and
 rules only, never a checksum. psql gets the password through
 `PGPASSWORD`, as the shadow-database step does, and host, user and
 database through `PGHOST`, `PGUSER` and `PGDATABASE` too, so no address
-is on a command line. It runs with `-w`, so it never waits at a
+is passed to psql as an argument. It runs with `-w`, so it never waits at a
 password prompt. The one other thing it can print is psql's own
 connection error, which names the host or socket, the port and the
 database, never a password (measured: a missing database and a refused
