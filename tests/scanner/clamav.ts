@@ -45,7 +45,7 @@ export function storedZip(name: string, content: Buffer): Buffer {
 }
 
 /** A PNG of one colour, 640 by 480: a photo the upload checks take, built with no image library. */
-export function plainPng(): Buffer {
+export function plainPng(colour: readonly [number, number, number] = [40, 120, 200]): Buffer {
   const chunk = (type: string, data: Buffer): Buffer => {
     const head = Buffer.alloc(8);
     head.writeUInt32BE(data.length, 0);
@@ -60,7 +60,7 @@ export function plainPng(): Buffer {
   header.writeUInt32BE(height, 4);
   header.writeUInt8(8, 8);
   header.writeUInt8(2, 9);
-  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(width * 3, Buffer.from([40, 120, 200]))]);
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(width * 3, Buffer.from(colour))]);
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", header),

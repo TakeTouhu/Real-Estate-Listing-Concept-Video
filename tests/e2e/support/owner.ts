@@ -27,7 +27,27 @@ export interface Person {
 export interface Owner {
   readonly email: string;
   readonly organizationId: string;
+  readonly password: string;
+  /** The key the owner's authenticator app was given. Never printed. */
+  readonly mfaKey: string;
 }
+
+/**
+ * Opens the verification link mailed to `to` in `page` and verifies there: the
+ * outbox's link by default, Mailpit's in RD-11b.
+ */
+export type OpenVerificationLink = (page: Page, to: string) => Promise<void>;
+
+/** Presses the verification page's button and sees the address verified. */
+export async function pressVerify(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Verify email address" }).click();
+  await expect(page.getByRole("heading", { name: "Email address verified" })).toBeVisible();
+}
+
+const fromOutbox: OpenVerificationLink = async (page, to) => {
+  await page.goto(await verificationLink(to));
+  await pressVerify(page);
+};
 
 /** An address no earlier run used, at a domain reserved for tests. */
 export function newEmail(role: string): string {
@@ -49,7 +69,7 @@ export function newPassword(): string {
  * Signs a new person up and has them verify their email address, leaving them
  * signed in on the organizations page, a member of none.
  */
-export async function signUpPerson(page: Page, role = "person"): Promise<Person> {
+export async function signUpPerson(page: Page, role = "person", open = fromOutbox): Promise<Person> {
   const email = newEmail(role);
   const password = newPassword();
   await page.goto("/login");
@@ -63,9 +83,7 @@ export async function signUpPerson(page: Page, role = "person"): Promise<Person>
   await expect(page.getByText(email, { exact: true })).toBeVisible();
   await page.goto("/");
   await expect(page).toHaveURL(/\/verify-email$/);
-  await page.goto(await verificationLink(email));
-  await page.getByRole("button", { name: "Verify email address" }).click();
-  await expect(page.getByRole("heading", { name: "Email address verified" })).toBeVisible();
+  await open(page, email);
   await page.getByRole("link", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Organizations" })).toBeVisible();
   await expect(page.getByText(`(${email})`)).toBeVisible();
@@ -77,8 +95,8 @@ export async function signUpPerson(page: Page, role = "person"): Promise<Person>
  * `organizationName` and set up MFA with an authenticator app, and leaves them
  * signed in on the organizations page.
  */
-export async function signUpOwner(page: Page, organizationName: string): Promise<Owner> {
-  const { email } = await signUpPerson(page, "owner");
+export async function signUpOwner(page: Page, organizationName: string, open = fromOutbox): Promise<Owner> {
+  const { email, password } = await signUpPerson(page, "owner", open);
   await page.getByLabel("Organization name").fill(organizationName);
   await page.getByRole("button", { name: "Create", exact: true }).click();
   // An OWNER must use MFA, so the organization is reached only through setting it up.
@@ -96,11 +114,11 @@ export async function signUpOwner(page: Page, organizationName: string): Promise
   const units = await card.getByRole("link", { name: "Units and plan" }).getAttribute("href");
   const organizationId = /^\/organizations\/([A-Za-z0-9_-]+)\/units$/.exec(units ?? "")?.[1];
   if (organizationId === undefined) throw new Error("The organizations page names no organization");
-  return { email, organizationId };
+  return { email, organizationId, password, mfaKey: key };
 }
 
 /** Gives the organization a Premium plan from this month, as an operator does for a signed contract. */
-export async function provisionPremiumPlan(organizationId: string): Promise<void> {
+export async function provisionPremiumPlan(organizationId: string, env = e2eEnvironment()): Promise<void> {
   await run(
     "pnpm",
     [
@@ -108,6 +126,6 @@ export async function provisionPremiumPlan(organizationId: string): Promise<void
       ...["--organization", organizationId, "--plan", "premium", "--starts", contractStart()],
       ...["--contract", `E2E-${organizationId}`, "--operator", "Browser test", "--reason", "Browser test"],
     ],
-    { cwd: REPO_ROOT, env: { ...process.env, ...e2eEnvironment() } },
+    { cwd: REPO_ROOT, env: { ...process.env, ...env } },
   );
 }

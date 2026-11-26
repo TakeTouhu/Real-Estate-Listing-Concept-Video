@@ -10,6 +10,7 @@
     "vitest.clamav.config.ts",
     "vitest.smtp.config.ts",
     "playwright.config.ts",
+    "playwright.production.config.ts",
     "tests/**/*.ts"
   ]
 }

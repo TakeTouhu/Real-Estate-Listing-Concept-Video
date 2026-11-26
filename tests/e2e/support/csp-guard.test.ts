@@ -10,6 +10,12 @@ const SPECS = readdirSync(E2E_DIRECTORY, { recursive: true, encoding: "utf8" })
   .map((path) => path.split("\\").join("/"))
   .filter((path) => path.endsWith(".spec.ts") && !path.split("/").includes("node_modules"));
 
+/** The production-mode job's specs under `tests/production` (RD-11b), which take the guard from here too. */
+const PRODUCTION_DIRECTORY = new URL("../../production/", import.meta.url);
+const PRODUCTION_SPECS = readdirSync(PRODUCTION_DIRECTORY, { recursive: true, encoding: "utf8" })
+  .map((path) => path.split("\\").join("/"))
+  .filter((path) => path.endsWith(".spec.ts") && !path.split("/").includes("node_modules"));
+
 /** The guard's module as a spec at that path imports it. */
 function guardFrom(spec: string): string {
   const relative = posix.relative(posix.dirname(spec), "support/csp-guard");
@@ -53,6 +59,16 @@ describe("the browser test's Content Security Policy guard", () => {
     for (const spec of SPECS) {
       const source = readFileSync(new URL(spec, E2E_DIRECTORY), "utf8");
       const guard = escape(guardFrom(spec));
+      expect(source, spec).toMatch(new RegExp(`^import \\{ expect, test \\} from (["'])${guard}\\1;?$`, "m"));
+      expect(playwrightValueImports(source), spec).toEqual([]);
+    }
+  });
+
+  it("runs on the production-mode job's specs too", () => {
+    expect(PRODUCTION_SPECS.length).toBeGreaterThan(0);
+    for (const spec of PRODUCTION_SPECS) {
+      const source = readFileSync(new URL(spec, PRODUCTION_DIRECTORY), "utf8");
+      const guard = escape(posix.join(posix.relative(posix.dirname(`production/${spec}`), "e2e"), "support/csp-guard"));
       expect(source, spec).toMatch(new RegExp(`^import \\{ expect, test \\} from (["'])${guard}\\1;?$`, "m"));
       expect(playwrightValueImports(source), spec).toEqual([]);
     }

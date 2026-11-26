@@ -3545,3 +3545,16 @@ the checks return to 12. Nothing was stored, pushed or deployed.
 the job, the files under `tests/production/`, the guard's stand-in rules
 and helpers (`STAND_IN_JOBS`, `dockerCommands`, `builds`, `ranImage`),
 and the `TODO.md` flip, amendments and items of RD-11a go; 14 checks.
+
+## RD-11b — the browser through the front
+
+**No migration** (ADR-0178); nothing deployed or pushed; still 16
+checks. **Rolling back:** the job's Chromium, browser, limit, outage,
+report and artifact steps, its `runner.env` and `all-values` lines and
+the last step's check, `playwright.production.config.ts`, the
+`test:production` script, the Vitest exclude and the `tsconfig.json`
+include, the spec, its support files, `log-report.mjs` and its test,
+the guard's browser rules, `id`, `stop` and `start`, the CSP guard
+test's production specs, the parameters added to `owner.ts`
+(`pressVerify` with them) and `clamav.ts`, `api-changes-rd-11b.md`,
+and the `TODO.md` flip, amendments and items of RD-11b go.
