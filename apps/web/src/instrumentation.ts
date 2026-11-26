@@ -9,11 +9,19 @@ import type { UncaughtRequestContext } from "./lib/failure-log";
  * runtime too, which cannot bundle the check: the import sits inside the test
  * of the runtime, as Next.js documents, so only the Node.js build carries it.
  * `next build` does not run this hook: Next.js skips it in its build phase.
+ *
+ * Once the check passes, a production server's `console.error` and
+ * `console.warn` write one JSON line each through the logger, never a raw line
+ * (ADR-0186). `next dev` and tests keep the raw output.
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { checkWebStart } = await import("./lib/startup");
     checkWebStart();
+    if (process.env.NODE_ENV === "production") {
+      const { installConsoleBridge } = await import("./lib/console-bridge");
+      installConsoleBridge();
+    }
   }
 }
 

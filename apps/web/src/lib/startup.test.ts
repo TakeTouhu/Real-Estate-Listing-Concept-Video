@@ -200,13 +200,14 @@ describe("what the start hook loads", () => {
     expect([...files].map((file) => file.slice(src.length + 1)).sort()).toEqual([
       "instrumentation.ts",
       "lib/adapter-choice.ts",
+      "lib/console-bridge.ts",
       "lib/env.ts",
       "lib/failure-log.ts",
       "lib/startup.ts",
     ]);
-    // The environment's schema and the dependency-free logger of `onRequestError` (ADR-0185):
-    // no storage, image, database or provider code.
-    expect([...packages].sort()).toEqual(["@app/observability", "@app/shared"]);
+    // The environment's schema, the dependency-free logger of `onRequestError` and the console (ADR-0185, 0186)
+    // and Node.js's test for a real error: no storage, image, database or provider code.
+    expect([...packages].sort()).toEqual(["@app/observability", "@app/shared", "node:util"]);
   });
 });
 

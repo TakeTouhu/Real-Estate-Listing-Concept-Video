@@ -3684,3 +3684,24 @@ drops `onRequestError`, `failure-log.ts` drops
 `startup.test.ts` holds the hook to its earlier imports again, and
 ADR-0185, `api-changes-pt-7b1.md` and the Roadmap, `architecture.md`,
 `SaaSOperations.md` and `TODO.md` lines of PT-7b1 go.
+
+## PT-7b2 — The web server prints no raw error or warning line
+
+**No migration** (ADR-0186); nothing deployed or pushed; no setting is
+added or required. In production the web server's `console.error` and
+`console.warn` after its start write one JSON line each, component
+`console`, `ERROR` or `WARNING`, to stdout; Next.js's raw print of an
+uncaught error, with its message and stack, no longer reaches stderr.
+A log query or alert that read raw stderr text must read
+`"component":"console"` lines, which hold the error's name and stack
+frames, never its message. `next dev`, tests and the worker are
+unchanged. **Rolling back:** `instrumentation.ts` drops the bridge's
+install and its test cases; `console-bridge.ts` and its test go;
+`startup.test.ts` drops `lib/console-bridge.ts` and `node:util`;
+`failureFields` and
+`failureDigest` in `failure-log.ts` may stay: PT-7b1's
+`uncaughtRequestFields` now uses them and keeps working; ADR-0186,
+`api-changes-pt-7b2.md` and the PT-7b2 lines of the Roadmap,
+`architecture.md`, `SaaSOperations.md`, the part 2 gap analysis and
+`TODO.md` go, its two flipped items back to `[ ]`. The raw print
+returns.

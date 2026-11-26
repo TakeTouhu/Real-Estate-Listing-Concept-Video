@@ -111,6 +111,22 @@ function safely<T>(read: () => T, fallback: T): T {
   }
 }
 
+/** The error's name and code and its cause's name, each read safely: the fields every failure line names it by. */
+export function failureFields(error: unknown): { errorName: string; code: string; causeName?: string } {
+  const causeName = safely(() => failureCauseName(error), undefined);
+  return {
+    errorName: safely(() => failureName(error), "UNNAMED"),
+    code: safely(() => failureCode(error), "UNEXPECTED"),
+    ...(causeName === undefined ? {} : { causeName }),
+  };
+}
+
+/** The error's `digest` when it is digits, Next.js's hash of a server component's error; else none. */
+export function failureDigest(error: unknown): string | undefined {
+  const digest = safely(() => (error as { readonly digest?: unknown } | null)?.digest, undefined);
+  return typeof digest === "string" && DIGEST.test(digest) ? digest : undefined;
+}
+
 /** A value in the list, or `other`: the line never carries a value it has not checked. */
 function listed(values: ReadonlySet<string>, value: unknown): string {
   return typeof value === "string" && values.has(value) ? value : "other";
@@ -133,17 +149,14 @@ export function uncaughtRequestFields(
   const routePath = safely<unknown>(() => context.routePath, undefined);
   const renderSource = safely<unknown>(() => context.renderSource, undefined);
   const pattern = typeof routePath === "string" && ROUTE_PATH.test(routePath);
-  const causeName = safely(() => failureCauseName(error), undefined);
-  const digest = safely(() => (error as { readonly digest?: unknown } | null)?.digest, undefined);
+  const digest = failureDigest(error);
   return {
     route: `${METHODS.has(method) ? method : "OTHER"} ${pattern ? routePath : "(other)"}`,
     requestId,
-    errorName: safely(() => failureName(error), "UNNAMED"),
-    code: safely(() => failureCode(error), "UNEXPECTED"),
-    ...(causeName === undefined ? {} : { causeName }),
+    ...failureFields(error),
     routeType: listed(ROUTE_TYPES, safely<unknown>(() => context.routeType, undefined)),
     ...(renderSource === undefined ? {} : { renderSource: listed(RENDER_SOURCES, renderSource) }),
-    ...(typeof digest === "string" && DIGEST.test(digest) ? { digest } : {}),
+    ...(digest === undefined ? {} : { digest }),
   };
 }
 

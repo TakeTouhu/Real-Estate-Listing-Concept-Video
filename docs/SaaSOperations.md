@@ -185,8 +185,11 @@ Sensitive values and signed URLs are redacted.
 
 A request's failure is one JSON line of the component `request`: `"A
 request failed"` from the app's catches (ADR-0177), `"Next.js answered a
-request that failed"` for an error none took (ADR-0185, still also
-printed raw). Neither holds the path, query, headers, message or stack.
+request that failed"` for an error none took (ADR-0185). Neither holds
+the path, query, headers, message or stack. Next.js's own print of that
+error, raw until PT-7b2, is a line of the component `console`, `"The
+web server printed an error"`, with the error's name and up to 50 stack
+frames, never its message; a warning likewise (ADR-0186).
 
 ## Worker operations
 
