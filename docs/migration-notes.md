@@ -445,6 +445,15 @@ see:
   last in byte order, match `^[0-9]{14}_[a-z0-9_]+$` and hold none of
   `mfa`, `queue`, `delivery`, `recovery` or `phase`.
 
+Since PT-8b1 the job also upgrades a seeded database after the
+append-only check: `tests/migrations/upgrade.sh` applies the head's
+migrations up to each seed file's level, runs
+`tests/migrations/seed/<level>.sql`, applies the head's full set, then
+runs `seed/check.sql`, the checksum check and a `pg_dump --schema-only`
+comparison with the fresh database. **A new table needs a row in a seed
+file at its level, or a place on the PT-8b2 list in
+`tests/migrations/seed-coverage.test.ts`, or the coverage test fails.**
+
 A merged migration is never edited, renamed or deleted: it is undone by
 a new migration, never by a revert (ADR-0191 Decision 2).
 
@@ -3845,3 +3854,19 @@ to its earlier text, and `tests/migrations/` goes with its two scripts
 and two tests; ADR-0191, `api-changes-pt-8a.md` and the PT-8a lines of
 this file, the Roadmap, `local-setup.md`, the part 2 gap analysis and
 `TODO.md` go, its new item included.
+
+## PT-8b1 — CI upgrades a seeded database to the head's migrations
+
+**No migration** (ADR-0191 Decision 4); nothing deployed or pushed; no
+setting, image, route or dependency changes; still 8 checks. The
+`database` job gains the step "Upgrade a seeded database to the head's
+migrations" and the throwaway `UPGRADE_DATABASE_URL` (see
+"Schema/migration parity"). A pull request whose new migration cannot
+carry the seeded rows, changes a seeded value without listing it in
+`check.sql`, or leaves a new table unseeded and unlisted, now fails.
+**Rolling back** is a revert, allowed because this PR adds no
+migration: the step, the job's variable and its comment go from
+`ci.yml`; `upgrade.sh`, `seed/`, `seed-coverage.test.ts` and the two
+workflow tests go; `api-changes-pt-8b1.md` and the PT-8b1 lines of this
+file, the Roadmap, `local-setup.md`, the part 2 gap analysis and
+`TODO.md` go.

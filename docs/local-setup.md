@@ -362,6 +362,25 @@ committed but not applied, then exits 1. Never set
 `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK`, and never run `migrate reset` or
 `db push`, against a database anyone else uses.
 
+The seeded upgrade (PT-8b1) reads that same freshly migrated database
+and creates a second one, here `revt_upgrade`, which must not exist yet.
+Prisma needs that second database's address as `UPGRADE_DATABASE_URL`;
+the script hands it to each deploy as `DATABASE_URL` and never prints
+it. Keep it in your shell's environment or a sourced file, never on the
+command line. It needs `pg_dump` of the server's major version or
+newer:
+
+```bash
+export PGHOST=localhost PGUSER=revt PGDATABASE=revt_test
+export UPGRADE_DATABASE_URL  # set beforehand: revt_test's address, with revt_upgrade as the database
+bash tests/migrations/upgrade.sh packages/database/prisma tests/migrations/seed revt_upgrade
+dropdb -w revt_upgrade  # before the next run
+```
+
+It fails on the first deploy, seed or check that fails, printing that
+command's own error; a seeded row lost or changed is named by table, and
+a schema difference is printed as a diff.
+
 ### Media tests
 
 The suites that run the real `ffmpeg` and `ffprobe` are opt-in too (ADR-0072).
