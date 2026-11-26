@@ -27,7 +27,7 @@ none carrying the nonce (`docs/production-readiness-completion.md`,
 the lab list). The page showed Next.js's static text and could not
 hydrate, and Chromium logged one refusal per script. Every one of the
 17 pages already exports `dynamic = "force-dynamic"`; `/_not-found`
-was the only static route.
+was the only static app route.
 
 The plan's lab, a scratch Next.js 15.5.28 app with the real
 middleware's matcher and a policy of the same shape, built with
@@ -98,8 +98,9 @@ A future Next.js that prerendered `/_not-found` despite the layout
 
 ## Decision 4 — The API policy on `/_next/` and the icon, production builds only
 
-The middleware does not run under `/_next/` or for `/favicon.ico`, so
-an address there that names no file (`/_next/nothing`, and
+The middleware does not run for `/_next`, under `/_next/` or for
+`/favicon.ico`, so an address there that names no file (`/_next`,
+`/_next/nothing`, and
 `/favicon.ico`, which the app does not have) was answered with
 Next.js's 404 page and no policy at all. A production build's
 `fixed-headers.mjs` now sends the existing `API_POLICY`
@@ -119,12 +120,17 @@ on addresses no customer opens.
   hydration check on `/login` and `/no-such-page` holds that.
 - **Still one policy per answer:** the middleware's matcher skips
   exactly these addresses, so configuration and middleware never both
-  send one. `middleware.test.ts` checks every page and non-page address
-  under `production`, `development` and `test` against
-  `next.config.mjs`'s rules and the matcher; `next-config.test.ts`
-  pins the two rules, their value and their absence outside a
-  production build. CI's `web-image` probe requires `/_next/nothing`
-  and `/favicon.ico` to answer `404` with a policy equal to the API
+  send one. Its term is `_next(?:/|$)`, as `/api`'s is `api(?:/|$)`,
+  because `/_next/:path*` also matches the bare `/_next`. With a
+  `_next/` term, as first written, both sent one there and only one
+  reached the wire because Next.js set the middleware's over the
+  configuration's (found in review). `middleware.test.ts` checks every
+  page and non-page address, `/_next` and `/_next?x=1` included, under
+  `production`, `development` and `test` against `next.config.mjs`'s
+  rules and the matcher; `next-config.test.ts` pins the two rules,
+  their value and their absence outside a production build. CI's
+  `web-image` probe requires `/_next`, `/_next/nothing` and
+  `/favicon.ico` to answer `404` with a policy equal to the API
   policy, which also proves one: fetch joins two headers of one name
   with a comma, and the policy has none.
 
@@ -141,7 +147,7 @@ the `web-image` job's sixteen stand-in settings, asked with `curl` on
 table, and `/no-such-page` answered `404` with one policy,
 `x-nextjs-cache` and `x-nextjs-prerender`, and 11 scripts, 6 inline,
 0 carrying the nonce, as RD-11b counted. After: `ƒ` in the route
-table, no route `○`, an empty `prerender-manifest.json`, and
+table, no app route `○`, an empty `prerender-manifest.json`, and
 `/no-such-page` answered `404` with one policy, neither cache header,
 and 9 scripts, 4 inline, 9 carrying the nonce. The `web-image` probe,
 run on the same server, passed. The unit test failed with the line
@@ -149,8 +155,10 @@ removed and passed with it. With Decision 4 built, `/_next/nothing`,
 `/favicon.ico` and `/_next/static/chunks/main-app-*.js` each answered
 with exactly one policy, the API policy (`404`, `404`, `200`), where
 the build without it sent none; `/login`, `/no-such-page` and
-`/api/nothing` still answered with exactly one each. No browser ran
-locally; the browser holder's first run is the pull request's CI.
+`/api/nothing` still answered with exactly one each. After the matcher
+term became `_next(?:/|$)`, rebuilt and run the same way, `/_next` and
+`/_next?x=1` answered `404` with exactly one policy, the API policy.
+No browser ran locally; the browser holder's first run is the pull request's CI.
 
 ## Consequences and known gaps
 
@@ -162,6 +170,17 @@ locally; the browser holder's first run is the pull request's CI.
   (`TODO.md`).
 - Turning on violation reports (PT-7c3) no longer means about 11
   reports for each visit to an unknown address.
+- The Pages-router default `/500` is still prerendered:
+  `next build` writes `.next/server/pages/500.html`, measured with 9
+  `<script>` tags and none nonced. Next.js serves it for a `500` that
+  reaches its `renderError` without an app result (read from
+  `base-server.js`; not reproduced), and the middleware sends the page
+  policy with a fresh nonce on that answer, so its scripts would be
+  refused as the old 404's were. It predates this ADR (`TODO.md`).
+- HSTS `includeSubDomains` and `preload` are not part of this ADR:
+  they wait on the product owner's domain decision as PT-7c5, recorded
+  under "Deviations from the approved plan" in
+  `docs/production-readiness-part2-gap-analysis.md`.
 
 ## Considered and not done
 

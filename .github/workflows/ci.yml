@@ -494,7 +494,7 @@ jobs:
           check(nonced === missingScripts.length, `${nonced} of the 404 page's scripts carry its nonce`);
           // The API policy where the middleware does not run, from a build (ADR-0188 Decision 4). Fetch joins two
           // headers of one name with a comma, which the policy has none of, so equality means exactly one.
-          for (const path of ["/_next/nothing", "/favicon.ico"]) {
+          for (const path of ["/_next", "/_next/nothing", "/favicon.ico"]) {
             const unmatched = await fetch(`${base}${path}`);
             const sent = unmatched.headers.get("content-security-policy");
             check(unmatched.status === 404, `${path} answers ${unmatched.status}`);

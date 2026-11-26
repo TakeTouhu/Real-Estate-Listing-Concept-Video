@@ -18,6 +18,8 @@ const NOT_PAGES = [
   "/api/",
   "/api/health",
   "/api/storage/download?token=t",
+  "/_next",
+  "/_next?x=1",
   "/_next/static/chunks/main.js",
   "/_next/image?url=x",
   "/_next/webpack-hmr",
@@ -63,7 +65,8 @@ describe("the middleware's matcher", () => {
       // `/_next/:path*` and `/favicon.ico` (ADR-0188 Decision 4); the middleware the page's, and none of those.
       vi.stubEnv("NODE_ENV", env);
       const api = url === "/api" || url.startsWith("/api/");
-      const unmatched = env === "production" && (url.startsWith("/_next/") || url === "/favicon.ico");
+      const next = url === "/_next" || url.startsWith("/_next/") || url.startsWith("/_next?");
+      const unmatched = env === "production" && (next || url === "/favicon.ico");
       const configured = await unstable_getResponseFromNextConfig({ url: `${BASE}${url}`, nextConfig });
       expect(configured.headers.get("content-security-policy")).toBe(api || unmatched ? API_POLICY : null);
       expect(matches(url)).toBe(!api && !NOT_PAGES.includes(url));

@@ -963,9 +963,9 @@ describe("the web image", () => {
     const ci = raw(WORKFLOW);
     const job = readJob(ci, "web-image");
     const lines = ci.split(/\r?\n/).slice(job.first, job.last).map((line) => line.trim());
-    const start = lines.indexOf('for (const path of ["/_next/nothing", "/favicon.ico"]) {');
+    const start = lines.indexOf('for (const path of ["/_next", "/_next/nothing", "/favicon.ico"]) {');
     expect(lines.slice(start, start + 6)).toEqual([
-      'for (const path of ["/_next/nothing", "/favicon.ico"]) {',
+      'for (const path of ["/_next", "/_next/nothing", "/favicon.ico"]) {',
       "const unmatched = await fetch(`${base}${path}`);",
       'const sent = unmatched.headers.get("content-security-policy");',
       "check(unmatched.status === 404, `${path} answers ${unmatched.status}`);",

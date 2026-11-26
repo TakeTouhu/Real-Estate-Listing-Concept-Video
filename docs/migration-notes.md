@@ -3747,8 +3747,12 @@ amendments of `TODO.md`, its flipped item back to `[ ]`. The 404's
 scripts are then refused again.
 A production build also sends the API policy on `/_next/:path*` and
 `/favicon.ico` (ADR-0188 Decision 4). **Rolling that back alone**
-reverts the second commit: `fixedHeaderRules` returns its two rules,
-the tests in `next-config.test.ts` and `middleware.test.ts` and the
-`web-image` probe's `/_next/nothing` and `/favicon.ico` lines and
-their pin go, and the `/_not-found` item of `TODO.md` returns to
-`[ ]` with its second PT-7c1 amendment removed.
+reverts the second commit and the review fix's matcher term:
+`fixedHeaderRules` returns its two rules, the middleware's matcher
+returns `_next(?:/|$)` to `_next/`, the tests in `next-config.test.ts`
+and `middleware.test.ts` and the `web-image` probe's `/_next`,
+`/_next/nothing` and `/favicon.ico` lines and their pin go, and the
+`/_not-found` item of `TODO.md` returns to `[ ]` with its second
+PT-7c1 amendment removed and the first one's last sentence back to
+"`/favicon.ico` and an unknown `/_next/<path>` still get no
+policy".
