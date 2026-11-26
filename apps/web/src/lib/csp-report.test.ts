@@ -47,6 +47,20 @@ const answer = (body: string, type = "application/csp-report") =>
     () => BASE);
 
 describe("answerCspReport's line", () => {
+  it("keeps reports from a host that is not ASCII however often URLs were checked before", async () => {
+    const sink = logged();
+    for (let i = 0; i < 100_000; i += 1) URL.canParse(`https://a${i % 10}.example`);
+    const idn = "https://bücher.example";
+    const body = JSON.stringify({ "csp-report": { "document-uri": `${idn}/login`, "blocked-uri": "inline" } });
+    const request = new Request(`${idn}/api/csp-report`, {
+      method: "POST",
+      headers: { "content-type": "application/csp-report" },
+      body,
+    });
+    expect(await answerCspReport(request, () => idn)).toBe(204);
+    expect(sink).toHaveLength(1);
+  });
+
   it("writes one INFO line of categories for a report-uri body, and never a secret it carried", async () => {
     const sink = logged();
     const secrets = reportUri({

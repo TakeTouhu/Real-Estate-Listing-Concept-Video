@@ -113,8 +113,9 @@ function violationsOf(type: string, json: unknown): { violations: Violation[]; d
   return { violations, dropped: reports.length - violations.length };
 }
 
-const originOf = (value: string | undefined) =>
-  value !== undefined && URL.canParse(value) ? new URL(value).origin : undefined;
+/** An address's origin, or `undefined`. `URL.parse`, not `URL.canParse`: Node 22's, once hot, refuses a host such
+ * as `bücher.example` (PT-6d, `packages/shared/src/env.ts`), and this runs on every report. */
+const originOf = (value: string | undefined) => (value === undefined ? undefined : URL.parse(value)?.origin);
 /** A URL's scheme, lower case: `https` for `https://x`; empty for none. */
 const schemeOf = (value: string) => (/^([a-z][a-z0-9+.-]*):/i.exec(value)?.[1] ?? "").toLowerCase();
 /** An extension's scheme, alone (as a browser may report it) or as a URL's. */
