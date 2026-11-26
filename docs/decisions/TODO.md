@@ -2107,6 +2107,8 @@ into on 2026-11-17.
       current network` by `console.warn`, outside `redact` (seen in the
       lab's network namespace; inferred absent on CI's networks). It
       names no value; the log report fails on it.
+      *Amended in RD-11c: CI's runs on #218's merged head printed no raw
+      line but Next.js's start lines; open for networks like the lab's.*
 - [ ] **Each upload's `original.bin` stays in the bucket**, a
       quarantined file's too (4 of 4 in the lab). Whether a quarantined
       original is kept, and for how long, is the product owner's.
@@ -2122,6 +2124,16 @@ into on 2026-11-17.
       can leave the key in its page snapshot. The artifact is kept only
       when the browser's own step fails, for 7 days; whether to fill
       these in a way no step names is open.
+
+## Open in RD-11c — what the completion report leaves open
+
+- [ ] **`docs/architecture.md` has no entry for the rate limiter and
+      no row for the origin check.** Its runtime diagram (`:12-77`) and
+      its status table have no entry for the limiter and
+      `RateLimitCounter` (RD-7, RD-8); the origin check (RD-9a to RD-9c)
+      is mentioned only in passing (`:150`); and the production-mode
+      run's topology is drawn only in
+      `docs/production-readiness-completion.md`. Adding them is open.
 
 ## Open in the unknown-failure PR — what logging unknown failures leaves open
 
@@ -2152,6 +2164,9 @@ into on 2026-11-17.
       sign-in during the outage, named `RateLimiterUnavailable`, Prisma's
       `P1017` and its error's name, which was enough to tell why; CI's
       log report is the evidence, so this stays open until it runs.*
+      *Amended in RD-11c: CI's run on #218's merged head (45744972828)
+      logged the same one error line. No unknown failure occurred in
+      either run, so whether a stack is needed is still not shown.*
 - [ ] **A limiter outage reads `code: UNEXPECTED`.** Prisma names `P1001`
       only when asked to connect, and the limiter's store only queries.
       Whether the store should connect first is open.
@@ -2293,6 +2308,11 @@ into on 2026-11-17.
 - [ ] **Organization and Property creation are not limited**
       (`api/organizations/route.ts`, `POST /api/properties`); product
       owner: whether an organization without a plan may upload.
+      *Amended in RD-11c: answered. The product owner decided on
+      2026-11-26 that an organization without a plan or contract must not
+      be able to upload, and that this is required before production
+      uploads open (a launch gate); not built in part 1. Creation is
+      still not limited; the decision did not address it.*
 - [ ] **Page renders sign and audit a link per photo and the video
       preview per render, unlimited** (`thumbnails.ts:20-36`); a download
       link may be fetched with ranges for its 300 s.
@@ -2300,8 +2320,11 @@ into on 2026-11-17.
       also counts and audits, and a `Lax` cookie rides another site's
       top-level link to it; it is not a change, so the origin check does not
       cover it. `Sec-Fetch-Site` would.*
-- [ ] **No organization key exists**; reconsider with the storage quota
+- [x] **No organization key exists**; reconsider with the storage quota
       and measured traffic.
+      *Amended in RD-11c: answered (ADR-0173 Decision 1, PO-1). The
+      product owner decided on 2026-11-26 that RD-8's work limits stay per
+      account only, as built; no organization key is added.*
 - [ ] **The start route's form size is not bounded**:
       `POST /api/video-projects/{id}/generations` reads its form with no
       byte limit before it counts; bound it before any production route
@@ -2777,6 +2800,11 @@ them is **built**. Each item below records the settled decision and what remains
       upload limit is the only bound on stored volume; organizations and
       Properties are created without limit, and an organization without a
       plan may upload.*
+      *Amended in RD-11c: the product owner decided on 2026-11-26 that
+      the storage quota, each organization's storage cap under its plan
+      (ADR-0053), is required before production uploads open (a launch
+      gate); the CTO said it goes into part 2's plan. Not built in part
+      1.*
 - [ ] **Produce and store a durable overlay-free Clean Master** at final
       composition (ADR-0052 Decision 17) and produce every customer deliverable
       from it by applying the disclosure/logo layer. Retain and delete it with

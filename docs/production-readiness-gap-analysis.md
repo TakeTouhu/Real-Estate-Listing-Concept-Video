@@ -59,7 +59,7 @@ changed lines.
 | RD-8 | Rate limits on invitations, uploads, analysis, generation start, downloads, Unit purchase (*sign-up per client address: RD-8a, ADR-0173; the signed-in limiter client, the JSON answer and uploads: RD-8b; invitations: RD-8c; analysis: RD-8d; downloads: RD-8e; generation start: RD-8f; Unit purchase: RD-8g*) | none |
 | RD-9 | Same-origin on every cookie-based change; security headers (*the rule and the refusal log: RD-9a, ADR-0174; the signed-in work routes: RD-9b; sign-in, sign-up, MFA and the account links: RD-9c; fixed headers and the API policy: RD-9d; the page Content Security Policy: RD-9e*) | none |
 | RD-10 | Container images for the web app and the worker, built in CI (*the common rules, the web image and its CI job: RD-10a, ADR-0175; the worker image and its CI job: RD-10c, ADR-0176*) | none |
-| RD-11 | A production-mode test against the emulators; completion report | none |
+| RD-11 | A production-mode test against the emulators; completion report (*the production image against stand-ins: RD-11a, ADR-0178; the browser through the front: RD-11b; `docs/production-readiness-completion.md`: RD-11c*) | none |
 
 The worker has no production runtime on the base: its start file runs a
 provider self-check and exits, and every runner is assembled only in the

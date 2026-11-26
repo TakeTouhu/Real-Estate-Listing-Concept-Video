@@ -1558,6 +1558,10 @@ seen only in the lab's network, was removed (`TODO.md`, RD-11b). Not
 before CI: every Docker step, the Chromium Playwright pins, and the
 artifact upload. Planned, not done: RD-11c.
 
+**RD-11c: the completion report** (no ADR, no migration): documents only.
+The plan is complete; its record is
+`docs/production-readiness-completion.md`.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker
