@@ -1684,6 +1684,18 @@ the machine's memory, capped, after it restarted near Next.js's own
 limit and lost a request; the `e2e` job now fails a run in which it
 restarted (`docs/decisions/TODO.md`).
 
+**PT-7c1 — The 404 page renders per request, so its scripts carry the
+nonce** (ADR-0188, no migration): the root layout exports
+`dynamic = "force-dynamic"`, so `/_not-found` is no longer prerendered
+and a production build's 404 puts the request's nonce on every script;
+Next.js's own 404 markup stays (`docs/api-changes-pt-7c1.md`).
+Measured from `next start`: 11 scripts and none nonced before, 9 of 9
+after. CI's `web-image` probe and the `production-mode` spec, which
+now opens the 404 in Chromium under the violation guard, hold it. Each
+404 now costs a render. HSTS `includeSubDomains` and `preload` wait on
+the product owner's domain decision (T2) as PT-7c5, so PT-7c is not
+done until PT-7c5 is done or dropped.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

@@ -41,9 +41,22 @@ recovery budget, defect records, operator recovery and cost inputs.
 | Dependencies | no image scanner; `sharp`, `postcss` and `zod` advisories (*`sharp` and `postcss`'s `nanoid` and `source-map-js` fixed since PT-6c; each image scanned with pinned Syft and Grype, failing on a fixable critical finding, since PT-6b, ADR-0180; `zod` 4.6.7 since PT-6d*) | `TODO.md` |
 | Worker runtime | exits 2 in production; development pipeline only | `apps/worker` |
 | Bounds, moderation, recovery budget | none; a Unit can be held forever | |
+| Page policy | no report endpoint, HSTS without subdomains, the prerendered 404's scripts with no nonce, no `upgrade-insecure-requests` (*the 404 rendered per request, its scripts nonced, since PT-7c1, ADR-0188*) | `apps/web/src/lib/security-headers.ts`, `TODO.md` |
 
 ## Order
 
 Launch gates (PT-1 to PT-5) wait on the product owner's answers to the
 seventeen questions sent on 2026-11-26. Meanwhile the platform milestones
 that need no answer and no account go first, starting with PT-6a.
+
+## Deviations from the approved plan
+
+- PT-7c, the page policy (the plan's row PT-7c, "Each is a CTO call
+  recorded in an ADR", depending on T0 only): HSTS `includeSubDomains`
+  and `preload` bind the product owner's whole domain, so they wait on
+  the domain decision (T2) and the product owner, as a new milestone
+  PT-7c5, after PT-7c1 to PT-7c4. This changes the approved row's
+  dependency and owner, so it is to be told to the product owner, with
+  PT-7c5 added to T2's "Unblocks" the next time the owner summary is
+  sent. PT-7c is not done until PT-7c5 is done or explicitly dropped,
+  even once PT-7c1 to PT-7c4 have merged (recorded in PT-7c1).

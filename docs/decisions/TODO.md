@@ -2540,6 +2540,12 @@ into on 2026-11-17.
 - [ ] **`style-src` allows `'unsafe-inline'`** for Next.js's own
       fallback pages, which render an inline `<style>` without a nonce;
       tighten when Next.js nonces them.
+      *Amended in PT-7c1 (ADR-0188): the prerendered 404 is not why it
+      stays. The 404 now renders per request and its scripts carry the
+      nonce, but its markup is Next.js's error fallback
+      (`http-access-fallback/error-fallback.js`), whose `<style>` and
+      `style` attributes still carry none (measured from `next start`).
+      That fallback is why it stays.*
 - [ ] **The prerendered `/_not-found` carries no nonce**, so from
       `next start` an unknown address's scripts are refused and only its
       static text shows (measured in RD-9e); `next dev` renders it per
@@ -2552,6 +2558,14 @@ into on 2026-11-17.
       scripts, none with its nonce, so Chromium refuses them, as RD-9e
       measured. The spec asks it outside the browser and records the
       count.*
+      *Amended in PT-7c1 (ADR-0188): the 404 half is done. The root
+      layout exports `dynamic = "force-dynamic"`, so `/_not-found` is
+      rendered per request: measured from `next start`, 9 of 9 scripts
+      carry the nonce (11, none, before). CI's `web-image` probe and the
+      `production-mode` spec, which opens the page in Chromium under the
+      guard, hold it. Each 404 now costs a render, left to part 2's edge
+      limit ("Open in RD-8"). `/favicon.ico` and an unknown
+      `/_next/<path>` still get no policy.*
 - [ ] **A third-party script, frame or connection** (Stripe.js when
       billing goes live, analytics, chat, web fonts) needs a reviewed
       change to the page policy in `apps/web/src/lib/security-headers.ts`.
