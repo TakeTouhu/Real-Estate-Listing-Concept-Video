@@ -60,8 +60,12 @@ export function fixedHeaderRules(nodeEnv) {
   if (nodeEnv === "production") {
     everyAnswer.push({ key: "Strict-Transport-Security", value: STRICT_TRANSPORT_SECURITY });
   }
-  return [
-    { source: "/:path*", headers: everyAnswer },
-    { source: "/api/:path*", headers: [{ key: "Content-Security-Policy", value: API_POLICY }] },
-  ];
+  /** @param {string} source @returns {FixedHeaderRule} */
+  const apiPolicy = (source) => ({ source, headers: [{ key: "Content-Security-Policy", value: API_POLICY }] });
+  const rules = [{ source: "/:path*", headers: everyAnswer }, apiPolicy("/api/:path*")];
+  // A production build also sends the API policy where the middleware does not run, so an address there that
+  // names no file is never a page without a policy (ADR-0188 Decision 4). Never under `next dev`, whose socket
+  // and development files are there.
+  if (nodeEnv === "production") rules.push(apiPolicy("/_next/:path*"), apiPolicy("/favicon.ico"));
+  return rules;
 }

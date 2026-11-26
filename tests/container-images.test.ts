@@ -829,13 +829,12 @@ describe("the production-mode browser", () => {
     for (const file of new Set([...own, CONFIG, ...reached(SPEC)])) {
       expect(`${file}: ${/set(?:Timeout|Interval)|waitForTimeout/.test(raw(file))}`).toBe(`${file}: false`);
     }
-    // The browser's files print the spec's two recorded counts and nothing else.
+    // The browser's files print the spec's one recorded count and nothing else.
     const printed = [...own, CONFIG].filter((file) => /\.[cm]?tsx?$/.test(file)).flatMap((file) => {
       return raw(file).split("\n").filter((line) => /console\.|process\.std(?:out|err)/.test(line));
     });
     expect(printed.map((line) => line.trim())).toEqual([
       "console.log(`original.bin kept for ${kept} of 4 uploads`);",
-      "console.log(`The 404 page: ${nonced} of ${missingScripts.length} scripts carry its nonce`);",
     ]);
   });
 
@@ -936,6 +935,42 @@ describe("the web image", () => {
     expect(lines.filter((line) => line.includes("/_next/image")).map((line) => line.trim())).toEqual([
       "const image = await fetch(`${base}/_next/image?url=%2Ffavicon.ico&w=64&q=75`);",
       "check(image.status === 404, `/_next/image answers ${image.status}`);",
+    ]);
+  });
+
+  it("has its smoke check that every script of a 404 carries its answer's nonce (ADR-0188)", () => {
+    expect(raw("apps/web/src/app/layout.tsx")).toMatch(/^export const dynamic = "force-dynamic";$/m);
+    const ci = raw(WORKFLOW);
+    const job = readJob(ci, "web-image");
+    const lines = ci.split(/\r?\n/).slice(job.first, job.last).map((line) => line.trim());
+    expect(lines.filter((line) => /\bmissing(?:Nonce|Scripts)?\b|\bnonced\b/.test(line))).toEqual([
+      "const missing = await fetch(`${base}/no-such-page`);",
+      "const missingNonce = /'nonce-([^']+)'/.exec(missing.headers.get(\"content-security-policy\") ?? \"\")?.[1];",
+      "const missingScripts = (await missing.text()).match(/<script\\b[^>]*>/g) ?? [];",
+      "check(missing.status === 404, `an unknown page answers ${missing.status}`);",
+      'check(missingNonce !== undefined, "the 404 page\'s policy carries a nonce");',
+      "const nonced = missingScripts.filter((script) => script.includes(` nonce=\"${missingNonce}\"`)).length;",
+      "check(missingScripts.length > 0, `the 404 page has ${missingScripts.length} scripts`);",
+      "check(nonced === missingScripts.length, `${nonced} of the 404 page's scripts carry its nonce`);",
+    ]);
+  });
+
+  it("has its smoke check that /_next and the icon send the API policy once (ADR-0188 Decision 4)", () => {
+    // The configuration's own value, which the probe names.
+    expect(raw("apps/web/fixed-headers.mjs")).toContain(
+      "export const API_POLICY = \"default-src 'none'; frame-ancestors 'none'; sandbox\";",
+    );
+    const ci = raw(WORKFLOW);
+    const job = readJob(ci, "web-image");
+    const lines = ci.split(/\r?\n/).slice(job.first, job.last).map((line) => line.trim());
+    const start = lines.indexOf('for (const path of ["/_next", "/_next/nothing", "/favicon.ico"]) {');
+    expect(lines.slice(start, start + 6)).toEqual([
+      'for (const path of ["/_next", "/_next/nothing", "/favicon.ico"]) {',
+      "const unmatched = await fetch(`${base}${path}`);",
+      'const sent = unmatched.headers.get("content-security-policy");',
+      "check(unmatched.status === 404, `${path} answers ${unmatched.status}`);",
+      "check(sent === \"default-src 'none'; frame-ancestors 'none'; sandbox\", `${path} sends the policy ${sent}`);",
+      "}",
     ]);
   });
 

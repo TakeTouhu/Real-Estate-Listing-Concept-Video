@@ -2540,7 +2540,13 @@ into on 2026-11-17.
 - [ ] **`style-src` allows `'unsafe-inline'`** for Next.js's own
       fallback pages, which render an inline `<style>` without a nonce;
       tighten when Next.js nonces them.
-- [ ] **The prerendered `/_not-found` carries no nonce**, so from
+      *Amended in PT-7c1 (ADR-0188): the prerendered 404 is not why it
+      stays. The 404 now renders per request and its scripts carry the
+      nonce, but its markup is Next.js's error fallback
+      (`http-access-fallback/error-fallback.js`), whose `<style>` and
+      `style` attributes still carry none (measured from `next start`).
+      That fallback is why it stays.*
+- [x] **The prerendered `/_not-found` carries no nonce**, so from
       `next start` an unknown address's scripts are refused and only its
       static text shows (measured in RD-9e); `next dev` renders it per
       request, with the nonce. `/favicon.ico`, which the app does not
@@ -2552,6 +2558,30 @@ into on 2026-11-17.
       scripts, none with its nonce, so Chromium refuses them, as RD-9e
       measured. The spec asks it outside the browser and records the
       count.*
+      *Amended in PT-7c1 (ADR-0188): the 404 half is done. The root
+      layout exports `dynamic = "force-dynamic"`, so `/_not-found` is
+      rendered per request: measured from `next start`, 9 of 9 scripts
+      carry the nonce (11, none, before). CI's `web-image` probe and the
+      `production-mode` spec, which opens the page in Chromium under the
+      guard, hold it. Each 404 now costs a render, left to part 2's edge
+      limit ("Open in RD-8"). The `/favicon.ico` and `/_next` half
+      follows in the next note.*
+      *Done in PT-7c1 (ADR-0188 Decision 4): a production build sends
+      the API policy on `/_next/:path*` and `/favicon.ico`, which the
+      middleware skips, the bare `/_next` included; measured from
+      `next start`, `/_next`, `/_next/nothing`, `/favicon.ico` and a
+      real chunk each answer with exactly that one policy. `next dev` is
+      unchanged. CI's `web-image` probe holds it.*
+- [ ] **The Pages-router default `/500` is prerendered with no
+      nonce.** `next build` still writes
+      `.next/server/pages/500.html`, measured in PT-7c1 with 9
+      `<script>` tags and none nonced. Next.js 15.5.28 serves it for a
+      `500` that reaches its `renderError` without an app result (read
+      from `base-server.js`; not reproduced). The middleware sends the
+      page policy with a fresh nonce on that answer, so the browser
+      would refuse its scripts, as it did the old 404's. Found in
+      PT-7c1's review; it predates PT-7c1 (ADR-0188, "Consequences and
+      known gaps").
 - [ ] **A third-party script, frame or connection** (Stripe.js when
       billing goes live, analytics, chat, web fonts) needs a reviewed
       change to the page policy in `apps/web/src/lib/security-headers.ts`.

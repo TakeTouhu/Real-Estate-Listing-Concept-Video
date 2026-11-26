@@ -483,6 +483,23 @@ jobs:
           const policy = page.headers.get("content-security-policy") ?? "";
           check(page.status === 200, `the sign-in page answers ${page.status}`);
           check(policy.includes("'nonce-"), "the sign-in page's policy carries a nonce");
+          // A 404 renders per request (ADR-0188): every script carries the nonce of its own answer's policy.
+          const missing = await fetch(`${base}/no-such-page`);
+          const missingNonce = /'nonce-([^']+)'/.exec(missing.headers.get("content-security-policy") ?? "")?.[1];
+          const missingScripts = (await missing.text()).match(/<script\b[^>]*>/g) ?? [];
+          check(missing.status === 404, `an unknown page answers ${missing.status}`);
+          check(missingNonce !== undefined, "the 404 page's policy carries a nonce");
+          const nonced = missingScripts.filter((script) => script.includes(` nonce="${missingNonce}"`)).length;
+          check(missingScripts.length > 0, `the 404 page has ${missingScripts.length} scripts`);
+          check(nonced === missingScripts.length, `${nonced} of the 404 page's scripts carry its nonce`);
+          // The API policy where the middleware does not run, from a build (ADR-0188 Decision 4). Fetch joins two
+          // headers of one name with a comma, which the policy has none of, so equality means exactly one.
+          for (const path of ["/_next", "/_next/nothing", "/favicon.ico"]) {
+            const unmatched = await fetch(`${base}${path}`);
+            const sent = unmatched.headers.get("content-security-policy");
+            check(unmatched.status === 404, `${path} answers ${unmatched.status}`);
+            check(sent === "default-src 'none'; frame-ancestors 'none'; sandbox", `${path} sends the policy ${sent}`);
+          }
           // No image optimizer (images.unoptimized): Next.js answers 404 before validating or fetching the query.
           const image = await fetch(`${base}/_next/image?url=%2Ffavicon.ico&w=64&q=75`);
           check(image.status === 404, `/_next/image answers ${image.status}`);

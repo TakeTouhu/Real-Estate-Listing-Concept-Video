@@ -3728,3 +3728,31 @@ that back:** the step returns to `pnpm run test:e2e`, the web server's
 `env` to `e2eEnvironment()`, and the function and its test go with the
 "Amended in PT-7b3" note on the lost-press item of `TODO.md` and its
 "Find what keeps" item.
+
+## PT-7c1 — The 404 page renders per request, so its scripts carry the nonce
+
+**No migration** (ADR-0188); nothing deployed or pushed; no setting,
+image build step or route changes. The root layout exports
+`dynamic = "force-dynamic"`, so a production build no longer writes
+`/_not-found` as a file: each 404 is rendered per request, which costs
+a render, and carries no `x-nextjs-cache` or `x-nextjs-prerender`.
+**Rolling back** is a revert: the layout's line and
+`layout-dynamic.test.ts` go; the `web-image` probe's 404 lines and
+their pin in `tests/container-images.test.ts` go; the
+`production-mode` spec's step 8 returns to its PT-7b3 text with its
+`console.log`, and the pin of printed lines takes it back; ADR-0188,
+`api-changes-pt-7c1.md` and the PT-7c1 lines of the Roadmap,
+`architecture.md` and the part 2 gap analysis go, and the PT-7c1
+amendments of `TODO.md`, its flipped item back to `[ ]`. The 404's
+scripts are then refused again.
+A production build also sends the API policy on `/_next/:path*` and
+`/favicon.ico` (ADR-0188 Decision 4). **Rolling that back alone**
+reverts the second commit and the review fix's matcher term:
+`fixedHeaderRules` returns its two rules, the middleware's matcher
+returns `_next(?:/|$)` to `_next/`, the tests in `next-config.test.ts`
+and `middleware.test.ts` and the `web-image` probe's `/_next`,
+`/_next/nothing` and `/favicon.ico` lines and their pin go, and the
+`/_not-found` item of `TODO.md` returns to `[ ]` with its second
+PT-7c1 amendment removed and the first one's last sentence back to
+"`/favicon.ico` and an unknown `/_next/<path>` still get no
+policy".

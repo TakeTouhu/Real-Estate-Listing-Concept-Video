@@ -174,21 +174,22 @@ test("a customer signs up, stores photos, has a file quarantined, invites a coll
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: `${organizationName} (OWNER)` })).toBeVisible();
 
-  // 8. The production page policy on the sign-in page, with its nonce on every script.
-  const login = await page.goto("/login");
-  const policy = login?.headers()["content-security-policy"] ?? "";
-  const nonce = /'nonce-([^']+)'/.exec(policy)?.[1] ?? "";
-  expect(policy).toBe(productionPagePolicy(nonce));
-  const scripts = (await login?.text())?.match(/<script\b[^>]*>/g) ?? [];
-  expect(scripts.length).toBeGreaterThan(0);
-  for (const script of scripts) expect(script).toContain(` nonce="${nonce}"`);
-  // A 404 gets the policy too, but its prerendered scripts carry no nonce (TODO, RD-9e): asked outside the browser,
-  // which would refuse them; the count is recorded, not asserted.
-  const missing = await page.request.get("/no-such-page");
-  const missingPolicy = missing.headers()["content-security-policy"] ?? "";
-  const missingNonce = /'nonce-([^']+)'/.exec(missingPolicy)?.[1] ?? "";
-  expect([missing.status(), missingPolicy]).toEqual([404, productionPagePolicy(missingNonce)]);
-  const missingScripts = (await missing.text()).match(/<script\b[^>]*>/g) ?? [];
-  const nonced = missingScripts.filter((script) => script.includes(` nonce="${missingNonce}"`)).length;
-  console.log(`The 404 page: ${nonced} of ${missingScripts.length} scripts carry its nonce`);
+  // 8. The production page policy on the sign-in page and on a 404, with the answer's nonce on every script: a 404
+  // renders per request (ADR-0188). Then the browser opens both, under the guard, and Next.js's scripts run.
+  for (const [address, status] of [["/login", 200], ["/no-such-page", 404]] as const) {
+    const asked = await page.request.get(address);
+    const policy = asked.headers()["content-security-policy"] ?? "";
+    const nonce = /'nonce-([^']+)'/.exec(policy)?.[1] ?? "";
+    expect([asked.status(), policy]).toEqual([status, productionPagePolicy(nonce)]);
+    const scripts = (await asked.text()).match(/<script\b[^>]*>/g) ?? [];
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const script of scripts) expect(script).toContain(` nonce="${nonce}"`);
+    expect((await page.goto(address))?.status()).toBe(status);
+    // The client router started: Next.js's inline scripts ran and loaded its chunks, which `/_next/static` sends with
+    // the API policy (ADR-0188 Decision 4). That a browser applies no policy to a script it loads is inference; this
+    // poll proves the chunks ran under that header.
+    await expect
+      .poll(() => page.evaluate(() => typeof (globalThis as { next?: { version?: unknown } }).next?.version))
+      .toBe("string");
+  }
 });
