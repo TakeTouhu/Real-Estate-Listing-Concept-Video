@@ -7,6 +7,10 @@ import { onRequestError, register } from "./instrumentation";
 const checkWebStart = vi.hoisted(() => vi.fn());
 vi.mock("./lib/startup", () => ({ checkWebStart }));
 
+// Mocked, so no case here replaces the worker's own console (ADR-0186).
+const installConsoleBridge = vi.hoisted(() => vi.fn());
+vi.mock("./lib/console-bridge", () => ({ installConsoleBridge }));
+
 const logUncaught = vi.hoisted(() => ({ spy: vi.fn() }));
 vi.mock("./lib/failure-log", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./lib/failure-log")>()),
@@ -22,7 +26,8 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
-  checkWebStart.mockClear();
+  checkWebStart.mockReset();
+  installConsoleBridge.mockClear();
   logUncaught.spy.mockClear();
 });
 
@@ -40,6 +45,33 @@ describe("register", () => {
     vi.stubEnv("NEXT_RUNTIME", "");
     await register();
     expect(checkWebStart).not.toHaveBeenCalled();
+  });
+
+  it("bridges the console of a production Node.js server, after its start passed the check", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NODE_ENV", "production");
+    await register();
+    expect(installConsoleBridge).toHaveBeenCalledTimes(1);
+    expect(installConsoleBridge).toHaveBeenCalledWith();
+    const [checked = Infinity] = checkWebStart.mock.invocationCallOrder;
+    expect(checked).toBeLessThan(installConsoleBridge.mock.invocationCallOrder[0] ?? 0);
+  });
+
+  it("bridges nothing when the check ends the start, nor in the edge runtime, development or a test", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NODE_ENV", "production");
+    checkWebStart.mockImplementationOnce(() => {
+      throw new Error("process.exit(1)");
+    });
+    await expect(register()).rejects.toThrow("process.exit(1)");
+    vi.stubEnv("NEXT_RUNTIME", "edge");
+    await register();
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    for (const environment of ["development", "test"]) {
+      vi.stubEnv("NODE_ENV", environment);
+      await register();
+    }
+    expect(installConsoleBridge).not.toHaveBeenCalled();
   });
 });
 

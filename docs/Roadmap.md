@@ -1660,6 +1660,16 @@ server for a route handler and a server component. Next.js's raw print
 stays, and the middleware and errors outside a request get no line;
 both are PT-7b2's. Not measured: how Cloud Logging reads the line (G1).
 
+**PT-7b2 — The web server prints no raw error or warning line**
+(ADR-0186, no migration): once the start check passes, a production
+Node.js server's `console.error` and `console.warn` write one line of
+the component `console`, never the raw text: the first error's name,
+code and digest and at most 50 stack frames, never its message, and
+nodemailer's two warnings, matched exactly (`docs/api-changes-pt-7b2.md`).
+Measured on the built standalone server: stderr empty. Not covered:
+`console.log`, `info` and `debug`, `process.stderr.write`, the worker.
+The CI step is PT-7b3's.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

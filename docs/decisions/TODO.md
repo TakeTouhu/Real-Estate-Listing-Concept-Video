@@ -2103,7 +2103,7 @@ into on 2026-11-17.
 
 ## Open in RD-11b — what the browser through the front leaves open
 
-- [ ] **Nodemailer can print a raw line.** Where `resolve4` and
+- [x] **Nodemailer can print a raw line.** Where `resolve4` and
       `resolve6` find nothing and the host has no outside IPv4
       interface, it writes `Failed to resolve IPv4 addresses with
       current network` by `console.warn`, outside `redact` (seen in the
@@ -2111,6 +2111,11 @@ into on 2026-11-17.
       names no value; the log report fails on it.
       *Amended in RD-11c: CI's runs on #218's merged head printed no raw
       line but Next.js's start lines; open for networks like the lab's.*
+      *Amended in PT-7b2: no longer raw; a `console` `WARNING` line with
+      the sentence as `text` (ADR-0186). The log report still fails on
+      it, which is kept: a host with no outside interface of the
+      address's family cannot reach an outside mail server (an
+      inference).*
 - [ ] **Each upload's `original.bin` stays in the bucket**, a
       quarantined file's too (4 of 4 in the lab). Whether a quarantined
       original is kept, and for how long, is the product owner's.
@@ -2205,7 +2210,7 @@ into on 2026-11-17.
 
 ## Open in the unknown-failure PR — what logging unknown failures leaves open
 
-- [ ] **Errors the app does not catch are printed raw by Next.js.** The
+- [x] **Errors the app does not catch are printed raw by Next.js.** The
       55 session lookups under `apps/web/src/app`, the six
       `request.formData()` calls outside a `try`, the storage routes and
       readiness's own start reach Next.js, which prints the error with its
@@ -2219,6 +2224,12 @@ into on 2026-11-17.
       (ADR-0185). The raw print stays, open for PT-7b2, as does any line
       for a middleware error or an error outside a request, such as an
       unhandled rejection. How Cloud Logging reads either is G1's.*
+      *Amended in PT-7b2: closed for a production server, whose
+      `console.error` and `console.warn` write a `console` line with the
+      error's name and frames, never its message, a middleware error's
+      and a rejection's included (ADR-0186; those two by reading
+      `next-server.js:193-221` and `:490-491` and by unit tests, not
+      measured in PT-7b2's lab). The rest: "Open in PT-7b2".*
 - [x] **The logger's message, reserved keys and other URLs bypass
       `redact`.** `createLogger` writes `message` as given and lets a field
       overwrite `level`, `time` or `message`
@@ -2264,6 +2275,9 @@ into on 2026-11-17.
       `packages/storage/src/bin/render-disclosure-layers.ts` print values
       through `console`, outside `redact` and the guard of ADR-0182.
       Nothing decides whether they should go through the logger.
+      *Amended in PT-7b2: the production web server's `console.error`
+      and `console.warn` after its start go through the logger
+      (ADR-0186); the tools, the start report and the worker do not.*
 - [ ] **No stack is logged.** Revisit only if RD-11 shows that a name and
       a code are not enough.
       *Amended in RD-11b: in the lab the run's one error line, the
@@ -2273,6 +2287,9 @@ into on 2026-11-17.
       *Amended in RD-11c: CI's run on #218's merged head (45744972828)
       logged the same one error line. No unknown failure occurred in
       either run, so whether a stack is needed is still not shown.*
+      *Amended in PT-7b2: the web server's `console` line carries up to
+      50 stack frames, never the message (the CTO's decision, ADR-0186);
+      the `request` lines carry none, and whether they should is open.*
 - [ ] **A limiter outage reads `code: UNEXPECTED`.** Prisma names `P1001`
       only when asked to connect, and the limiter's store only queries.
       Whether the store should connect first is open.
@@ -2284,6 +2301,39 @@ into on 2026-11-17.
       line names the store's own error, not `RateLimiterUnavailable`
       (`apps/web/src/app/api/auth/register/route.ts`). Whether it should
       be wrapped like sign-in's is open.
+
+## Open in PT-7b2 — what the console bridge leaves open
+
+- [ ] **Other output of the web server is still raw.** `console.log`,
+      `info` and `debug`, `process.stderr.write`, what Node.js itself
+      writes, such as a fatal error, or for a crash before Next.js's
+      handlers are installed, anything printed before `register()` runs
+      and a library that kept `console.error` before it (*inference*:
+      none in the measured paths) bypass the bridge (ADR-0186).
+      Node.js's own warnings, `console.trace` and `console.assert` do
+      reach it, as a line without text (measured).
+- [ ] **A library's text is dropped unless allowlisted.** A warning an
+      operator needs leaves only `method` or an error's name. Each new
+      entry is a reviewed change; none is proposed.
+- [ ] **The error's message is gone from production output.** Prisma's
+      said why the database could not be reached. Whether an operator
+      needs more is open, as is whether a frame can carry a value,
+      through a function named from a computed key or a path
+      (*inference*: none seen).
+- [ ] **A middleware error's line names no route.** The bridge's line
+      is its only line, since `onRequestError` skips the edge runtime
+      (ADR-0185 Decision 4). A middleware's own `console.error` or
+      `console.warn` arrives as one string the edge runtime formatted,
+      so its line keeps only `method` (*inference*: by the source).
+- [ ] **A frame can still carry message text shaped exactly like a
+      frame.** An error whose message or name changed after the
+      stack's first read, or a stack written to start with the header,
+      can put other text after the header (measured by the PT-7b2
+      reviews). Only lines in V8's frame grammar are kept, so such text
+      passes only when it ends in a place such as `/a.js:1:2`; no
+      Next.js path writing it was found (*inference*).
+- [ ] **How Cloud Logging reads the `request` and `console` lines is
+      unmeasured.** G1's.
 
 ## Open in RD-10 — what the container images leave open
 
