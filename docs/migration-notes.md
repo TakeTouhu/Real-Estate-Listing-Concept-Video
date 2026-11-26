@@ -3649,3 +3649,20 @@ consumer in the repository reads the body). **Rolling back:**
 `buildLiveness`, the new cases in `health.test.ts` go, and ADR-0183,
 `api-changes-pt-7a3.md` and the Roadmap and `TODO.md` lines of PT-7a3
 go.
+
+## PT-7a4 — A production start refuses the settings that widen trust
+
+**No migration** (ADR-0184); nothing deployed or pushed; still 8 checks.
+An environment that sets `NODE_OPTIONS`, `NODE_USE_SYSTEM_CA` or
+`OPENSSL_CONF` to a non-empty value no longer starts in production:
+unset each, or set it
+empty, before deploying this commit. A heap size or any other flag once
+given through `NODE_OPTIONS` needs a new ADR first. No setting is added
+or required, and `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and
+`SSL_CERT_DIR` are unchanged. CI's web-image job gains one step.
+**Rolling back:** `env.ts` drops the three keys and their refusal, the
+new cases in `env.test.ts`, `startup.test.ts`, `bootstrap.test.ts` and
+`container-images.test.ts` go, as do the CI step and the
+`NODE_USE_SYSTEM_CA` entry in `BANNED_ENV`, and ADR-0184,
+`api-changes-pt-7a4.md` and the Roadmap, `architecture.md`,
+`.env.example` and `TODO.md` lines of PT-7a4 go.

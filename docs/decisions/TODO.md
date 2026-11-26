@@ -2603,7 +2603,7 @@ into on 2026-11-17.
 
 ## Open in RD-6c — what the SMTP settings leave open
 
-- [ ] **Decide whether to refuse the settings that widen what Node.js
+- [x] **Decide whether to refuse the settings that widen what Node.js
       trusts** (ADR-0167): `NODE_EXTRA_CA_CERTS`, `NODE_OPTIONS` (which
       can carry `--use-openssl-ca` or a CA flag), `SSL_CERT_FILE`,
       `SSL_CERT_DIR` and `OPENSSL_CONF` add authorities rather than
@@ -2620,6 +2620,27 @@ into on 2026-11-17.
       sign-up and invitation mails
       arrive over required STARTTLS (measured locally; CI runs it
       first). What part 2 refuses stays open.*
+      *Amended in PT-7a4: decided before the deployment's layout
+      (ADR-0184). A production start refuses `NODE_OPTIONS` (whole),
+      `NODE_USE_SYSTEM_CA` and `OPENSSL_CONF`, and accepts
+      `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and `SSL_CERT_DIR`, so
+      both are still possible. What a start reports moves to the next
+      item, and `OPENSSL_MODULES` and `OPENSSL_ENGINES`, not considered
+      before, are a new one, so this one is closed. G1 may amend it by a
+      new ADR.*
+- [ ] **Decide whether a production start reports
+      `NODE_EXTRA_CA_CERTS`, and where** (ADR-0184 Decision 5): it is
+      accepted in production and adds authorities. The start check
+      (`startup.ts`) reports only why a start is refused (ADR-0151) and
+      asks settings other than `NODE_ENV` only whether they are set
+      (ADR-0159 Decision 5); a report that does not refuse has no place
+      there yet, and PT-7a4 left `startup.ts` unchanged. Decide with the
+      deployment's layout whether a start, readiness or a log line names
+      that it is set.
+- [ ] **Decide whether to refuse `OPENSSL_MODULES` and
+      `OPENSSL_ENGINES`** (ADR-0184 Decision 5): they point OpenSSL at
+      modules or engines it loads, and PT-7a4 did not consider them;
+      Node 22's `cli.md` does not name them. Not refused today.
 
 ## Open in RD-6a — what the SMTP email sender leaves open
 

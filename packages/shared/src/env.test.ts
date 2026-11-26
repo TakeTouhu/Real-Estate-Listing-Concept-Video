@@ -481,6 +481,37 @@ describe("serverEnvSchema", () => {
     expect(serverEnvSchema.safeParse(empty).success).toBe(true);
   });
 
+  it("refuses each setting that widens what Node.js trusts in production, and leaves it alone elsewhere", () => {
+    const lines = {
+      NODE_OPTIONS: "NODE_OPTIONS: NODE_OPTIONS must not be set in production: " +
+        "Node.js would take command-line options from it, some of which widen what it trusts",
+      NODE_USE_SYSTEM_CA: "NODE_USE_SYSTEM_CA: NODE_USE_SYSTEM_CA must not be set in production: " +
+        "Node.js would trust the system's certificate store as well as its own",
+      OPENSSL_CONF: "OPENSSL_CONF: OPENSSL_CONF must not be set in production: " +
+        "Node.js would load an OpenSSL configuration file at start",
+    };
+    for (const [name, line] of Object.entries(lines)) {
+      for (const value of ["x", " "]) {
+        const result = serverEnvSchema.safeParse({ ...base, NODE_ENV: "production", [name]: value });
+        const issues = result.success ? [] : result.error.issues;
+        expect(issues.map((i) => `${i.path.join(".")}: ${i.message}`)).toEqual([line]);
+        for (const NODE_ENV of ["development", "test"]) {
+          expect(serverEnvSchema.safeParse({ ...base, NODE_ENV, [name]: value }).success).toBe(true);
+        }
+      }
+      expect(serverEnvSchema.safeParse({ ...base, NODE_ENV: "production", [name]: "" }).success).toBe(true);
+    }
+    // Still open in production: a deployment may need one (ADR-0175 Decision 5, ADR-0178 Decision 5),
+    // and a proxy widens no trust (ADR-0184 Decision 4).
+    const kept = {
+      NODE_EXTRA_CA_CERTS: "/run/rd11/ca.pem",
+      SSL_CERT_FILE: "/etc/ssl/certs/ca-certificates.crt",
+      SSL_CERT_DIR: "/etc/ssl/certs",
+      NODE_USE_ENV_PROXY: "1",
+    };
+    expect(serverEnvSchema.safeParse({ ...base, NODE_ENV: "production", ...kept }).success).toBe(true);
+  });
+
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);
@@ -617,6 +648,9 @@ describe("loadServerEnv", () => {
       SMTP_EHLO_NAME: "marker name",
       EMAIL_FROM: "marker <x@example.com>",
       NODE_TLS_REJECT_UNAUTHORIZED: "marker",
+      NODE_OPTIONS: "--require=/marker.js",
+      NODE_USE_SYSTEM_CA: "marker",
+      OPENSSL_CONF: "/marker.cnf",
       RATE_LIMIT_SIGN_IN: "marker/900",
       RATE_LIMIT_MFA_CODE: "5/marker",
       RATE_LIMIT_PASSWORD_RESET_EMAIL: "marker",

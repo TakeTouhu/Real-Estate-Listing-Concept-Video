@@ -329,8 +329,9 @@ jobs:
   web-image:
     # The web app's production image (ADR-0175), built from this commit and run
     # with no network, a read-only root, no capabilities and no new privileges.
-    # It must refuse a production start without settings and with NEXT_PHASE
-    # naming the build, and serve with stand-in settings that point nowhere.
+    # It must refuse a production start without settings, with NEXT_PHASE
+    # naming the build and with a setting that widens what Node.js trusts
+    # (ADR-0184), and serve with stand-in settings that point nowhere.
     # Nothing is pushed: no registry, login, secret or cache. The base image is
     # pinned by digest; readiness against live services is RD-11's. The very
     # image is then scanned with pinned Syft and Grype (ADR-0180).
@@ -379,6 +380,29 @@ jobs:
           cat "$RUNNER_TEMP/phase.log"
           test "$code" -eq 1
           grep -q "SESSION_SECRET: Required" "$RUNNER_TEMP/phase.log"
+
+      - name: Refuse it with settings that widen what Node.js trusts
+        timeout-minutes: 2
+        run: |
+          # The schema reads these once its required settings are there: three random stand-ins, masked.
+          umask 077
+          required="$RUNNER_TEMP/required.env"
+          for name in SESSION_SECRET HEALTHCHECK_API_TOKEN STORAGE_SIGNING_SECRET; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$required"
+          done
+          set +e
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --env-file "$required" -e NODE_OPTIONS=--use-openssl-ca -e NODE_USE_SYSTEM_CA=1 -e OPENSSL_CONF=/x \
+            vtavision-web:ci > "$RUNNER_TEMP/trust.log" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/trust.log"
+          test "$code" -eq 1
+          grep -qF "  - NODE_OPTIONS: NODE_OPTIONS must not be set in production: " "$RUNNER_TEMP/trust.log"
+          grep -qF "  - NODE_USE_SYSTEM_CA: NODE_USE_SYSTEM_CA must not be set in production: " "$RUNNER_TEMP/trust.log"
+          grep -qF "  - OPENSSL_CONF: OPENSSL_CONF must not be set in production: " "$RUNNER_TEMP/trust.log"
 
       - name: Check the image's user, entrypoint and environment
         run: |

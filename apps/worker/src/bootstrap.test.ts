@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { serverEnvSchema } from "@app/shared";
+import { resetServerEnvCache, serverEnvSchema } from "@app/shared";
 import { createLogger } from "@app/observability";
 import { FakeVideoProvider, OPEN_VIDEO_CAPABILITY } from "@app/video-providers";
 import { bootstrapWorker } from "./bootstrap";
@@ -51,5 +51,33 @@ describe("bootstrapWorker", () => {
     await expect(
       bootstrapWorker({ env, logger: silentLogger, provider }),
     ).rejects.toThrow("boom");
+  });
+
+  it("refuses, as the web app does, a production environment that widens what Node.js trusts (ADR-0184)", async () => {
+    // The worker image runs no Node.js today (ADR-0151 Decision 4), so this test alone holds the worker's refusal.
+    const widening = { NODE_OPTIONS: "--use-openssl-ca", NODE_USE_SYSTEM_CA: "1", OPENSSL_CONF: "/marker.cnf" };
+    // The schema checks these only once every required setting is there.
+    const required = {
+      SESSION_SECRET: "session-secret-abcdef123456",
+      HEALTHCHECK_API_TOKEN: "healthcheck-token-abcdef123456",
+      STORAGE_SIGNING_SECRET: "storage-signing-secret-abc",
+    };
+    for (const [name, value] of Object.entries({ NODE_ENV: "production", ...required, ...widening })) {
+      vi.stubEnv(name, value);
+    }
+    resetServerEnvCache();
+    try {
+      const failure = await bootstrapWorker({ logger: silentLogger, provider: new FakeVideoProvider() }).then(
+        () => "started",
+        (error: unknown) => String(error),
+      );
+      for (const name of Object.keys(widening)) {
+        expect(failure).toContain(`\n  - ${name}: ${name} must not be set in production: `);
+      }
+      expect(failure).not.toMatch(/marker|openssl-ca/);
+    } finally {
+      vi.unstubAllEnvs();
+      resetServerEnvCache();
+    }
   });
 });
