@@ -12,6 +12,8 @@ export interface Liveness {
   readonly status: "ok";
   readonly service: string;
   readonly version: string;
+  /** Cloud Run's revision name (`K_REVISION`) when well formed, otherwise null (ADR-0183). */
+  readonly revision: string | null;
   readonly time: string;
 }
 
@@ -55,8 +57,30 @@ export interface ReadinessInputs {
   readonly failed?: (probe: ReadinessProbe, error: unknown) => void;
 }
 
-export function buildLiveness(now: () => Date = () => new Date()): Liveness {
-  return { status: "ok", service: SERVICE_NAME, version: SERVICE_VERSION, time: now().toISOString() };
+/**
+ * The shape of a Cloud Run revision name: a lower-case letter, then lower-case
+ * letters, digits and hyphens, not ending in a hyphen, 63 characters at most
+ * (ADR-0183). A technical bound on what a public answer echoes, not a rule
+ * about names.
+ */
+const REVISION_NAME = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** The revision, when it has that shape; anything else, or nothing, is null. */
+function revisionName(value: string | undefined): string | null {
+  return value !== undefined && REVISION_NAME.test(value) ? value : null;
+}
+
+export function buildLiveness(
+  now: () => Date = () => new Date(),
+  revision: () => string | undefined = () => process.env.K_REVISION,
+): Liveness {
+  return {
+    status: "ok",
+    service: SERVICE_NAME,
+    version: SERVICE_VERSION,
+    revision: revisionName(revision()),
+    time: now().toISOString(),
+  };
 }
 
 /**

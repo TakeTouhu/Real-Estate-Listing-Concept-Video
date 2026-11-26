@@ -46,6 +46,51 @@ describe("buildLiveness", () => {
     expect(live.time).toBe("2026-01-01T00:00:00.000Z");
   });
 
+  it("answers exactly status, service, version, revision and time, in that order", () => {
+    const live = buildLiveness(undefined, () => "vtavision-web-00042-abc");
+    expect(Object.keys(live)).toEqual(["status", "service", "version", "revision", "time"]);
+  });
+
+  it("names Cloud Run's revision when it is well formed (ADR-0183)", () => {
+    const at = () => new Date("2026-01-01T00:00:00.000Z");
+    for (const name of ["vtavision-web-00042-abc", "a", "a1", `a${"b".repeat(62)}`]) {
+      expect(buildLiveness(at, () => name).revision).toBe(name);
+    }
+  });
+
+  it("answers a null revision when it is unset or not a revision's shape", () => {
+    const at = () => new Date("2026-01-01T00:00:00.000Z");
+    const malformed = [
+      undefined,
+      "",
+      "Vtavision-web-00042-abc",
+      `a${"b".repeat(63)}`,
+      "vtavision web",
+      "vtavision<web",
+      "0vtavision-web",
+      "vtavision-web-",
+      "-vtavision-web",
+      "vtavision.web",
+      "vtavision-web\n",
+    ];
+    for (const value of malformed) expect(buildLiveness(at, () => value).revision).toBeNull();
+  });
+
+  describe("by default", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("reads K_REVISION at each call", () => {
+      vi.stubEnv("K_REVISION", "vtavision-web-00042-abc");
+      expect(buildLiveness().revision).toBe("vtavision-web-00042-abc");
+      vi.stubEnv("K_REVISION", "Not A Revision");
+      expect(buildLiveness().revision).toBeNull();
+      vi.stubEnv("K_REVISION", undefined);
+      expect(buildLiveness().revision).toBeNull();
+    });
+  });
+
   it("is in a module that imports only types, and is all the liveness route loads (ADR-0152 Decision 4)", () => {
     /** A file's import statements, once nothing else in it is seen to load a module. */
     const imports = (file: string) => {
