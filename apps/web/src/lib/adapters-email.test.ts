@@ -128,7 +128,7 @@ describe("the SMTP email sender in the web app", () => {
       thrown = await sender?.send(email()).catch((error: unknown) => error);
     });
     expect(thrown).toBe(failure);
-    const line = { level: "warn", component: "email", message: "An email was not accepted for delivery" };
+    const line = { severity: "WARNING", component: "email", message: "An email was not accepted for delivery" };
     expect(lines).toEqual([{ ...line, code: "EAUTH", time: expect.any(String) }]);
     for (const shown of ["MARKER", "owner@example.test", "smtp-password-not-a-secret", "535"]) {
       expect(JSON.stringify(lines)).not.toContain(shown);

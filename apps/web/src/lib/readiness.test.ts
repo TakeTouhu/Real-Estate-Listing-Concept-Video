@@ -146,10 +146,11 @@ describe("buildReadiness", () => {
       { name: "start", ok: false, detail: problems.join("; ") },
     ]);
     // Where an operator who has the log alone reads them: the check wrote none, as it ended nothing.
-    const line = { level: "warn", component: "readiness", message: "The start check refuses this start", problems };
+    const message = "The start check refuses this start";
+    const line = { severity: "WARNING", component: "readiness", message, problems };
     expect(lines).toEqual([expect.objectContaining(line)]);
     // The line carries the check's lines beside the logger's own fields, and no other field that has a value here.
-    expect(Object.keys(lines[0] ?? {}).sort()).toEqual(["component", "level", "message", "problems", "time"]);
+    expect(Object.keys(lines[0] ?? {}).sort()).toEqual(["component", "message", "problems", "severity", "time"]);
     // Each time readiness is asked, and not the first time alone (Decision 2).
     await buildReadiness();
     expect(lines).toEqual([expect.objectContaining(line), expect.objectContaining(line)]);
@@ -179,8 +180,8 @@ describe("buildReadiness", () => {
     expect(lines).toHaveLength(2);
     expect(lines).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ level: "warn", component: "readiness", probe: "database", code: "P1001" }),
-        expect.objectContaining({ level: "warn", component: "readiness", probe: "storage", code: "UNEXPECTED" }),
+        expect.objectContaining({ severity: "WARNING", component: "readiness", probe: "database", code: "P1001" }),
+        expect.objectContaining({ severity: "WARNING", component: "readiness", probe: "storage", code: "UNEXPECTED" }),
       ]),
     );
     for (const part of ["db.internal", "app-user", "/srv/shared", "EACCES"]) {
@@ -266,9 +267,9 @@ describe("buildReadiness", () => {
         { name: "database", ok: false, detail: "does not answer" },
       ]);
       // One line, by the code alone, as for any probe that did not answer (ADR-0152 Decision 3).
-      const line = { level: "warn", component: "readiness", message: "A readiness probe did not answer" };
+      const line = { severity: "WARNING", component: "readiness", message: "A readiness probe did not answer" };
       expect(lines).toEqual([expect.objectContaining({ ...line, probe: "database", code: errorCode })]);
-      expect(Object.keys(lines[0] ?? {}).sort()).toEqual(["code", "component", "level", "message", "probe", "time"]);
+      expect(Object.keys(lines[0] ?? {}).sort()).toEqual(["code", "component", "message", "probe", "severity", "time"]);
       for (const part of ["db.internal", "app-user", "hunter2", "schema.prisma", "DATABASE_URL", "pool_timeout"]) {
         expect(JSON.stringify([lines, readiness])).not.toContain(part);
       }

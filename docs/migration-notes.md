@@ -3609,3 +3609,18 @@ the lockfile, `env.ts`, the `shape` reads of `env.test.ts` and
 `env.test.ts` and `tests/dependency-overrides.test.ts` go, and
 `api-changes-pt-6d.md` and the Roadmap, gap analysis and `TODO.md`
 lines of PT-6d go; the advisory comes back.
+
+## PT-7a — `severity` for Cloud Logging
+
+**No migration** (ADR-0181); nothing deployed or pushed; still 8
+checks. A log line names `severity` (`DEBUG`, `INFO`, `WARNING`,
+`ERROR`) where it named `level` (`debug`, `info`, `warn`, `error`): a
+query, alert or tool that reads `level` must read `severity` and the
+upper-case names. None exists outside the repository, since no
+environment is deployed (*inference*: the gap analysis lists no
+infrastructure). `LOG_LEVEL` is unchanged. **Rolling back:**
+`logger.ts` writes `level` again and drops no field,
+`logger.test.ts` goes, the five `apps/web/src/lib` tests and
+`tests/production/log-report.mjs` and its test read `level` again, and
+ADR-0181, `api-changes-pt-7a.md` and the Roadmap, gap analysis and
+`TODO.md` lines of PT-7a go.

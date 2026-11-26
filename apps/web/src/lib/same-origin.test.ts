@@ -118,9 +118,9 @@ describe("isSameOriginPost's setting and log", () => {
     expect(isSameOriginPost(post(evil), "POST /api/auth/login")).toBe(false);
     expect(isSameOriginPost(post({ host: "app.example.com" }))).toBe(false);
     const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(logged.map(({ level, code, reason, route }) => [level, code, reason, route])).toEqual([
-      ["warn", "ORIGIN_REFUSED", "MISMATCH", "POST /api/auth/login"],
-      ["warn", "ORIGIN_REFUSED", "NO_ORIGIN", undefined],
+    expect(logged.map(({ severity, code, reason, route }) => [severity, code, reason, route])).toEqual([
+      ["WARNING", "ORIGIN_REFUSED", "MISMATCH", "POST /api/auth/login"],
+      ["WARNING", "ORIGIN_REFUSED", "NO_ORIGIN", undefined],
     ]);
     expect(lines.join("\n")).not.toMatch(/evil|app\.example\.com/);
   });

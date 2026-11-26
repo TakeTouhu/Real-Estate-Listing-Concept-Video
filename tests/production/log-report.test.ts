@@ -12,10 +12,10 @@ afterAll(() => rmSync(folder, { recursive: true, force: true }));
 const TIME = "2026-11-26T01:34:18.803Z";
 const json = (fields: Record<string, string>): string => JSON.stringify({ time: TIME, ...fields });
 const START = ["   ▲ Next.js 15.5.28", "   - Local:        http://localhost:3000", " ✓ Ready in 198ms"];
-const LIMIT = json({ level: "warn", component: "rate-limit", code: "RATE_LIMITED", dimension: "client" });
-const PROBE = json({ level: "warn", component: "readiness", probe: "database", code: "P1001" });
+const LIMIT = json({ severity: "WARNING", component: "rate-limit", code: "RATE_LIMITED", dimension: "client" });
+const PROBE = json({ severity: "WARNING", component: "readiness", probe: "database", code: "P1001" });
 const OUTAGE = json({
-  level: "error",
+  severity: "ERROR",
   component: "request",
   route: "POST /api/auth/login",
   errorName: "RateLimiterUnavailable",
@@ -42,8 +42,9 @@ describe("the production-mode log report", () => {
   it("counts a clean log by its seven fields alone and finds nothing", () => {
     const { status, out, summary } = report(CLEAN, ["a-value-of-this-run"]);
     expect(status).toBe(0);
-    expect(out.split("\n")[0]).toBe("| level | component | code | route | errorName | causeName | dimension | lines |");
-    expect(out).toContain("| warn | readiness | P1001 |  |  |  |  | 1 |");
+    const header = "| severity | component | code | route | errorName | causeName | dimension | lines |";
+    expect(out.split("\n")[0]).toBe(header);
+    expect(out).toContain("| WARNING | readiness | P1001 |  |  |  |  | 1 |");
     expect(out).not.toContain("2026-11-26");
     expect(out.trimEnd().endsWith("No finding.")).toBe(true);
     expect(summary).toContain("No finding.");
@@ -53,23 +54,25 @@ describe("the production-mode log report", () => {
     const closed = PROBE.replace("P1001", "P1017");
     const { status, out } = report([...START, LIMIT, closed, OUTAGE, PROBE]);
     expect(status).toBe(0);
-    expect(out).toContain("| warn | readiness | P1017 |  |  |  |  | 1 |");
+    expect(out).toContain("| WARNING | readiness | P1017 |  |  |  |  | 1 |");
   });
 
   it("stops on a listed value with exit 2, printing no table and summing up nothing", () => {
-    const leaked = json({ level: "info", component: "x", code: "tok-1" });
+    const leaked = json({ severity: "INFO", component: "x", code: "tok-1" });
     const { status, out, summary } = report([...CLEAN, leaked], ["tok-1"]);
     expect([status, out, summary]).toEqual([2, "", ""]);
   });
 
   it.each([
-    ["an unlisted error", [...CLEAN, json({ level: "error", component: "request", errorName: "TypeError" })]],
-    ["an unlisted warning", [...CLEAN, json({ level: "warn", component: "request", code: "ORIGIN_REFUSED" })]],
+    ["an unlisted error", [...CLEAN, json({ severity: "ERROR", component: "request", errorName: "TypeError" })]],
+    ["an unlisted warning", [...CLEAN, json({ severity: "WARNING", component: "request", code: "ORIGIN_REFUSED" })]],
     ["another readiness code", [...CLEAN, PROBE.replace("P1001", "UNEXPECTED")]],
     ["a raw line", [...CLEAN, "TypeError: fetch failed"]],
-    ["no level", [...CLEAN, json({ component: "request", message: "x" })]],
-    ["an unknown level", [...CLEAN, json({ level: "fatal", component: "request" })]],
-    ["no component", [...CLEAN, json({ level: "info", message: "x" })]],
+    ["no severity", [...CLEAN, json({ component: "request", message: "x" })]],
+    ["an unknown severity", [...CLEAN, json({ severity: "fatal", component: "request" })]],
+    ["a lower-case severity", [...CLEAN, json({ severity: "warning", component: "request" })]],
+    ["the old level field alone", [...CLEAN, json({ level: "info", component: "request" })]],
+    ["no component", [...CLEAN, json({ severity: "INFO", message: "x" })]],
     ["no outage line", [...START, LIMIT, PROBE]],
     ["two outage lines", [...CLEAN, OUTAGE]],
   ])("fails on %s", (_, lines) => {
@@ -77,9 +80,9 @@ describe("the production-mode log report", () => {
   });
 
   it("prints a field that is not a plain word or route as (other)", () => {
-    const { status, out } = report([...CLEAN, json({ level: "info", component: "x", code: "https://h/?t=a@b" })]);
+    const { status, out } = report([...CLEAN, json({ severity: "INFO", component: "x", code: "https://h/?t=a@b" })]);
     expect(status).toBe(0);
-    expect(out).toContain("| info | x | (other) |");
+    expect(out).toContain("| INFO | x | (other) |");
     expect(out).not.toContain("t=a@b");
   });
 });
