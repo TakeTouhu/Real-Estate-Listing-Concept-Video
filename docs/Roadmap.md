@@ -1670,6 +1670,16 @@ Measured on the built standalone server: stderr empty. Not covered:
 `console.log`, `info` and `debug`, `process.stderr.write`, the worker.
 The CI step is PT-7b3's.
 
+**PT-7b3 — The production-mode job answers one error no catch takes**
+(ADR-0187, no migration): after the database's outage, a same-origin
+multipart sign-in with no boundary makes the web image's
+`request.formData()` throw a `TypeError` outside the route's `try`; the
+step requires `500`, and the log report requires exactly one `console`
+and one `request` `ERROR` line for it and still fails on any raw line
+(`docs/api-changes-pt-7b3.md`). Measured on the built standalone
+server: `500`, stderr empty, the report's "No finding". The Docker job
+itself first runs in the pull request's CI.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

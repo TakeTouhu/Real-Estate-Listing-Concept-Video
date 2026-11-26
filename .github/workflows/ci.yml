@@ -1061,6 +1061,19 @@ jobs:
             sleep 1
           done
 
+      - name: Answer one error no catch takes
+        # A same-origin sign-in whose multipart body has no boundary: `request.formData()` throws a TypeError outside
+        # the route's `try`, before the limiter, so Next.js answers 500 and writes two JSON lines, its print through
+        # the console bridge and `onRequestError`'s, which the log report requires once each (ADR-0187).
+        timeout-minutes: 2
+        run: |
+          dir="$RUNNER_TEMP/rd11"
+          got="$(curl -sS --max-time 20 --cacert "$dir/ca.pem" -o /dev/null -w '%{http_code}' \
+            -H 'Origin: https://app.rd11.test:8443' -H 'Content-Type: multipart/form-data' --data 'x' \
+            https://app.rd11.test:8443/api/auth/login)"
+          echo "$got"
+          test "$got" = 500
+
       - name: Report the server's log
         # Counted by seven fields, here and in the job's summary, and nothing else of it; a listed value in it fails
         # the step and keeps the last step from printing the log.

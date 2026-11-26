@@ -2230,6 +2230,12 @@ into on 2026-11-17.
       and a rejection's included (ADR-0186; those two by reading
       `next-server.js:193-221` and `:490-491` and by unit tests, not
       measured in PT-7b2's lab). The rest: "Open in PT-7b2".*
+      *Amended in PT-7b3: CI's `production-mode` job now causes one
+      route handler's error in the image as built, through the sign-in
+      route's `formData()` outside its `try`, and its log report
+      requires both lines once each (ADR-0187); its first run is the
+      pull request's CI. The six such calls are unchanged; see "Open
+      in PT-7b3".*
 - [x] **The logger's message, reserved keys and other URLs bypass
       `redact`.** `createLogger` writes `message` as given and lets a field
       overwrite `level`, `time` or `message`
@@ -2334,6 +2340,20 @@ into on 2026-11-17.
       Next.js path writing it was found (*inference*).
 - [ ] **How Cloud Logging reads the `request` and `console` lines is
       unmeasured.** G1's.
+
+## Open in PT-7b3 — what the uncaught-error step leaves open
+
+- [ ] **The uncaught-error step relies on a gap.** "Answer one error no
+      catch takes" works because the sign-in route's
+      `request.formData()` is outside its `try` (ADR-0187 Decision 2).
+      A change that moves it inside a catch fails the step at its `500`
+      test; that change must move the step to another trigger that
+      still reaches Next.js's catch and amend ADR-0187. Which trigger
+      is not decided.
+- [ ] **Only a route handler's error is held in the image.** A server
+      component's error was measured only in PT-7b1's and PT-7b2's
+      labs; a middleware's and a rejection's only by reading and unit
+      tests. Whether the job should cause them too is open.
 
 ## Open in RD-10 — what the container images leave open
 
