@@ -3535,5 +3535,5 @@ access to Docker Hub, Debian's mirror and the npm registry
 
 **Rolling back.** To the tree of the unknown-failure PR: the
 Dockerfile, its ignore file, `apps/worker/image/`, the job and the
-guard's worker rules go; the checks return to 12. Nothing was stored,
-pushed or deployed.
+guard's worker rules go, and the composer's `-r` with its unit tests;
+the checks return to 12. Nothing was stored, pushed or deployed.

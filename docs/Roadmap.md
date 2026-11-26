@@ -1527,7 +1527,10 @@ the refusal with no network and a read-only root, and pushes nothing;
 this amends ADR-0072 Decision 6, and composition stays dormant. The
 guard test lists the worker's Dockerfile and holds its job step by
 step. A pull request shows 14 checks. Not measured before CI: the
-image's build and the suites on Debian 13's FFmpeg. RD-10 is complete:
+image's build and the suites on Debian 13's FFmpeg. CI's first build
+found Debian's FFmpeg 7.1.5 writing a 3.5 s master as 3,467 ms; both
+encodes now state the profile's frame rate with `-r` (ADR-0176
+Decision 8), and no tolerance changed. RD-10 is complete:
 RD-10a (#212) the rules and the web image, RD-10b (#214) relative
 redirects, and RD-10c the worker image; what it leaves open is in
 `TODO.md`, "Open in RD-10". Planned, not done: RD-11.

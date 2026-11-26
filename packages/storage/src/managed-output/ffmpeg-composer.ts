@@ -49,6 +49,17 @@
  * nobody reviewed; a deliverable that plays unexpected sound in an estate
  * agent's office is a product decision, not a default.
  *
+ * ## The output's rate is stated, not inferred
+ *
+ * `-r N/D`, the profile's frame rate, as an output option on both encodes.
+ * Without it FFmpeg derives the encoder's rate from the filter graph, and
+ * releases differ: 6.1 gives 30 fps, a 7.0 build gave 25 fps (88 frames for a
+ * 3.5 s master), and Debian 13's 7.1.5, the worker image's (ADR-0176), kept
+ * the 105 frames but wrote a 3.467 s master whose average rate is not 30/1
+ * (measured in CI). Stated, on the builds measured (6.1, 7.0, 9.0), the
+ * encoder's time base is the profile's, every frame lasts one period, and the
+ * last frame is counted in the length (ADR-0176 Decision 8).
+ *
  * ## Nothing from an input's container
  *
  * `-map_metadata -1` and `-map_chapters -1`. FFmpeg otherwise copies the first
@@ -159,6 +170,11 @@ export interface FfmpegComposerDeps {
   readonly runner: ProcessRunner;
 }
 
+/** The profile's frame rate as FFmpeg's `-r` value, `N/D`, the exact fraction the `fps` filter's decimal comes from. */
+function outputRateOf(profile: CompositionProfile): string {
+  return `${profile.frameRateNumerator}/${profile.frameRateDenominator}`;
+}
+
 /**
  * The per-input filter chain, as one string.
  *
@@ -228,6 +244,9 @@ export function ffmpegCleanMasterArgsFor(input: ComposeDeliverableInput): readon
     "-1",
     // No audio, from any input, ever.
     "-an",
+    // The output's rate (see the module header).
+    "-r",
+    outputRateOf(profile),
     "-c:v",
     "libx264",
     "-preset",
@@ -305,6 +324,8 @@ export function ffmpegDisclosureArgsFor(
     "-map_chapters",
     "-1",
     "-an",
+    "-r",
+    outputRateOf(profile),
     "-c:v",
     "libx264",
     "-preset",

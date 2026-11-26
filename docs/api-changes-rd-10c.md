@@ -3,9 +3,11 @@
 The worker has a container image of its runtime layer: the pinned base,
 Debian 13's FFmpeg and the six disclosure images, with no worker code.
 A new CI job builds it on every push and pull request, runs the media
-suites on its FFmpeg and pushes nothing (ADR-0176). **No migration, no
-dependency, no route, no change under `apps/*/src` or `packages/*/src`
-and no new setting.** RD-10 is complete with it.
+suites on its FFmpeg and pushes nothing (ADR-0176). The composer states
+its output frame rate, so masters keep their length on every FFmpeg
+measured; Debian 13's 7.1.5 is measured by this pull request's CI
+(ADR-0176 Decision 8). **No migration, no dependency, no
+route and no new setting.** RD-10 is complete with it.
 
 ## HTTP
 
@@ -40,7 +42,10 @@ None added or changed.
 
 ## Internal API
 
-None. No file under `apps/*/src` or `packages/*/src` changed.
+`packages/storage/src/managed-output/ffmpeg-composer.ts`: the Clean
+Master's and the customer's video's argument vectors carry `-r N/D`,
+the profile's frame rate, before `-c:v` (ADR-0176 Decision 8). No
+signature, filter or other argument changed. Composition stays dormant.
 
 ## Logs
 
@@ -63,7 +68,9 @@ ones; and the `worker-image` job held as the `web-image` job is (its
 keys, `contents: read`, only `actions/checkout`, each build word for
 word, no `if:` of its own), with every step's name, time limit and
 whole `run:` text. Each image's builds are read in their own job;
-Docker anywhere else in the workflow still fails it.
+Docker anywhere else in the workflow still fails it. The composer's two
+exact argument-vector unit tests gain `-r 30/1`, and a new one holds
+that `-r` is the profile's fraction, before `-c:v`, on both encodes.
 
 New CI job `worker-image` (`ubuntu-24.04`, 30 minutes,
 `contents: read`): it builds `media-test`, prints its FFmpeg's version
@@ -89,7 +96,9 @@ files' owner check, the step limits and the exact ignore file added
 
 Measured here: the checksums, `check.sh` under `dash` against a
 stand-in FFmpeg for its pass and every refusal (by hand and in the
-guard test), and the suites on this host's FFmpeg 6.1.1. Not measured
+guard test), and the suites on this host's FFmpeg 6.1.1; with `-r`, the
+suites on FFmpeg 6.1.1, 7.0.2 and 9.0.2 (172 of 172 each). Not measured
 here: any build of the image, since no Docker daemon ran and Debian's
-mirror was not reached. The first build, and the first run of the media
-suites on Debian 13's FFmpeg, are CI's.
+mirror was not reached. CI's first build ran the suites on Debian 13's
+FFmpeg 7.1.5 and failed 22 of 172 before `-r`; the run with `-r` is
+this pull request's next.

@@ -1,13 +1,15 @@
 # ADR-0176 — The worker image's runtime layer and its FFmpeg
 
-Status: Accepted (RD-10c, 2026-11-25). The third and last part of the
+Status: Accepted (RD-10c, 2026-11-25; Decision 8 added 2026-11-26,
+before merge). The third and last part of the
 tenth milestone of production readiness, part 1, which the product
 owner approved on 2026-11-16
 (`/mnt/project-files/cto/production-readiness-proposal.md`, design item
 7 and PR-10). ADR-0175 reserved this number for the worker image. It
 decides what the worker's image carries before the worker has a
 production runtime, which FFmpeg it carries, and how CI proves that
-FFmpeg. Decisions 1 to 6 are built here; Decision 7 is part 2's.
+FFmpeg. Decisions 1 to 6 and 8 are built here; Decision 7 is part
+2's.
 
 Builds on: ADR-0175 (every image's rules, its base and digest, CI
 builds and pushes nothing), ADR-0071 (the disclosure overlay is a
@@ -16,7 +18,8 @@ FFmpeg; CI's own FFmpeg moves only with the runner's label, Decision
 2), ADR-0075 Decision 3 (the composer takes the images' directory as an
 absolute path), ADR-0081 (the runner suite's on-plan assertion),
 ADR-0151 Decision 4 (the worker's start is checked with its runtime, in
-part 2). **Amends ADR-0072 Decision 6** (below, Decision 3).
+part 2). Decision 8 adds one option to both of ADR-0075's encodes.
+**Amends ADR-0072 Decision 6** (below, Decision 3).
 
 ## Context
 
@@ -138,10 +141,57 @@ production FFmpeg launch. Composition's activation also waits on
 FFmpeg's licensing question (GPL, H.264), which is counsel's;
 `TODO.md` records it with the counsel review.
 
+## Decision 8 — Both encodes state their output rate
+
+CI's first build of this image ran the media suites on Debian 13's
+FFmpeg `7.1.5-0+deb13u1`: 150 of 172 passed. The Clean Master had the
+105 frames of a 3.5 s scene at 30 fps, but ffprobe measured it 3,467 ms
+long with an average rate of `105000000/3466667`, so the inspector
+called it unusable, and 22 tests failed (18 composer, 4 runner).
+FFmpeg 6.1.1 gives 30/1 and 3,500 ms from the same arguments.
+
+The composer's two argument vectors (ADR-0075 Decisions 1 and 2) now
+carry `-r N/D`, the profile's frame rate, before `-c:v`. Without it
+FFmpeg takes the encoder's rate from the filter graph's output, which
+states none, and releases fill that gap differently (below). With it,
+on every build measured here, the encoder's time base is the profile's,
+every frame lasts one period and the last is counted in the length;
+that 7.1.5 does the same is inferred until this pull request's CI
+measures it. No filter, media-suite expectation or tolerance changed,
+and no media suite was relaxed; the two exact argument-vector unit
+tests gained `-r 30/1`, and one more asserts the option follows the
+profile on both encodes.
+
+The product owner chose, on 2026-11-26 at 00:14Z (a decision card in
+the project thread), to fix the composer's arguments rather than hold
+RD-10c. The card said the fix would merge as its own pull request first
+and be checked on FFmpeg 7.1 here. Both changed: the fix rides in this
+pull request, because this work may push only one branch and #216 is
+on it, which also lets the `worker-image` job measure the fix on
+Debian's own 7.1.5 before anything merges; and no 7.1 build could be
+had here (PyPI's builds are 7.0.2 and 9.0.2). The CTO told the owner
+both.
+
 ## What was measured
 
-Here, with no Docker daemon running (none was started) and Debian's
-mirror not reached: the six images' SHA-256 equal
+For Decision 8, on this host with no Docker: from the composer's own
+graph, FFmpeg 6.1.1 (Ubuntu's) gave 30/1 and 3.500 s either way; a
+static FFmpeg 7.0.2 gave 25/1, 88 frames and 3.520 s without `-r` and
+30/1, 105 frames and 3.500 s with it; a static FFmpeg 9.0.2 gave 30/1
+and 3.500 s either way. With `-r`, `pnpm test:media` passed (172 of
+172) on 6.1.1, 7.0.2 and 9.0.2, probed by ffprobe 6.1.1 (the static
+builds came from PyPI's `imageio-ffmpeg`, which ships no ffprobe). No
+7.1 build was available here: whether 7.1.5 passes is CI's measurement
+on this pull request. A simulation points the same way (inferred, not a
+7.1 measurement): FFmpeg 7.0.2 told `-fps_mode vfr` in place of `-r`
+wrote CI's exact symptom, a 1000000 time scale, a 3,466,667 length, a
+last packet with no duration, and the media suites then failed 22 of
+172 (18 composer, 4 runner), CI's split; and FFmpeg 6.1.1, 7.0.2 and
+9.0.2 each refuse `-r` together with `-fps_mode vfr` as contradictory,
+so a stated rate encodes at a constant one.
+
+For the image, here, with no Docker daemon running (none was started)
+and Debian's mirror not reached: the six images' SHA-256 equal
 `DISCLOSURE_LAYER_ASSETS`; `check.sh`, its `/app` moved under a
 stand-in folder, passed under `dash` with a stand-in `ffmpeg` and
 `ffprobe` printing a `7.1.1-1+b1` banner, and refused each of: series
@@ -157,9 +207,10 @@ or seventh image or a dotfile.
 
 **Not measured here**: `docker buildx build`, Debian 13's FFmpeg and
 its series, the media suites on it, and the image. The first build is
-CI's. If the suites fail on Debian 13's FFmpeg, RD-10c goes back to the
-CTO: a re-measured tolerance is an amendment of ADR-0072, never a
-silent loosening.
+CI's; its 22 failures went back to the CTO, and the product owner
+chose fixing the composer's arguments (Decision 8) over holding RD-10c;
+no tolerance moved: a re-measured tolerance would be an amendment of
+ADR-0072, never a silent loosening.
 
 ## Where this differs from the RD-10 design
 
@@ -189,6 +240,9 @@ silent loosening.
   fails the check, and is the CTO's.
 - The image is not runnable as a worker; whoever deploys it before part
   2 gets exit 2.
+- The customer's video and the Clean Master are encoded with an
+  explicit rate on every FFmpeg; on 6.1.1 the suites measure the same
+  results as before.
 - For the product owner, nothing to decide; told: CI takes longer, and
   FFmpeg's licensing is a counsel question before composition is
   activated.
