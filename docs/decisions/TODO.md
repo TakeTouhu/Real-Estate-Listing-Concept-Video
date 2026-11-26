@@ -2476,6 +2476,13 @@ into on 2026-11-17.
       *Amended in PT-8a (ADR-0191): CI checks that migrations are
       append-only and that the applied checksums match the committed
       files; the migration image is PT-8c's.*
+      *Amended in PT-8b1 (ADR-0191 Decision 4): CI also seeds a
+      database at migration 35, identity, membership, billing, Unit
+      entitlement, add-on and purchase, invitation, MFA, rate-limit and
+      audit tables, applies the head's migrations, and checks its rows,
+      values and schema; the seed sits at the last migration, so only
+      migrations from 36 on will run on seeded rows; PT-8b2 seeds the
+      rest.*
 - [ ] **Record the migration production holds, so CI upgrades from it**
       (G1/G3; ADR-0191 Decision 1). Until then CI takes the checked-out
       commit's first parent as the previous release. Part 2, with G1.

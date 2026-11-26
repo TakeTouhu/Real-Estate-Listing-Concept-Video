@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
  */
 const REPO = join(__dirname, "..", "..");
 const LINES = readFileSync(join(REPO, ".github", "workflows", "ci.yml"), "utf8").split(/\r?\n/);
-const SCRIPTS = ["tests/migrations/append-only.sh", "tests/migrations/checksums.sh"];
+const SCRIPTS = ["tests/migrations/append-only.sh", "tests/migrations/checksums.sh", "tests/migrations/upgrade.sh"];
 const SECRET = /password|database_url|postgres(ql)?:\/\//i;
 /** What would skip Prisma's lock, reset or push a schema, drop data, or put an address on a command line. */
 const BANNED = new RegExp(
@@ -53,21 +53,23 @@ describe("the database job's migration checks", () => {
     ]);
   });
 
-  it("checks the checksums right after the fresh apply, and append-only after the drift check", () => {
+  it("checks the checksums after the fresh apply, append-only after the drift check, then the seeded upgrade", () => {
     const names = steps(databaseJob()).map(nameOf);
     const at = (name: string): number => names.indexOf(name);
     const apply = at("Apply migrations to an empty database");
     const sums = at("Check the applied migrations' checksums");
     const drift = at("Verify committed migrations match the schema");
     const append = at("Check that no applied migration changed");
+    const upgrade = at("Upgrade a seeded database to the head's migrations");
     const tests = at("Database integration tests");
-    expect([apply > 0, sums === apply + 1, drift > sums, append === drift + 1, tests === append + 1]).toEqual([
+    expect([apply > 0, sums === apply + 1, drift > sums, append === drift + 1, upgrade === append + 1]).toEqual([
       true,
       true,
       true,
       true,
       true,
     ]);
+    expect(tests === upgrade + 1).toBe(true);
   });
 
   it("runs checksums.sh on the committed migrations through libpq's environment, bounded", () => {
@@ -96,6 +98,39 @@ describe("the database job's migration checks", () => {
         '"$RUNNER_TEMP/parent/packages/database/prisma"',
         "packages/database/prisma",
       ].join(" "),
+    ]);
+  });
+
+  it("runs upgrade.sh on a new database through libpq's environment, bounded, with prisma's URL in the job", () => {
+    const step = named("Upgrade a seeded database to the head's migrations");
+    expect(safe(step).slice(1, 3)).toEqual(["timeout-minutes: 3", "run: >-"]);
+    const run = step.slice(3);
+    expect(run.length).toBe(2);
+    expect(/^PGPASSWORD=\S+ PGHOST=localhost PGUSER=revt PGDATABASE=revt$/.test(run[0] ?? "")).toBe(true);
+    const command = "bash tests/migrations/upgrade.sh packages/database/prisma tests/migrations/seed revt_upgrade";
+    expect(run[1] === command).toBe(true);
+    // Booleans only: the line holds a password.
+    const url = databaseJob().filter((line) => line.startsWith("      UPGRADE_DATABASE_URL: "));
+    expect([url.length, url.every((line) => line.endsWith("@localhost:5432/revt_upgrade?schema=public"))]).toEqual([
+      1,
+      true,
+    ]);
+  });
+
+  it("runs each seed with ON_ERROR_STOP in one transaction, before the head's full deploy and the check", () => {
+    const lines = readFileSync(join(REPO, "tests/migrations/upgrade.sh"), "utf8").split("\n");
+    const at = (text: string): number => lines.findIndex((line) => line.trim() === text);
+    const sql = at('sql() { psql -X -w -q -A -t -v ON_ERROR_STOP=1 "$@"; }');
+    const seed = at('sql -1 -f "$seeds/$seed"');
+    const head = at('deploy "$prisma/schema.prisma"');
+    const check = at('sql -f "$seeds/check.sql"');
+    const sums = lines.map((line) => line.trim()).lastIndexOf('bash "$here/checksums.sh" "$prisma/migrations"');
+    expect([sql > 0, seed > sql, head > seed, check === head + 1, sums === check + 1]).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
     ]);
   });
 
