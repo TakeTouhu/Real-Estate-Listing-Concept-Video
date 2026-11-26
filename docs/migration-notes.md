@@ -3624,3 +3624,15 @@ infrastructure). `LOG_LEVEL` is unchanged. **Rolling back:**
 `tests/production/log-report.mjs` and its test read `level` again, and
 ADR-0181, `api-changes-pt-7a.md` and the Roadmap, gap analysis and
 `TODO.md` lines of PT-7a go.
+
+## PT-7a2 — A log message is a constant
+
+**No migration** (ADR-0182); nothing deployed or pushed; still 8
+checks. No line written today changes: every message is a literal, and
+no caller is known to log a URL with a user name or password
+(*inference*). A logged URL with either now shows neither. **Rolling
+back:** `logger.ts` writes the message as given, `redactUrl` returns a
+URL with no query unchanged, the new cases in `logger.test.ts` and
+`redact.test.ts` and `tests/observability/constant-log-messages.test.ts`
+go, and ADR-0182, `api-changes-pt-7a2.md` and the Roadmap, gap analysis
+and `TODO.md` lines of PT-7a2 go.

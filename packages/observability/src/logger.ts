@@ -58,6 +58,9 @@ export interface LoggerOptions {
  * passed through {@link redact} so secrets and signed URLs cannot leak, even
  * if a caller accidentally includes them in `fields`. A line starts with
  * `severity`, `time` and `message`; a caller's field never replaces them.
+ * A message is a constant (ADR-0182); it still goes through `redact` as a
+ * backstop, which rewrites only a message that starts with `http(s)://` and
+ * parses as a URL.
  */
 export function createLogger(options: LoggerOptions = {}): Logger {
   const level = options.level ?? "info";
@@ -70,7 +73,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     const record = {
       severity: SEVERITY[entry],
       time: now().toISOString(),
-      message,
+      message: redact(message),
       ...(redact(withoutReserved({ ...base, ...(fields ?? {}) })) as Record<string, unknown>),
     };
     sink(JSON.stringify(record));
