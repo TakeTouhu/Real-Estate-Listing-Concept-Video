@@ -1,3 +1,4 @@
+import { totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RATE_LIMIT_SETTINGS, SMTP_SETTINGS } from "@app/shared";
@@ -37,6 +38,35 @@ export const E2E_EMAIL_OUTBOX_DIR = join(REPO_ROOT, ".e2e", "outbox");
 
 /** The web app's key for signed links, which the commands and the pipeline's steps the test runs use too. */
 export const E2E_STORAGE_SIGNING_SECRET = "e2e-storage-signing-secret-not-a-secret";
+
+/** The share of this machine's memory `next dev`'s heap may take: Next.js would give it half. */
+export const DEV_SERVER_HEAP_SHARE = 0.7;
+
+/** The memory, in MiB, `next dev`'s heap limit leaves to its process's other memory and the rest of the machine. */
+export const DEV_SERVER_HEAP_RESERVE_MIB = 4096;
+
+/**
+ * `NODE_OPTIONS` for `next dev`: the one inherited, then a heap limit in MiB of
+ * {@link DEV_SERVER_HEAP_SHARE} of this machine's memory, at most its memory
+ * less {@link DEV_SERVER_HEAP_RESERVE_MIB} and never under the half Next.js
+ * would take. A larger limit already inherited is kept as it is. Past 80% of
+ * its limit, `next dev` restarts after answering a request; a request still in
+ * flight, or one made during the restart, is lost. Measured on a 16 GB machine
+ * over the 13 tests of PT-7b3: the server bundles it reads again after each
+ * compile (over 1,000 reads, about 2 GB a run) stay on its heap, about half of
+ * it in one profile; its use reached 6,470 MB of the 6,473 MB at which it
+ * restarts, with its process at 9,051 MB. The reserve is *inference* from
+ * that run: the process used 1.7 to 2.6 GB besides its heap, the rest of the
+ * machine about 2.75 GB; only 16 GB was measured.
+ */
+export function devServerNodeOptions(totalBytes: number = totalmem(), inherited = process.env.NODE_OPTIONS): string {
+  const totalMib = totalBytes / 2 ** 20;
+  const capped = Math.min(totalMib * DEV_SERVER_HEAP_SHARE, totalMib - DEV_SERVER_HEAP_RESERVE_MIB);
+  const limit = Math.floor(Math.max(totalMib / 2, capped));
+  const given = [...(inherited ?? "").matchAll(/--max[-_]old[-_]space[-_]size[= ](\d+)/g)].at(-1)?.[1];
+  if (given !== undefined && Number(given) >= limit) return (inherited ?? "").trim();
+  return [inherited?.trim(), `--max-old-space-size=${limit}`].filter(Boolean).join(" ");
+}
 
 const LOCAL_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 

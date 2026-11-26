@@ -3720,3 +3720,11 @@ PT-7b2 text, and its test the new cases and the pair in `CLEAN`; ADR-0187 and
 `TODO.md`; `architecture.md`'s production-mode row returns to its
 PT-7b2 text. Dropping only the step fails the report, which requires
 its two lines.
+The browser tests' `next dev` gets a larger heap limit
+(`devServerNodeOptions` in `tests/e2e/support/environment.ts`, used by
+`playwright.config.ts`), and the `e2e` job's "Browser tests" step
+fails a run in which `next dev` restarted near its heap limit. **Rolling
+that back:** the step returns to `pnpm run test:e2e`, the web server's
+`env` to `e2eEnvironment()`, and the function and its test go with the
+"Amended in PT-7b3" note on the lost-press item of `TODO.md` and its
+"Find what keeps" item.

@@ -314,7 +314,18 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: Browser tests
-        run: pnpm run test:e2e
+        # `next dev` restarts past 80% of its heap limit, after answering a request; a request
+        # still in flight, or one made during the restart, is lost: a run in which it restarted
+        # fails and says so, passed or not.
+        run: |
+          set -o pipefail
+          status=0
+          pnpm run test:e2e 2>&1 | tee "$RUNNER_TEMP/e2e.log" || status=$?
+          if grep -qF "Server is approaching the used memory threshold, restarting" "$RUNNER_TEMP/e2e.log"; then
+            echo "::error title=next dev restarted::its heap passed 80% of its limit during the browser tests"
+            exit 1
+          fi
+          exit "$status"
 
       - name: Keep the report of a failed run
         if: failure()

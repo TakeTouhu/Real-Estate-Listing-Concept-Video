@@ -1867,6 +1867,24 @@ into on 2026-11-17.
       paths. That was designed (about 420 lines in 13 files) and not
       added. The design is kept with the plan's working files, outside the
       repository, and would otherwise have to be written again.
+      *Amended in PT-7b3: another signature, with a known cause. From
+      2026-11-26 the last browser test lost a request in five runs, just
+      after `next dev` printed `Server is approaching the used memory
+      threshold, restarting`: past 80% of its heap limit, which Next.js
+      sets to half the machine's memory, it restarts after answering a
+      request, and a request still in flight or made during the restart
+      is lost. Measured on a 16 GB machine, the size of the job's runner:
+      each server bundle it reads again after a compile (the largest, a
+      page's, about 8 MB; over 1,000 reads and about 2 GB a run) stays on
+      its heap, about half of its live heap in one profile, the rest not
+      attributed; its use reached 6,470 MB of the 6,473 MB at which it
+      restarts, where it restarted once. Which of Next.js's or
+      React's development objects keeps the old copies is not proven
+      (inference: React's). `playwright.config.ts` now gives it a heap
+      limit of 70% of the machine's memory, at most the memory less
+      4 GiB and never under Next.js's half, and the `e2e` job fails,
+      saying so, in any run in which it restarted. The use still grows
+      with each test added; see "Open in PT-7b3".*
 
 ## Open in RD-2e — what asking the client to connect does not see
 
@@ -2354,6 +2372,16 @@ into on 2026-11-17.
       component's error was measured only in PT-7b1's and PT-7b2's
       labs; a middleware's and a rejection's only by reading and unit
       tests. Whether the job should cause them too is open.
+- [ ] **Find what keeps `next dev`'s re-read server bundles.** The
+      browser tests' development server keeps each server bundle it
+      reads again after a compile, and its heap after collection grows
+      with each test: from about 0.5 GB at 15 seconds to 5.9 to 6.3 GB at
+      the end, peaking at 6,483 and 6,634 MB in two runs with the new
+      limit, whose restart point is 9,047 MB on a 16 GB machine. About
+      five more tests at the current rate would reach it (*inference*).
+      What holds the old copies is not proven (*inference*: React's
+      development `console.error` wrapper). Come back to it when the peak
+      heap passes about 8 GB or the `e2e` job's restart check fires.
 
 ## Open in RD-10 — what the container images leave open
 

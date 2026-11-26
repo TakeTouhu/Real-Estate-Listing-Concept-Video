@@ -1679,6 +1679,10 @@ and one `request` `ERROR` line for it and still fails on any raw line
 (`docs/api-changes-pt-7b3.md`). Measured on the built standalone
 server: `500`, stderr empty, the report's "No finding". The Docker job
 itself first runs in the pull request's CI.
+The same PR gives the browser tests' `next dev` a heap limit of 70% of
+the machine's memory, capped, after it restarted near Next.js's own
+limit and lost a request; the `e2e` job now fails a run in which it
+restarted (`docs/decisions/TODO.md`).
 
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —

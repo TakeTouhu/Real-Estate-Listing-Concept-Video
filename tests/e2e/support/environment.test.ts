@@ -6,6 +6,7 @@ import {
   E2E_EMAIL_OUTBOX_DIR,
   E2E_SHARED_STORAGE_DIR,
   REPO_ROOT,
+  devServerNodeOptions,
   e2eDatabaseUrl,
   e2eEnvironment,
 } from "./environment";
@@ -79,5 +80,21 @@ describe("the browser test's environment", () => {
     expect(Object.keys(env).filter((name) => /^RATE_LIMIT_|^FORWARDED_FOR_/.test(name))).toEqual([]);
     expect(() => e2eEnvironment({ DATABASE_URL: "postgresql://u:p@db.example.com/x" })).toThrow("on this machine");
     expect(() => e2eEnvironment({})).toThrow("needs DATABASE_URL");
+  });
+
+  it("gives `next dev` a heap limit of 70% of the machine's memory, capped, after the options it inherits", () => {
+    const gib = 2 ** 30;
+    expect(devServerNodeOptions(16 * gib, "")).toBe("--max-old-space-size=11468");
+    // 4 GiB is left outside the heap, but the limit never falls under the half Next.js would take.
+    expect(devServerNodeOptions(12 * gib, "")).toBe("--max-old-space-size=8192");
+    expect(devServerNodeOptions(7 * gib, "")).toBe("--max-old-space-size=3584");
+    expect(devServerNodeOptions(16 * gib, " --require ./x.cjs ")).toBe("--require ./x.cjs --max-old-space-size=11468");
+    // A larger limit already given is kept; a smaller one is overridden by the last flag.
+    expect(devServerNodeOptions(16 * gib, " --max-old-space-size=20000 ")).toBe("--max-old-space-size=20000");
+    expect(devServerNodeOptions(16 * gib, "--max_old_space_size=2000")).toBe(
+      "--max_old_space_size=2000 --max-old-space-size=11468",
+    );
+    // The shared environment does not carry the dev server's heap option.
+    expect(e2eEnvironment({ DATABASE_URL: LOCAL }).NODE_OPTIONS).toBeUndefined();
   });
 });
