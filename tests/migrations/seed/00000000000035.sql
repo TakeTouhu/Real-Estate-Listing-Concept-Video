@@ -202,6 +202,8 @@ INSERT INTO rate_limit_counters (policy, subject, "windowStartedAt", count, "loc
 -- production validates only an OUTPUT_VERIFIED attempt, and one recovery attempt is admitted by two resolutions of
 -- attempts on other requests, where production admits one for a failed PRIMARY on its own request. Covering every
 -- validation status, invalid reason and resolution with consistent rows would take about twelve more attempts.
+-- The Unit ledger does not add up either: boundary quantities make held allocations exceed blk_seed35_a1's quantity,
+-- and a cancelled purchase's block is still drawn on. A migration that derives balances must not assume they do.
 -- The job and its current deliverable version, and the scene and its current delivered request, reference each other,
 -- so each pair is inserted by one statement.
 
