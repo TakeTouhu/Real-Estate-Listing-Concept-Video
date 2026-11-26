@@ -49,6 +49,13 @@ describe("the production-mode log report", () => {
     expect(summary).toContain("No finding.");
   });
 
+  it("accepts readiness's probe answering P1017 too, as CI's first run read it before P1001", () => {
+    const closed = PROBE.replace("P1001", "P1017");
+    const { status, out } = report([...START, LIMIT, closed, OUTAGE, PROBE]);
+    expect(status).toBe(0);
+    expect(out).toContain("| warn | readiness | P1017 |  |  |  |  | 1 |");
+  });
+
   it("stops on a listed value with exit 2, printing no table and summing up nothing", () => {
     const leaked = json({ level: "info", component: "x", code: "tok-1" });
     const { status, out, summary } = report([...CLEAN, leaked], ["tok-1"]);

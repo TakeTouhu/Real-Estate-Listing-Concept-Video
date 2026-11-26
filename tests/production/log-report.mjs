@@ -6,7 +6,8 @@
  * levels and a component. It fails on any other line, on any error line but
  * the one the database outage step causes (exactly one), and on any warning
  * but a refusal by the client address's limit or readiness's database probe
- * answering `P1001` during the outage. A listed value in the log (one per line
+ * answering `P1001` or `P1017` during the outage (CI's first run read both: a
+ * stopped server closes the open connection, then refuses new ones). A listed value in the log (one per line
  * of each `values` file) fails it with exit 2 and prints nothing more. Node.js
  * built-ins only.
  */
@@ -21,6 +22,7 @@ const matches = (entry, wanted) => Object.entries(wanted).every(([name, value]) 
 const WARNINGS = [
   { component: "rate-limit", code: "RATE_LIMITED", dimension: "client" },
   { component: "readiness", probe: "database", code: "P1001" },
+  { component: "readiness", probe: "database", code: "P1017" },
 ];
 const LEVELS = ["debug", "info", "warn", "error"];
 /** A field's value as printed: a plain word or route, else hidden. */

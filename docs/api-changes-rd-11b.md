@@ -60,8 +60,10 @@ each, the web app left running), and reports the server's log with
 a raw line other than Next.js's start lines, a JSON line without one of
 the logger's levels or a component, an error other than the one outage
 line, or a warning other than the client limit's refusal and readiness's
-database probe answering `P1001`; and exit 2, with one fixed line on
-stderr and no table, on any value of `all-values` or `browser-values`.
+database probe answering `P1001` or `P1017` (CI's first run read
+`P1017` and then `P1001`: the stopped server closes the open connection
+first); and exit 2, with one fixed line on stderr and no table, on any
+value of `all-values` or `browser-values`.
 The last step prints the web log only when it holds none of those
 values, checked there whichever step failed.
 `tests/production/log-report.test.ts` runs the report on samples. The
