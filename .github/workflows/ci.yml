@@ -838,6 +838,170 @@ jobs:
           fi
           exit "$code"
 
+  migrate-image:
+    # The migration image (ADR-0192): the Prisma CLI, its six packages and
+    # engines, the schema and the migrations, and nothing else. Its checks run
+    # with no network and a read-only root; the one run that asks for a
+    # database gets an address nothing listens on, with no password, so nothing
+    # secret exists here. Last, the very image is scanned with pinned Syft and
+    # Grype (ADR-0180). Nothing is pushed: no registry, login, secret or cache.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      REVISION: ${{ github.sha }}
+      SYFT_PIN: ghcr.io/anchore/syft:v1.57.2@sha256:e97e20b6e6d1699c60296b66ab337941724f9bd06ac279d893eda89601fc4b2a
+      GRYPE_PIN: ghcr.io/anchore/grype:v0.122.1@sha256:661583704a253c0448ed63998b5ea2cd9d5a76ee71eedc4aed439b8ce3e93a1c
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build the migration image
+        # A full workspace install, as the web build's, and Prisma's engines.
+        timeout-minutes: 15
+        run: >-
+          docker buildx build --provenance=false --load --platform linux/amd64
+          -f packages/database/Dockerfile
+          --label "org.opencontainers.image.revision=$REVISION"
+          --tag vtavision-migrate:ci .
+
+      - name: Check the image's user, files, entrypoint and environment
+        # /app holds the CLI's packages and the schema's folder alone, all
+        # root's and none writable by others; no client, no app, no dead link.
+        timeout-minutes: 3
+        run: |
+          test "$(docker image inspect -f '{{.Config.User}}' vtavision-migrate:ci)" = "1000:1000"
+          test "$(docker run --rm --network none --read-only --entrypoint id vtavision-migrate:ci -u)" = "1000"
+          test "$(docker image inspect -f '{{json .Config.Entrypoint}}' vtavision-migrate:ci)" = \
+            '["node","/app/node_modules/prisma/build/index.js"]'
+          test "$(docker image inspect -f '{{json .Config.Cmd}}' vtavision-migrate:ci)" = \
+            '["migrate","deploy","--schema","/app/prisma/schema.prisma"]'
+          env_json="$(docker image inspect -f '{{json .Config.Env}}' vtavision-migrate:ci)"
+          if printf '%s' "$env_json" | grep -qi proxy; then
+            echo "The image's environment names a proxy." >&2
+            exit 1
+          fi
+          find_app() { docker run --rm --network none --read-only --entrypoint find vtavision-migrate:ci /app "$@"; }
+          top="$(find_app -mindepth 1 -maxdepth 1 -printf '%y %P\n')"
+          test "$(printf '%s\n' "$top" | LC_ALL=C sort)" = "$(printf 'd node_modules\nd prisma')"
+          find_app -maxdepth 3 -printf '%u:%g %m %y %p\n'
+          loose="$(find_app ! -user 0 -o ! -group 0 -o ! -type l -perm /o=w)"
+          test -z "$loose"
+          extra="$(find_app -path '*/@prisma/client' -o -name '@prisma+client*' -o -name .prisma -o -name apps)"
+          test -z "$extra"
+          dead="$(find_app -xtype l)"
+          test -z "$dead"
+
+      - name: Check that the image holds this commit's schema and migrations
+        # Each entry by its path under prisma/ and each file by its SHA-256: a
+        # missing, extra, moved or changed file fails, as does one flat folder.
+        timeout-minutes: 2
+        run: |
+          list='find . -mindepth 1 -printf "%y %P\n" | LC_ALL=C sort
+            find . -type f -printf "%P\0" | LC_ALL=C sort -z | xargs -0 sha256sum'
+          docker run --rm --network none --read-only --entrypoint sh -w /app/prisma vtavision-migrate:ci \
+            -c "$list" > "$RUNNER_TEMP/image.list"
+          mkdir "$RUNNER_TEMP/commit"
+          cp -R packages/database/prisma/schema.prisma packages/database/prisma/migrations "$RUNNER_TEMP/commit/"
+          (cd "$RUNNER_TEMP/commit" && sh -c "$list") > "$RUNNER_TEMP/commit.list"
+          diff "$RUNNER_TEMP/commit.list" "$RUNNER_TEMP/image.list"
+          echo "$(grep -c '^d migrations/' "$RUNNER_TEMP/image.list") migrations, as this commit's"
+
+      - name: Run the CLI offline
+        # Its engines are in the image: neither run fetches one. The deploy
+        # asks for a database nothing listens on and must fail with P1001.
+        timeout-minutes: 2
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            vtavision-migrate:ci --version > "$RUNNER_TEMP/version.log" 2>&1
+          cat "$RUNNER_TEMP/version.log"
+          grep -qE '^prisma +: 5\.22\.0$' "$RUNNER_TEMP/version.log"
+          grep -qE '^Schema Engine +: schema-engine-cli ' "$RUNNER_TEMP/version.log"
+          echo 'DATABASE_URL=postgresql://pt8c@127.0.0.1:1/pt8c' > "$RUNNER_TEMP/migrate.env"
+          set +e
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --env-file "$RUNNER_TEMP/migrate.env" vtavision-migrate:ci > "$RUNNER_TEMP/deploy.log" 2>&1
+          code=$?
+          set -e
+          cat "$RUNNER_TEMP/deploy.log"
+          test "$code" -eq 1
+          grep -qF 'P1001' "$RUNNER_TEMP/deploy.log"
+          if grep -qE 'binaries\.prisma\.sh|ECONNREFUSED' "$RUNNER_TEMP/deploy.log"; then
+            echo "The CLI tried to fetch an engine." >&2
+            exit 1
+          fi
+
+      - name: Print what the image holds
+        run: |
+          docker run --rm --network none --read-only --entrypoint dpkg-query vtavision-migrate:ci \
+            -W -f '${Package}\t${Version}\n'
+          docker run --rm --network none --read-only --entrypoint node vtavision-migrate:ci --version
+          docker image inspect -f '{{.Size}} bytes' vtavision-migrate:ci
+          docker image inspect -f '{{json .Config.Labels}}' vtavision-migrate:ci
+
+      - name: Write the image's SBOM
+        # Syft holds no vulnerability database: it reads the very image this job tested, with no network.
+        timeout-minutes: 5
+        run: |
+          dir="$RUNNER_TEMP/scan"
+          mkdir -p "$dir/image" "$dir/sbom" "$dir/syft" "$dir/grype"
+          docker image save -o "$dir/image/image.tar" vtavision-migrate:ci
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e SYFT_CHECK_FOR_APP_UPDATE=false -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+            -v "$dir/image:/image:ro" -v "$dir/sbom:/sbom" -v "$dir/syft:/work" \
+            "$SYFT_PIN" docker-archive:/image/image.tar \
+            -o syft-json=/sbom/image.syft.json -o cyclonedx-json@1.6=/sbom/image.cdx.json
+          rm "$dir/image/image.tar"
+          jq -e '.specVersion == "1.6"' "$dir/sbom/image.cdx.json"
+          jq -r '"\(.artifacts | length) packages"' "$dir/sbom/image.syft.json"
+          sha256sum "$dir/sbom/image.cdx.json"
+          df -h "$RUNNER_TEMP"
+
+      - name: Fetch the vulnerability database
+        # The one scanner run with a network: Grype's database, into Grype's own folder alone.
+        # Longer than Grype's own 300-second download limit, so a slow download fails with Grype's error.
+        timeout-minutes: 8
+        run: |
+          dir="$RUNNER_TEMP/scan"
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e GRYPE_CHECK_FOR_APP_UPDATE=false \
+            -e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+            -v "$dir/grype:/work" "$GRYPE_PIN" db update
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_AUTO_UPDATE=false \
+            -e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+            -v "$dir/grype:/work" "$GRYPE_PIN" db status
+
+      - name: Scan the SBOM
+        # Every match is listed; a fixable critical one fails with Grype's code 2, any other code is Grype's own.
+        timeout-minutes: 3
+        run: |
+          dir="$RUNNER_TEMP/scan"
+          grype() {
+            docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --user "$(id -u):$(id -g)" -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_AUTO_UPDATE=false \
+              -e GRYPE_DB_CACHE_DIR=/work/db -e TMPDIR=/work -e XDG_CACHE_HOME=/work \
+              -v "$dir/grype:/work" -v "$dir/sbom:/sbom:ro" \
+              -v "$GITHUB_WORKSPACE/.github/scan/grype.yaml:/cfg/grype.yaml:ro" \
+              "$GRYPE_PIN" sbom:/sbom/image.syft.json -c /cfg/grype.yaml "$@"
+          }
+          if ! grype --show-suppressed -o table; then
+            echo "Grype itself failed listing every match: not a finding." >&2
+            exit 1
+          fi
+          set +e
+          grype --only-fixed --fail-on critical -o table
+          code=$?
+          set -e
+          if [ "$code" -eq 2 ]; then
+            echo "A fixable critical finding: fix it, or accept it in .github/scan/grype.yaml and TODO.md." >&2
+          elif [ "$code" -ne 0 ]; then
+            echo "Grype itself failed with code $code: not a finding." >&2
+          fi
+          exit "$code"
+
   production-mode:
     # The web image as built, run against stand-ins (ADR-0178), with Google's
     # names as aliases on a network with no way out, behind a TLS front. Every
