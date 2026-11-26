@@ -2189,6 +2189,19 @@ into on 2026-11-17.
       is bundled into Next.js's server chunks, so only `pnpm audit
       --prod` sees it; scanning the lockfile is a later milestone, after
       `zod` 4.
+      *Amended in PT-6d (`docs/api-changes-pt-6d.md`): `zod` is 4.6.7,
+      and `pnpm audit --prod` no longer reports it. The lockfile is
+      still not scanned, so a bundled dependency is still seen only by
+      `pnpm audit --prod`.*
+
+## Open in PT-6d — what the `zod` upgrade leaves open
+
+- [ ] **A fraction in a number setting hides the cross-field refusals.**
+      In `zod` 4 a fraction or an infinity in `SESSION_TTL_SECONDS`,
+      `USER_SESSION_TTL_SECONDS` or a `WAVESPEED_POLL_*_MS` setting
+      skips the cross-field checks, so their refusals are listed only
+      once it is fixed (`docs/api-changes-pt-6d.md`). A check of their
+      own, as `CLAMAV_PORT` has, would list them together; not decided.
 
 ## Open in the unknown-failure PR — what logging unknown failures leaves open
 
@@ -2297,6 +2310,11 @@ into on 2026-11-17.
       `pnpm audit --prod` stays the only check on them. What the scan's
       first run finds in each image is recorded in ADR-0180's "What was
       measured" before merge.*
+      *Amended in PT-6d (`docs/api-changes-pt-6d.md`): `zod` 4.6.7
+      fixes GHSA-mrhx-c7xc-m3w5; `pnpm audit --prod` on 2026-11-26
+      goes from 8 (3 high, 5 moderate) to 7 (2 high, 5 moderate). Open:
+      `postcss` 8.4.31, which `next` pins, and `next`'s three
+      moderates.*
 - [ ] **Decide how migrations run in production.** The web image holds
       no Prisma CLI; RD-11 applies them from the runner. Part 2.
       *Amended in RD-11a (ADR-0178): CI applies them from the runner.*

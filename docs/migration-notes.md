@@ -3595,3 +3595,17 @@ fetches Grype's database. **Rolling back:** the two pins and the three
 scan steps of each image job and their comments, the guard's scan
 checks in `tests/container-images.test.ts`, `.github/scan/`, ADR-0180,
 and the Roadmap, gap analysis and `TODO.md` lines of PT-6b go.
+
+## PT-6d — `zod` 4.6.7
+
+**No migration**; nothing deployed or pushed; still 8 checks. A
+development machine runs `pnpm install`. An environment that sets a
+number setting (`SESSION_TTL_SECONDS`, `USER_SESSION_TTL_SECONDS`,
+`WAVESPEED_POLL_*_MS`) to 2^53 or more no longer starts.
+**Rolling back:** `zod` returns to 3.25.76 in `packages/shared` and
+the lockfile, `env.ts`, the `shape` reads of `env.test.ts` and
+`tests/container-images.test.ts` and the `VIDEO_PROVIDER` line
+`queue-status-dormancy.test.ts` looks for return, the PT-6d cases of
+`env.test.ts` and `tests/dependency-overrides.test.ts` go, and
+`api-changes-pt-6d.md` and the Roadmap, gap analysis and `TODO.md`
+lines of PT-6d go; the advisory comes back.

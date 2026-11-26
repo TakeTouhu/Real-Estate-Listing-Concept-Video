@@ -1589,6 +1589,16 @@ here: whether the scanners run under the job's flags, the baseline,
 each step's time, the disk and the database's size; the first run is
 the measurement. The scanners' signatures are not yet verified.
 
+**PT-6d — `zod` 4.6.7** (no ADR, no migration): `zod` 3.25.76 to
+4.6.7, its one high advisory fixed; `pnpm audit --prod` goes from 8
+findings to 7 (`docs/api-changes-pt-6d.md`). Over 3,646 measured
+environments the schema takes and returns what it did, but for a
+number setting of 2^53 or more, now refused; some of `zod`'s own
+refusal texts changed, and a fraction or an infinity in a number
+setting now hides the cross-field refusals until it is fixed. Not
+measured before CI: the browser and database suites, and `zod` 4
+inside the built server chunks and the worker start.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

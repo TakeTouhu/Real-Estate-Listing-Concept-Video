@@ -44,7 +44,7 @@ const BANNED_ENV = new RegExp(
   "i",
 );
 /** No setting the app reads is baked in; `NODE_ENV` is the image's own, which `server.js` fixes anyway. */
-const SETTINGS = Object.keys(serverEnvSchema.innerType().shape).filter((name) => name !== "NODE_ENV");
+const SETTINGS = Object.keys(serverEnvSchema.shape).filter((name) => name !== "NODE_ENV");
 /** Every line of the ignore file: a later edit may add a line, never drop one. */
 const REQUIRED_IGNORES = [
   "**/.git",

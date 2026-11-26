@@ -323,7 +323,7 @@ describe("serverEnvSchema", () => {
       Object.fromEntries(Object.entries(SMTP).filter(([key]) => key !== name));
 
     it("names its seven settings in SMTP_SETTINGS, in order, which the browser test refuses", () => {
-      const keys = Object.keys(serverEnvSchema.innerType().shape);
+      const keys = Object.keys(serverEnvSchema.shape);
       expect(keys.filter((key) => key.startsWith("SMTP_") || key === "EMAIL_FROM")).toEqual([...SMTP_SETTINGS]);
       expect(Object.keys(SMTP)).toEqual([...SMTP_SETTINGS]);
     });
@@ -410,7 +410,7 @@ describe("serverEnvSchema", () => {
     };
 
     it("names its settings in RATE_LIMIT_SETTINGS, in order, each with a default", () => {
-      const keys = Object.keys(serverEnvSchema.innerType().shape);
+      const keys = Object.keys(serverEnvSchema.shape);
       expect(keys.filter((key) => key.startsWith("RATE_LIMIT_"))).toEqual([...RATE_LIMIT_SETTINGS]);
       expect(Object.keys(RATE_LIMIT_DEFAULTS)).toEqual([...RATE_LIMIT_SETTINGS]);
       expect(RATE_LIMIT_DEFAULTS).toEqual({
@@ -484,6 +484,43 @@ describe("serverEnvSchema", () => {
   it("coerces numeric poll settings", () => {
     const env = serverEnvSchema.parse({ ...base, WAVESPEED_POLL_INITIAL_MS: "500" });
     expect(env.WAVESPEED_POLL_INITIAL_MS).toBe(500);
+  });
+
+  describe("across the zod 4 upgrade (PT-6d)", () => {
+    it("reads LOG_PRETTY's default as a set value is read", () => {
+      expect(serverEnvSchema.parse(base).LOG_PRETTY).toBe(false);
+      expect(serverEnvSchema.parse({ ...base, LOG_PRETTY: "1" }).LOG_PRETTY).toBe(true);
+    });
+
+    it("takes an address only as the URL parser does, and keeps it as written", () => {
+      for (const bad of [" https://app.example.com", "https://app.example.com "]) {
+        const result = serverEnvSchema.safeParse({ ...base, DATABASE_URL: bad });
+        expect(result.success ? [] : result.error.issues.map((i) => i.message)).toEqual(["Invalid url"]);
+      }
+      const written = "postgres://u:x@h:5432/d ";
+      expect(serverEnvSchema.parse({ ...base, DATABASE_URL: written }).DATABASE_URL).toBe(written);
+    });
+
+    it("takes a host with a Latin-1 letter however often URL.canParse has run", () => {
+      for (let i = 0; i < 100_000; i += 1) URL.canParse(`https://a${i % 10}.example`);
+      const idn = "https://münchen.example";
+      expect(serverEnvSchema.parse({ ...base, APP_BASE_URL: idn }).APP_BASE_URL).toBe(idn);
+    });
+
+    it("lists LOG_PRETTY's words in the declared order and repeats the value", () => {
+      const result = serverEnvSchema.safeParse({ ...base, LOG_PRETTY: "yes" });
+      expect(result.success ? [] : result.error.issues.map((i) => i.message)).toEqual([
+        "Invalid enum value. Expected 'true' | 'false' | '1' | '0', received 'yes'",
+      ]);
+    });
+
+    it("refuses a whole number no JavaScript number holds exactly", () => {
+      const largest = { ...base, SESSION_TTL_SECONDS: "9007199254740991" };
+      expect(serverEnvSchema.parse(largest).SESSION_TTL_SECONDS).toBe(Number.MAX_SAFE_INTEGER);
+      for (const value of ["9007199254740992", "9007199254740993", "1e16"]) {
+        expect(serverEnvSchema.safeParse({ ...base, SESSION_TTL_SECONDS: value }).success).toBe(false);
+      }
+    });
   });
 });
 

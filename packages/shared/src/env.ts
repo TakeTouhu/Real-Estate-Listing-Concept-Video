@@ -8,9 +8,34 @@ import { isPlainEmailAddress } from "./email-address";
  * server-side code (route handlers, workers). Secrets defined here must never
  * be bundled into client code or exposed to the browser.
  */
-const booleanish = z
-  .enum(["true", "false", "1", "0"])
-  .transform((v) => v === "true" || v === "1");
+
+/**
+ * A setting that takes one of a fixed list of words. Its refusal names the list and repeats the value, in the words
+ * zod 3 used, which the tests hold (PT-6d); zod 4's own names the list alone, and in another order.
+ */
+function oneOf<const T extends readonly [string, ...string[]]>(words: T) {
+  const expected = words.map((word) => `'${word}'`).join(" | ");
+  return z.enum(words, {
+    error: (issue) => `Invalid enum value. Expected ${expected}, received '${String(issue.input)}'`,
+  });
+}
+
+/**
+ * An absolute address, as zod 3's `z.string().url()` judged one (PT-6d): whatever the URL parser takes, kept exactly
+ * as written. zod 4's own check trims the value and drops its tabs and line breaks, which would change what is kept.
+ * It asks `new URL`, as zod 3 did: Node 22's `URL.canParse`, once called often, refuses a host such as
+ * `münchen.example` that `new URL` takes.
+ */
+const absoluteUrl = z.string().refine((value) => {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}, "Invalid url");
+
+const booleanish = oneOf(["true", "false", "1", "0"]).transform((v) => v === "true" || v === "1");
 
 /**
  * The single authoritative id of the configured WaveSpeedAI video model.
@@ -205,12 +230,12 @@ function baseUrlProblem(value: string, production: boolean): string | null {
 
 export const serverEnvSchema = z
   .object({
-    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    NODE_ENV: oneOf(["development", "test", "production"]).default("development"),
 
     // PostgreSQL connection string for Prisma (Phase 1). Optional at build/test
     // time; required at runtime for database-backed features, and a production
     // start of the web app refuses without it (ADR-0151).
-    DATABASE_URL: z.string().url().optional(),
+    DATABASE_URL: absoluteUrl.optional(),
 
     // The key the abuse limits' subjects are made from (ADR-0170): an
     // address, a client address or a user id is counted only as an HMAC under
@@ -250,7 +275,7 @@ export const serverEnvSchema = z
     // Google's API domain. Outside production a bucket requires it, so
     // development never uses Google's own store or its token. Refused in
     // production, and refused without a bucket.
-    GOOGLE_CLOUD_STORAGE_ENDPOINT: z.string().url().optional(),
+    GOOGLE_CLOUD_STORAGE_ENDPOINT: absoluteUrl.optional(),
 
     // The ClamAV daemon that scans each uploaded photo (ADR-0164): a DNS name
     // or an IP address, with no port (`isClamAvHost`, the adapter's rule too).
@@ -309,7 +334,7 @@ export const serverEnvSchema = z
     // production. Never taken from a request. Optional because the worker
     // shares this schema and emails nothing; unset, the web app emails no link,
     // and a production start of the web app refuses (ADR-0151).
-    APP_BASE_URL: z.string().url().optional(),
+    APP_BASE_URL: absoluteUrl.optional(),
 
     // AES-256-GCM key sealing MFA secrets at rest: 32 bytes as 64 hex
     // characters (ADR-0065). Optional because the worker shares this schema
@@ -347,15 +372,15 @@ export const serverEnvSchema = z
 
     // Image-analysis provider selection. Phase 3 ships the deterministic
     // offline adapter only; no real vision vendor is integrated (ADR-0009).
-    ANALYSIS_PROVIDER: z.enum(["deterministic"]).default("deterministic"),
+    ANALYSIS_PROVIDER: oneOf(["deterministic"]).default("deterministic"),
 
     // Video provider selection. Phase 0 defaults to the fake adapter and must
     // never call the real WaveSpeedAI API.
-    VIDEO_PROVIDER: z.enum(["fake", "wavespeed"]).default("fake"),
+    VIDEO_PROVIDER: oneOf(["fake", "wavespeed"]).default("fake"),
 
     // WaveSpeedAI configuration (server-side only; optional while provider=fake).
     WAVESPEED_API_KEY: z.string().min(1).optional(),
-    WAVESPEED_API_BASE_URL: z.string().url().default("https://api.wavespeed.ai/api/v3"),
+    WAVESPEED_API_BASE_URL: absoluteUrl.default("https://api.wavespeed.ai/api/v3"),
     WAVESPEED_VIDEO_MODEL_ID: z.string().min(1).default(WAVESPEED_OPEN_VIDEO_MODEL_ID),
     WAVESPEED_WEBHOOK_SECRET: z.string().min(1).optional(),
     WAVESPEED_POLL_INITIAL_MS: z.coerce.number().int().positive().default(2000),
@@ -375,23 +400,22 @@ export const serverEnvSchema = z
     // token or password to a server nobody checked (measured, ADR-0166).
     NODE_TLS_REJECT_UNAUTHORIZED: z.string().optional(),
 
-    LOG_LEVEL: z
-      .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
-      .default("info"),
-    LOG_PRETTY: booleanish.default("false"),
+    LOG_LEVEL: oneOf(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+    // Its default is text, parsed as a set value is: zod 4's `default` would skip the parse (PT-6d).
+    LOG_PRETTY: booleanish.prefault("false"),
   })
   .superRefine((env, ctx) => {
     if (env.SHARED_STORAGE_DIR !== undefined) {
       if (!isAbsolute(env.SHARED_STORAGE_DIR)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ["SHARED_STORAGE_DIR"],
           message: "SHARED_STORAGE_DIR must be an absolute path",
         });
       }
       if (env.NODE_ENV === "production") {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ["SHARED_STORAGE_DIR"],
           message: "SHARED_STORAGE_DIR is for development and CI only; it must not be set in production",
         });
@@ -401,14 +425,14 @@ export const serverEnvSchema = z
     if (env.EMAIL_OUTBOX_DIR !== undefined) {
       if (!isAbsolute(env.EMAIL_OUTBOX_DIR)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ["EMAIL_OUTBOX_DIR"],
           message: "EMAIL_OUTBOX_DIR must be an absolute path",
         });
       }
       if (env.NODE_ENV === "production") {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ["EMAIL_OUTBOX_DIR"],
           message: "EMAIL_OUTBOX_DIR is for development and CI only; it must not be set in production",
         });
@@ -419,7 +443,7 @@ export const serverEnvSchema = z
     const endpoint = env.GOOGLE_CLOUD_STORAGE_ENDPOINT;
     const production = env.NODE_ENV === "production";
     const storageIssue = (name: "BUCKET" | "ENDPOINT", message: string): void =>
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [`GOOGLE_CLOUD_STORAGE_${name}`], message });
+      ctx.addIssue({ code: "custom", path: [`GOOGLE_CLOUD_STORAGE_${name}`], message });
     if (bucket !== undefined) {
       if (!isCloudStorageBucketName(bucket)) {
         storageIssue(
@@ -466,7 +490,7 @@ export const serverEnvSchema = z
     // No ClamAV message repeats a value, which the start check prints (ADR-0164).
     if (env.CLAMAV_PORT !== undefined && env.CLAMAV_HOST === undefined) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["CLAMAV_PORT"],
         message: "CLAMAV_HOST is required when CLAMAV_PORT is set",
       });
@@ -474,7 +498,7 @@ export const serverEnvSchema = z
 
     // No SMTP message repeats a value, which the start check prints (ADR-0167).
     const smtpIssue = (path: string, message: string): void =>
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+      ctx.addIssue({ code: "custom", path: [path], message });
     for (const name of SMTP_SETTINGS.slice(1)) {
       if (env.SMTP_HOST === undefined && env[name] !== undefined) {
         smtpIssue(name, `SMTP_HOST is required when ${name} is set`);
@@ -493,7 +517,7 @@ export const serverEnvSchema = z
     // Any value: which names write what is Node.js's to change. An empty value names nothing.
     if (production && (env.NODE_DEBUG ?? "") !== "") {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["NODE_DEBUG"],
         message:
           "NODE_DEBUG must not be set in production: " +
@@ -503,7 +527,7 @@ export const serverEnvSchema = z
     // Any value, as NODE_DEBUG: how Node.js reads it is Node.js's to change. An empty value names nothing.
     if (production && (env.NODE_TLS_REJECT_UNAUTHORIZED ?? "") !== "") {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["NODE_TLS_REJECT_UNAUTHORIZED"],
         message:
           "NODE_TLS_REJECT_UNAUTHORIZED must not be set in production: " +
@@ -514,13 +538,13 @@ export const serverEnvSchema = z
     if (env.APP_BASE_URL !== undefined) {
       const problem = baseUrlProblem(env.APP_BASE_URL, env.NODE_ENV === "production");
       if (problem !== null) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["APP_BASE_URL"], message: `APP_BASE_URL ${problem}` });
+        ctx.addIssue({ code: "custom", path: ["APP_BASE_URL"], message: `APP_BASE_URL ${problem}` });
       }
     }
 
     if (env.VIDEO_PROVIDER === "wavespeed" && !env.WAVESPEED_API_KEY) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["WAVESPEED_API_KEY"],
         message: "WAVESPEED_API_KEY is required when VIDEO_PROVIDER=wavespeed",
       });
@@ -541,7 +565,7 @@ export const serverEnvSchema = z
     // deliberate future decision, not an environment override (ADR-0019).
     if (env.WAVESPEED_VIDEO_MODEL_ID !== WAVESPEED_OPEN_VIDEO_MODEL_ID) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["WAVESPEED_VIDEO_MODEL_ID"],
         message:
           `WAVESPEED_VIDEO_MODEL_ID must be "${WAVESPEED_OPEN_VIDEO_MODEL_ID}". ` +
