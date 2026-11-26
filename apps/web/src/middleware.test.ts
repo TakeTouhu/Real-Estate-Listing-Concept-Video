@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { unstable_doesMiddlewareMatch, unstable_getResponseFromNextConfig } from "next/experimental/testing/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import nextConfig from "../next.config.mjs";
+import { API_POLICY } from "../fixed-headers.mjs";
 import { config, middleware } from "./middleware";
 import { NONCE_PATTERN, pageContentSecurityPolicy } from "./lib/security-headers";
 
@@ -22,6 +23,9 @@ const NOT_PAGES = [
   "/_next/webpack-hmr",
   "/favicon.ico",
 ];
+
+/** `next build` (production), `next dev` and the unit tests. */
+const ENVIRONMENTS = ["production", "development", "test"];
 
 const matches = (url: string, headers: Record<string, string> = {}): boolean =>
   unstable_doesMiddlewareMatch({ config, url, headers });
@@ -52,13 +56,19 @@ describe("the middleware's matcher", () => {
     expect(matches("/login", { "sec-purpose": "prefetch;prerender" })).toBe(true);
   });
 
-  it.each([...PAGES, ...NOT_PAGES])("never gives %s a second policy", async (url) => {
-    // The configuration sends the API policy on `/api/:path*` (RD-9d, Decision 9), the middleware the page's.
-    const api = url === "/api" || url.startsWith("/api/");
-    const configured = await unstable_getResponseFromNextConfig({ url: `${BASE}${url}`, nextConfig });
-    expect(configured.headers.has("content-security-policy")).toBe(api);
-    if (api) expect(matches(url)).toBe(false);
-  });
+  it.each(ENVIRONMENTS.flatMap((env) => [...PAGES, ...NOT_PAGES].map((url) => [url, env])))(
+    "never gives %s a second policy, under NODE_ENV=%s",
+    async (url, env) => {
+      // The configuration sends the API policy on `/api/:path*` (RD-9d, Decision 9) and, from a production build, on
+      // `/_next/:path*` and `/favicon.ico` (ADR-0188 Decision 4); the middleware the page's, and none of those.
+      vi.stubEnv("NODE_ENV", env);
+      const api = url === "/api" || url.startsWith("/api/");
+      const unmatched = env === "production" && (url.startsWith("/_next/") || url === "/favicon.ico");
+      const configured = await unstable_getResponseFromNextConfig({ url: `${BASE}${url}`, nextConfig });
+      expect(configured.headers.get("content-security-policy")).toBe(api || unmatched ? API_POLICY : null);
+      expect(matches(url)).toBe(!api && !NOT_PAGES.includes(url));
+    },
+  );
 });
 
 describe("middleware", () => {

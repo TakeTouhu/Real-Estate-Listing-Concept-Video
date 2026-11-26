@@ -3743,4 +3743,12 @@ their pin in `tests/container-images.test.ts` go; the
 `console.log`, and the pin of printed lines takes it back; ADR-0188,
 `api-changes-pt-7c1.md` and the PT-7c1 lines of the Roadmap,
 `architecture.md` and the part 2 gap analysis go, and the PT-7c1
-amendments of `TODO.md`. The 404's scripts are then refused again.
+amendments of `TODO.md`, its flipped item back to `[ ]`. The 404's
+scripts are then refused again.
+A production build also sends the API policy on `/_next/:path*` and
+`/favicon.ico` (ADR-0188 Decision 4). **Rolling that back alone**
+reverts the second commit: `fixedHeaderRules` returns its two rules,
+the tests in `next-config.test.ts` and `middleware.test.ts` and the
+`web-image` probe's `/_next/nothing` and `/favicon.ico` lines and
+their pin go, and the `/_not-found` item of `TODO.md` returns to
+`[ ]` with its second PT-7c1 amendment removed.

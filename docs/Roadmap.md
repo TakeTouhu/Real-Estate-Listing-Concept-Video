@@ -1692,7 +1692,10 @@ Next.js's own 404 markup stays (`docs/api-changes-pt-7c1.md`).
 Measured from `next start`: 11 scripts and none nonced before, 9 of 9
 after. CI's `web-image` probe and the `production-mode` spec, which
 now opens the 404 in Chromium under the violation guard, hold it. Each
-404 now costs a render. HSTS `includeSubDomains` and `preload` wait on
+404 now costs a render. A production build also sends the API policy
+on `/_next/` and `/favicon.ico`, which the middleware skips, so an
+unknown address there is no longer a page without a policy; `next dev`
+is unchanged. HSTS `includeSubDomains` and `preload` wait on
 the product owner's domain decision (T2) as PT-7c5, so PT-7c is not
 done until PT-7c5 is done or dropped.
 

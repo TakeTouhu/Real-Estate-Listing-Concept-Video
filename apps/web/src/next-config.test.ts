@@ -67,12 +67,16 @@ describe("next.config.mjs", () => {
     expect(everyAnswer.has("content-security-policy")).toBe(false);
   });
 
-  it.each(ENVIRONMENTS)("sends the API policy on /api only under NODE_ENV=%s", async (nodeEnv) => {
-    const rules = await configuredRules(nodeEnv);
-    expect(rules.map(({ source }) => source)).toEqual(["/:path*", "/api/:path*"]);
-    expect([...headersOf(rules, "/api/:path*")]).toEqual([
-      ["content-security-policy", "default-src 'none'; frame-ancestors 'none'; sandbox"],
-    ]);
+  it.each(ENVIRONMENTS)("sends the API policy on /api, and from a build on /_next and the icon: %s", async (env) => {
+    const rules = await configuredRules(env);
+    // Where the middleware does not run (ADR-0188 Decision 4): never under `next dev`, whose socket is there.
+    const unmatched = env === "production" ? ["/_next/:path*", "/favicon.ico"] : [];
+    expect(rules.map(({ source }) => source)).toEqual(["/:path*", "/api/:path*", ...unmatched]);
+    for (const source of ["/api/:path*", ...unmatched]) {
+      expect([...headersOf(rules, source)]).toEqual([
+        ["content-security-policy", "default-src 'none'; frame-ancestors 'none'; sandbox"],
+      ]);
+    }
   });
 
   it("sends HSTS from a production build only, for this host only", async () => {

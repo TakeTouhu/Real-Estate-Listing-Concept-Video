@@ -8,8 +8,9 @@ route changes: an unknown address still answers `404` with Next.js's
 own page, whose scripts now run.
 
 **Amends ADR-0174 Decision 10 (the page policy now holds on the 404
-page too) and ADR-0178's production-mode spec (it asserts the 404's
-nonce instead of recording a count).**
+page too), ADR-0174 Decision 9 (a production build also sends the API
+policy on `/_next/` and `/favicon.ico`) and ADR-0178's production-mode
+spec (it asserts the 404's nonce instead of recording a count).**
 
 ## Context
 
@@ -95,6 +96,42 @@ request (ADR-0174 Decision 10).
 A future Next.js that prerendered `/_not-found` despite the layout
 (*inference*: none is known) would fail both image holders.
 
+## Decision 4 — The API policy on `/_next/` and the icon, production builds only
+
+The middleware does not run under `/_next/` or for `/favicon.ico`, so
+an address there that names no file (`/_next/nothing`, and
+`/favicon.ico`, which the app does not have) was answered with
+Next.js's 404 page and no policy at all. A production build's
+`fixed-headers.mjs` now sends the existing `API_POLICY`
+(`default-src 'none'; frame-ancestors 'none'; sandbox`) on
+`/_next/:path*` and `/favicon.ico`; no new policy string is written.
+Such a 404 then shows its text unstyled and its scripts are refused,
+on addresses no customer opens.
+
+- **Production builds only** (`nodeEnv === "production"`, the rule
+  HSTS already follows): `next dev` serves its socket
+  (`/_next/webpack-hmr`) and its development files there, and gets no
+  new header, so the e2e suite runs as before.
+- **A real file gets it too:** every chunk and stylesheet under
+  `/_next/static`. A browser applies no policy to a script or style it
+  loads as a subresource (*inference*; no worker is served from
+  `/_next`), so pages still hydrate. The `production-mode` spec's
+  hydration check on `/login` and `/no-such-page` holds that.
+- **Still one policy per answer:** the middleware's matcher skips
+  exactly these addresses, so configuration and middleware never both
+  send one. `middleware.test.ts` checks every page and non-page address
+  under `production`, `development` and `test` against
+  `next.config.mjs`'s rules and the matcher; `next-config.test.ts`
+  pins the two rules, their value and their absence outside a
+  production build. CI's `web-image` probe requires `/_next/nothing`
+  and `/favicon.ico` to answer `404` with a policy equal to the API
+  policy, which also proves one: fetch joins two headers of one name
+  with a comma, and the policy has none.
+
+The plan's lab (variant E, B plus these rules) measured exactly one
+policy each on `/_next/nothing`, `/favicon.ico`, a real
+`/_next/static/chunks/*.js` and `/no-such-page`.
+
 ## What was measured
 
 On this tree, built with `env -u NODE_ENV pnpm exec next build` in
@@ -108,8 +145,12 @@ table, no route `○`, an empty `prerender-manifest.json`, and
 `/no-such-page` answered `404` with one policy, neither cache header,
 and 9 scripts, 4 inline, 9 carrying the nonce. The `web-image` probe,
 run on the same server, passed. The unit test failed with the line
-removed and passed with it. No browser ran locally; the browser
-holder's first run is the pull request's CI.
+removed and passed with it. With Decision 4 built, `/_next/nothing`,
+`/favicon.ico` and `/_next/static/chunks/main-app-*.js` each answered
+with exactly one policy, the API policy (`404`, `404`, `200`), where
+the build without it sent none; `/login`, `/no-such-page` and
+`/api/nothing` still answered with exactly one each. No browser ran
+locally; the browser holder's first run is the pull request's CI.
 
 ## Consequences and known gaps
 
@@ -134,3 +175,8 @@ so the page still could not hydrate (*inference*: React needs
 `self.__next_f`), and every page would accept any same-origin script.
 **Hashes computed at build:** they change with every build and, under
 `'strict-dynamic'`, do not cover the parser-inserted external chunks.
+**For Decision 4, the same rules under `next dev`:** they would put a
+policy on its socket and development files for no gain, since no
+customer is served by `next dev`. **A fourth policy string** for those
+addresses: the API policy already refuses everything and frames
+nothing.

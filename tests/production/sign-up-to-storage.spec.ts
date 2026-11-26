@@ -185,7 +185,8 @@ test("a customer signs up, stores photos, has a file quarantined, invites a coll
     expect(scripts.length).toBeGreaterThan(0);
     for (const script of scripts) expect(script).toContain(` nonce="${nonce}"`);
     expect((await page.goto(address))?.status()).toBe(status);
-    // The client router started: Next.js's inline scripts ran and loaded its chunks.
+    // The client router started: Next.js's inline scripts ran and loaded its chunks, which `/_next/static` sends with
+    // the API policy (ADR-0188 Decision 4); a browser applies no policy to a script it loads.
     await expect
       .poll(() => page.evaluate(() => typeof (globalThis as { next?: { version?: unknown } }).next?.version))
       .toBe("string");

@@ -2546,7 +2546,7 @@ into on 2026-11-17.
       (`http-access-fallback/error-fallback.js`), whose `<style>` and
       `style` attributes still carry none (measured from `next start`).
       That fallback is why it stays.*
-- [ ] **The prerendered `/_not-found` carries no nonce**, so from
+- [x] **The prerendered `/_not-found` carries no nonce**, so from
       `next start` an unknown address's scripts are refused and only its
       static text shows (measured in RD-9e); `next dev` renders it per
       request, with the nonce. `/favicon.ico`, which the app does not
@@ -2566,6 +2566,11 @@ into on 2026-11-17.
       guard, hold it. Each 404 now costs a render, left to part 2's edge
       limit ("Open in RD-8"). `/favicon.ico` and an unknown
       `/_next/<path>` still get no policy.*
+      *Done in PT-7c1 (ADR-0188 Decision 4): a production build sends
+      the API policy on `/_next/:path*` and `/favicon.ico`, which the
+      middleware skips; measured from `next start`, `/_next/nothing`,
+      `/favicon.ico` and a real chunk each answer with exactly that one
+      policy. `next dev` is unchanged. CI's `web-image` probe holds it.*
 - [ ] **A third-party script, frame or connection** (Stripe.js when
       billing goes live, analytics, chat, web fonts) needs a reviewed
       change to the page policy in `apps/web/src/lib/security-headers.ts`.

@@ -492,6 +492,14 @@ jobs:
           const nonced = missingScripts.filter((script) => script.includes(` nonce="${missingNonce}"`)).length;
           check(missingScripts.length > 0, `the 404 page has ${missingScripts.length} scripts`);
           check(nonced === missingScripts.length, `${nonced} of the 404 page's scripts carry its nonce`);
+          // The API policy where the middleware does not run, from a build (ADR-0188 Decision 4). Fetch joins two
+          // headers of one name with a comma, which the policy has none of, so equality means exactly one.
+          for (const path of ["/_next/nothing", "/favicon.ico"]) {
+            const unmatched = await fetch(`${base}${path}`);
+            const sent = unmatched.headers.get("content-security-policy");
+            check(unmatched.status === 404, `${path} answers ${unmatched.status}`);
+            check(sent === "default-src 'none'; frame-ancestors 'none'; sandbox", `${path} sends the policy ${sent}`);
+          }
           // No image optimizer (images.unoptimized): Next.js answers 404 before validating or fetching the query.
           const image = await fetch(`${base}/_next/image?url=%2Ffavicon.ico&w=64&q=75`);
           check(image.status === 404, `/_next/image answers ${image.status}`);

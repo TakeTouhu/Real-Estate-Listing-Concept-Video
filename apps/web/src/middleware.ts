@@ -9,8 +9,9 @@ import { newNonce, pageContentSecurityPolicy } from "./lib/security-headers";
  * render reads this nonce and puts it on Next.js's scripts; and on the answer,
  * for the browser. Pages only: `/api` keeps the configuration's own policy
  * (Decision 9), so no path ever gets two. It does not run under `/_next/` or for
- * `/favicon.ico`: Next.js's files there need no policy, but an address there that
- * names no file is answered with the not-found page, without one. Next.js's own
+ * `/favicon.ico`: Next.js's files there need no page policy, and an address there
+ * that names no file is answered with the not-found page, which a production build
+ * sends with the API policy instead (ADR-0188 Decision 4). Next.js's own
  * router prefetches (`Next-Router-Prefetch`) fetch a payload, not a document, and
  * get none; a browser's document prefetch or prerender (`Purpose: prefetch`) does.
  *

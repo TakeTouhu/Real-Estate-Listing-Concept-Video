@@ -4,7 +4,8 @@ The 404 page renders per request, so its scripts carry the nonce
 (ADR-0188). Production readiness, part 2, approved by the product
 owner on 2026-11-26. **No route, stored value, setting, image or
 migration changes.** What changes is how a production build answers an
-unknown address, and the two checks that hold it.
+unknown address, the policy on `/_next/` and the icon, and the checks
+that hold them.
 
 ## Before and after
 
@@ -33,6 +34,22 @@ measured"). The markup is still Next.js's own 404 page; nothing a
 customer reads changes. `next dev` already rendered the 404 per
 request and is unchanged.
 
+## `/_next/` and the icon (ADR-0188 Decision 4)
+
+A production build now sends the API policy (`default-src 'none';
+frame-ancestors 'none'; sandbox`) on `/_next/:path*` and
+`/favicon.ico`, where the middleware does not run:
+
+```text
+GET /_next/nothing               ->  404, the API policy, once
+GET /favicon.ico                 ->  404, the API policy, once
+GET /_next/static/chunks/<file>  ->  200, the API policy, once
+```
+
+Before, each answered with no policy. A browser applies no policy to a
+script or stylesheet it loads, so pages are unchanged. `next dev`
+sends none there, so its socket and development files are untouched.
+
 ## Checks
 
 - CI's `web-image` probe requires, of `/no-such-page`: `404`, a nonce
@@ -44,6 +61,10 @@ request and is unchanged.
   The count it used to print is gone.
 - `apps/web/src/app/layout-dynamic.test.ts` requires the layout's
   export, read with the TypeScript parser.
+- The `web-image` probe also requires `/_next/nothing` and
+  `/favicon.ico` to answer `404` with a policy equal to the API policy;
+  `next-config.test.ts` and `middleware.test.ts` hold the rules and
+  that no address gets two policies.
 
 ## Who is affected
 

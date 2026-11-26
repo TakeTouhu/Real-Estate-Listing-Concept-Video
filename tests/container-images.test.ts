@@ -955,6 +955,25 @@ describe("the web image", () => {
     ]);
   });
 
+  it("has its smoke check that /_next and the icon send the API policy once (ADR-0188 Decision 4)", () => {
+    // The configuration's own value, which the probe names.
+    expect(raw("apps/web/fixed-headers.mjs")).toContain(
+      "export const API_POLICY = \"default-src 'none'; frame-ancestors 'none'; sandbox\";",
+    );
+    const ci = raw(WORKFLOW);
+    const job = readJob(ci, "web-image");
+    const lines = ci.split(/\r?\n/).slice(job.first, job.last).map((line) => line.trim());
+    const start = lines.indexOf('for (const path of ["/_next/nothing", "/favicon.ico"]) {');
+    expect(lines.slice(start, start + 6)).toEqual([
+      'for (const path of ["/_next/nothing", "/favicon.ico"]) {',
+      "const unmatched = await fetch(`${base}${path}`);",
+      'const sent = unmatched.headers.get("content-security-policy");',
+      "check(unmatched.status === 404, `${path} answers ${unmatched.status}`);",
+      "check(sent === \"default-src 'none'; frame-ancestors 'none'; sandbox\", `${path} sends the policy ${sent}`);",
+      "}",
+    ]);
+  });
+
   it("has its smoke check that a redirect is a path, asked through another host name (RD-10b)", () => {
     const ci = raw(WORKFLOW);
     const job = readJob(ci, "web-image");
