@@ -3,6 +3,7 @@ import {
   answerCspReport,
   blockedCategory,
   directiveCategory,
+  dispositionCategory,
   readBounded,
   resetCspReportCountsForTests,
   sourceCategory,
@@ -109,6 +110,72 @@ describe("answerCspReport's line", () => {
     await batch(7);
     expect(totals().slice(4)).toEqual([expect.objectContaining({ count: 7, total: 16 })]);
   });
+
+  it("lists every key that reached a power of two with one request, and only those, in one line", async () => {
+    const sink = logged();
+    const keys = (line: string | undefined) =>
+      (JSON.parse(line ?? "{}") as { violations: Record<string, unknown>[] }).violations
+        .map(({ blocked, count, total }) => ({ blocked, count, total }));
+    const eval1 = violation({ blockedURL: "eval" });
+    const reports = (...batch: unknown[]) => answer(JSON.stringify(batch), "application/reports+json");
+    expect(await reports(violation(), eval1, eval1)).toBe(204);
+    expect(sink).toHaveLength(1);
+    expect(keys(sink[0])).toEqual([{ blocked: "inline", count: 1, total: 1 }, { blocked: "eval", count: 2, total: 2 }]);
+    // inline reaches 2 and is listed; eval reaches 3, passing no power of two, and is not.
+    expect(await reports(violation(), eval1)).toBe(204);
+    expect(sink).toHaveLength(2);
+    expect(keys(sink[1])).toEqual([{ blocked: "inline", count: 1, total: 2 }]);
+  });
+
+  it("reads report-uri's violated-directive's first word when effective-directive is absent", async () => {
+    const sink = logged();
+    const body = JSON.stringify({ "csp-report": { "document-uri": `${BASE}/login`, "blocked-uri": "inline",
+      "violated-directive": "script-src 'nonce-N0nceS3cret'" } });
+    expect(await answer(body)).toBe(204);
+    expect(JSON.parse(sink[0] ?? "{}")).toMatchObject({ violations: [{ directive: "script-src" }] });
+    expect(sink[0]).not.toContain("N0nce");
+  });
+});
+
+/**
+ * Bodies shaped like the specifications' examples (CSP3's deprecated
+ * serialization and the Reporting API's report), with every key they name
+ * and each nullable field `null`; not captured from a browser (PT-7c3).
+ */
+describe("bodies shaped like the specifications'", () => {
+  const POLICY = "script-src 'nonce-N0nceS3cret' 'strict-dynamic'; object-src 'none'";
+  it("answers 204 and counts a report-uri body with every key, its optional ones null", async () => {
+    const sink = logged();
+    const body = JSON.stringify({ "csp-report": {
+      "document-uri": `${BASE}/login`, referrer: "", "blocked-uri": null, "effective-directive": "script-src-elem",
+      "violated-directive": "script-src-elem", "original-policy": POLICY, disposition: "report",
+      "status-code": 200, "script-sample": "", "source-file": null, "line-number": null, "column-number": null,
+    } });
+    expect(await answer(body)).toBe(204);
+    expect(JSON.parse(sink[0] ?? "{}")).toMatchObject({ violations: [{ mechanism: "report-uri",
+      directive: "script-src-elem", blocked: "other", disposition: "report", source: "none", count: 1, total: 1 }] });
+  });
+
+  it("answers 204 and counts a reports+json batch with every key, its nullable ones null", async () => {
+    const sink = logged();
+    const batch = [{ type: "csp-violation", age: 10, url: `${BASE}/login`, user_agent: "Mozilla/5.0 s3cret", body: {
+      documentURL: `${BASE}/login`, referrer: null, blockedURL: null, effectiveDirective: "script-src-elem",
+      originalPolicy: POLICY, sourceFile: null, sample: null, disposition: "enforce", statusCode: 200,
+      lineNumber: null, columnNumber: null,
+    } }, { type: "csp-violation", age: 3, url: `${BASE}/login`, user_agent: "Mozilla/5.0", body: {
+      documentURL: `${BASE}/login`, referrer: "", blockedURL: "inline", effectiveDirective: "style-src-attr",
+      originalPolicy: POLICY, sourceFile: `${BASE}/_next/static/chunks/app.js`,
+      sample: "s3cret", disposition: "enforce", statusCode: 200, lineNumber: 1, columnNumber: 2,
+    } }];
+    expect(await answer(JSON.stringify(batch), "application/reports+json")).toBe(204);
+    expect(JSON.parse(sink[0] ?? "{}")).toMatchObject({ dropped: 0, violations: [
+      { mechanism: "report-to", directive: "script-src-elem", blocked: "other", disposition: "enforce",
+        source: "none" },
+      { mechanism: "report-to", directive: "style-src-attr", blocked: "inline", disposition: "enforce",
+        source: "next-static" },
+    ] });
+    for (const secret of ["s3cret", "N0nce", "Mozilla"]) expect(sink[0]).not.toContain(secret);
+  });
 });
 
 describe("the categories", () => {
@@ -139,6 +206,14 @@ describe("the categories", () => {
     expect(sourceCategory(undefined, BASE)).toBe("none");
   });
 
+  it("names a disposition enforce or report and anything else other, never the sender's text", async () => {
+    expect([dispositionCategory("enforce"), dispositionCategory("report")]).toEqual(["enforce", "report"]);
+    expect([dispositionCategory("s3cret-disposition"), dispositionCategory(undefined)]).toEqual(["other", "other"]);
+    const sink = logged();
+    expect(await answer(reportUri({ disposition: "s3cret-disposition" }))).toBe(204);
+    expect(JSON.parse(sink[0] ?? "{}")).toMatchObject({ violations: [{ disposition: "other" }] });
+    expect(sink[0]).not.toContain("s3cret");
+  });
 });
 
 describe("readBounded", () => {

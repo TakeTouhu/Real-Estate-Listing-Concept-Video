@@ -1702,8 +1702,9 @@ done until PT-7c5 is done or dropped.
 **PT-7c2 — Browsers report page policy violations to an endpoint that
 logs only categories** (ADR-0189, no migration): `POST /api/csp-report`
 takes `application/csp-report` and `application/reports+json`, reads
-at most 16 KiB with a reader that never throws, and answers `204`,
-`400`, `413` or `415` (`docs/api-changes-pt-7c2.md`). Reports from
+a body only until it passes 16 KiB with a reader that never throws,
+and answers `204`, `400`, `413` or `415`
+(`docs/api-changes-pt-7c2.md`). Reports from
 pages not on `APP_BASE_URL`'s origin are dropped; the rest are counted
 by five categories, and a request writes one `INFO` line only when a
 category's count in that instance reaches a power of two, so 4,104

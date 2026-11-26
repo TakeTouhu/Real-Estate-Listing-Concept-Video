@@ -64,25 +64,27 @@ function parseJson(text: string): unknown {
 
 const URI = z.string().max(4096);
 const NAME = z.string().max(256);
+/** An optional field: absent or `null`, as the specifications allow (`USVString? blockedURL`), read as absent. */
+const opt = <T extends z.ZodType<string>>(schema: T) => schema.nullish().transform((value) => value ?? undefined);
 /** `report-uri`: one violation. Unknown keys, `original-policy` and `script-sample` among them, are not kept. */
 const REPORT_URI_BODY = z.object({
   "csp-report": z.object({
     "document-uri": URI,
-    "blocked-uri": URI.optional(),
-    "effective-directive": NAME.optional(),
-    "violated-directive": URI.optional(),
-    disposition: NAME.optional(),
-    "source-file": URI.optional(),
+    "blocked-uri": opt(URI),
+    "effective-directive": opt(NAME),
+    "violated-directive": opt(URI),
+    disposition: opt(NAME),
+    "source-file": opt(URI),
   }),
 });
 /** `report-to`: a batch of reports of any type; only `csp-violation` bodies are read. */
-const REPORT_TO_BODY = z.array(z.object({ type: NAME, url: URI.optional(), body: z.unknown() }));
+const REPORT_TO_BODY = z.array(z.object({ type: NAME, url: opt(URI), body: z.unknown() }));
 const VIOLATION_BODY = z.object({
-  documentURL: URI.optional(),
-  blockedURL: URI.optional(),
-  effectiveDirective: NAME.optional(),
-  disposition: NAME.optional(),
-  sourceFile: URI.optional(),
+  documentURL: opt(URI),
+  blockedURL: opt(URI),
+  effectiveDirective: opt(NAME),
+  disposition: opt(NAME),
+  sourceFile: opt(URI),
 });
 
 /** One violation's fields as read, before anything is derived from them. */
@@ -121,6 +123,10 @@ const isExtension = (value: string) => EXTENSIONS.has(value) || EXTENSIONS.has(s
 /** The directive's name when it is on the list, else `other`. */
 export const directiveCategory = (value: string | undefined): string =>
   value !== undefined && DIRECTIVES.has(value.toLowerCase()) ? value.toLowerCase() : "other";
+
+/** `enforce` or `report` as sent, else `other`: never the sender's own text. */
+export const dispositionCategory = (value: string | undefined): string =>
+  value === "enforce" || value === "report" ? value : "other";
 
 /** What was refused, as a category: never its address, host or path. */
 export function blockedCategory(value: string | undefined, origin: string): string {
@@ -196,9 +202,7 @@ export async function answerCspReport(
       mechanism: type === REPORT_URI ? "report-uri" : "report-to",
       directive: directiveCategory(violation.directive),
       blocked: blockedCategory(violation.blocked, origin),
-      disposition: violation.disposition === "enforce" || violation.disposition === "report"
-        ? violation.disposition
-        : "other",
+      disposition: dispositionCategory(violation.disposition),
       source: sourceCategory(violation.source, origin),
     };
     const key = Object.values(categories).join(" ");

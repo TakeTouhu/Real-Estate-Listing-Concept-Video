@@ -3763,7 +3763,8 @@ policy".
 image step changes. A new unauthenticated route, `POST /api/csp-report`,
 exists and is reachable, though no page points at it until PT-7c3. The
 web app now depends on `zod` 4.6.7, the version `packages/shared`
-already pins, so `pnpm-lock.yaml` gains one line for `apps/web`.
+already pins, so `pnpm-lock.yaml` gains one importer entry (three
+lines) for `apps/web`; the `zod@4.6.7` package entry already existed.
 **Rolling back** is a revert: the route, `lib/csp-report.ts` and their
 two test files go; `zod` leaves `apps/web/package.json` and the
 lockfile; the same-origin guard's exception and its count (46 to 45),

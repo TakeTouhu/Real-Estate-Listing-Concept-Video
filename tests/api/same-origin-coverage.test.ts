@@ -9,9 +9,9 @@ import { describe, expect, it } from "vitest";
  * from its own `export` to the next one, so a `GET` above it is never read
  * for it, and must call the check before its first `await`: `isSameOriginPost`,
  * or `mfaRoute`, which checks before anything it awaits. RD-9b and RD-9c
- * took every route off the list below; what is listed never takes the check,
- * because no session cookie can authorize it. The test fails for a listed
- * handler that is checked, so the list stays exact.
+ * took every checkable route off the list below; what is listed never takes
+ * the check, because no session cookie can authorize it. The test fails for a
+ * listed handler that is checked, so the list stays exact.
  */
 const UNCHECKED: Readonly<Record<string, string>> = {
   // Permanent: its signed upload token alone authorizes it; it reads no session cookie (ADR-0174 Decision 1).

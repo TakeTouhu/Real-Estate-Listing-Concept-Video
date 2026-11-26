@@ -406,10 +406,13 @@ describe("the failure log's coverage", () => {
       },
     });
     const init = { method: "POST", headers: { "content-type": "application/csp-report" }, body, duplex: "half" };
-    const response = await POST(new Request("https://app.example.test/api/csp-report", init as RequestInit));
-    expect(response.status).toBe(400);
-    expect(lines).toEqual([]);
-    vi.restoreAllMocks();
+    try {
+      const response = await POST(new Request("https://app.example.test/api/csp-report", init as RequestInit));
+      expect(response.status).toBe(400);
+      expect(lines).toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("finds every catch logged, a body read, a page's rethrow or listed, and the list exact", () => {

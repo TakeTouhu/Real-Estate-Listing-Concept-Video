@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -99,11 +100,43 @@ describe("POST /api/csp-report", () => {
     expect(lines).toEqual([]);
   });
 
-  it("imports nothing that reads a cookie, a session, the database or a limiter", () => {
+  it("answers 400 and writes no line when one csp-violation entry of a batch has the wrong shape", async () => {
+    const good = { type: "csp-violation", url: `${BASE}/login`, body: { documentURL: `${BASE}/login` } };
+    for (const body of ["not an object", { documentURL: 42 }]) {
+      const batch = JSON.stringify([good, { type: "csp-violation", url: `${BASE}/login`, body }]);
+      expect((await post(batch, "application/reports+json")).status).toBe(400);
+    }
+    expect(lines).toEqual([]);
+  });
+
+  it("imports nothing that reads a cookie, a session, the database or a limiter, and names no cookie", () => {
     const web = join(__dirname, "..", "..", "apps", "web", "src");
-    const imports = (file: string) =>
-      [...readFileSync(join(web, file), "utf8").matchAll(/^import .* from "([^"]+)";$/gm)].map((match) => match[1]);
-    expect(imports("app/api/csp-report/route.ts")).toEqual(["@/lib/csp-report", "@/lib/env", "@/lib/http"]);
-    expect(imports("lib/csp-report.ts")).toEqual(["zod", "@app/observability"]);
+    /** Every module the file loads, as TypeScript parses it: static, re-exported, dynamic or required. */
+    const modules = (file: string) => {
+      const text = readFileSync(join(web, file), "utf8");
+      const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+      const found: string[] = [];
+      const visit = (node: ts.Node): void => {
+        if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier !== undefined) {
+          found.push(ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : "<computed>");
+        } else if (ts.isImportEqualsDeclaration(node)) {
+          found.push(node.moduleReference.getText(source));
+        } else if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          const required = ts.isIdentifier(callee) && callee.text === "require";
+          const loads = callee.kind === ts.SyntaxKind.ImportKeyword || required;
+          const [first] = node.arguments;
+          if (loads) found.push(first !== undefined && ts.isStringLiteral(first) ? first.text : "<computed>");
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+      return { found, text };
+    };
+    const route = modules("app/api/csp-report/route.ts");
+    const lib = modules("lib/csp-report.ts");
+    expect(route.found).toEqual(["@/lib/csp-report", "@/lib/env", "@/lib/http"]);
+    expect(lib.found).toEqual(["zod", "@app/observability"]);
+    for (const { text } of [route, lib]) expect(text).not.toMatch(/["'`]cookie|cookies\(/i);
   });
 });

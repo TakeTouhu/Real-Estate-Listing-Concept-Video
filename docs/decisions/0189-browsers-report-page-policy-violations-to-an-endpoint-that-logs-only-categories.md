@@ -39,7 +39,8 @@ the work in `apps/web/src/lib/csp-report.ts`) answers, in this order:
    `application/csp-report` or `application/reports+json`.
 2. `413` for a `Content-Length` over 16 KiB, without reading the body.
 3. Otherwise the body is read chunk by chunk and cancelled once it
-   passes 16 KiB: `413`.
+   passes 16 KiB, so at most the cap plus the chunk that crossed it is
+   read: `413`.
 4. `400` for a body that cannot be read, is not JSON, or does not have
    the shape its type names.
 5. `204` with no body otherwise, whether or not anything is counted
@@ -84,6 +85,14 @@ fills `document-uri` with the page it reports on, so those reports name
 the other site and are dropped. **What it does not stop:** a client
 that is not a browser can send any body, our origin included. Every
 line is therefore untrusted data, and no alert may fire on one line.
+Nor does it stop the requests themselves: another site's visitors'
+reports are still received, read up to the byte cap, parsed and
+answered `204`. Only the line is prevented, so the filter bounds log
+volume, not request volume; a request bound is PT-10's edge rule.
+
+The cap of 10 comes before the filter: `dropped` counts every
+`csp-violation` entry past the tenth without reading it, so its
+origin is unknown and it is not filtered.
 
 ## Decision 4 — Categories only, at most one line per request
 
@@ -149,7 +158,8 @@ CLAUDE.md's audited actions.
 
 It is reachable by anyone from this PR on, with nothing pointing at
 it. It is complete and bounded: it changes nothing but the in-process
-map, reads at most 16 KiB and 10 violations a request, writes no line
+map, reads a body only until it passes 16 KiB (at most the cap plus
+the chunk that crossed it) and 10 violations a request, writes no line
 for a refusal or another site's report, and at most the lines above
 for the rest.
 
@@ -158,7 +168,9 @@ for the rest.
 Each shape is a `zod` schema (CLAUDE.md: schema validation for all
 input). `zod` is added to `apps/web` at 4.6.7, the version
 `packages/shared` pins since PT-6d. Unknown keys are dropped, an
-address is capped at 4,096 characters and a name at 256.
+address is capped at 4,096 characters and a name at 256. An optional
+field may be absent or `null`, as the specifications declare
+`blockedURL` and `sourceFile` nullable, and `null` is read as absent.
 
 ## Built in PT-7c3
 
@@ -167,8 +179,8 @@ address is capped at 4,096 characters and a name at 256.
   (the API policy gets no report directive).
 - The `page` category, the document's route pattern from a fixed list
   held to `apps/web/src/app/**/page.tsx`, moved here from PT-7c2 by the
-  plan's split trigger (PT-7c2 passed its size); the key space then
-  grows by the number of patterns plus one.
+  plan's split trigger (PT-7c2 passed its size); the key space is
+  then multiplied by the number of patterns plus one.
 - A browser test captures real bodies; the production-mode job posts
   one of each shape and proves no run-unique value reaches the log; a
   page on a second origin aiming `report-uri` here writes no line.
@@ -198,14 +210,21 @@ sequenceDiagram
   token, nonce, path, id or host reaches it; ten read and the rest
   dropped; other origins and no `APP_BASE_URL` write nothing; the
   sampler writes on the 1st, 2nd, 4th and 8th report only, and on a
-  request that passes 16; each category; an erroring stream is
+  request that passes 16; one line lists every key that reached a
+  power of two with its request, and only those; each category, the
+  disposition's included, so a sender's own text never reaches the
+  line; `violated-directive`'s first word when no effective directive
+  is named; bodies of both shapes with every key the specifications'
+  examples name and the nullable fields `null`; an erroring stream is
   `unreadable`.
 - `tests/api/csp-report-route.test.ts`: `204` with no body for each
   shape; `415` for `text/plain` and `application/json`; `400` for a
-  body that is not JSON or not the shape; `413` by `Content-Length`
+  body that is not JSON or not the shape, one wrong `csp-violation`
+  entry in a batch included; `413` by `Content-Length`
   without pulling the body, and streamed past 16 KiB with the stream
-  cancelled; another site's report writes nothing; the two files
-  import nothing that reads a cookie, session, database or limiter.
+  cancelled; another site's report writes nothing; the two files,
+  parsed as TypeScript, load only the listed modules (static, dynamic
+  or required) and name no cookie.
 - `tests/api/failure-log-coverage.test.ts`: the catches listed, and a
   stream that errors after one chunk answers `400` with no line.
 
