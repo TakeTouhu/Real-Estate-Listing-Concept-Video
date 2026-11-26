@@ -80,8 +80,10 @@ workflow and the migration scripts.
 ## Decision 4 — Its own job, the ninth check
 
 The `migrate-image` job builds the image as `vtavision-migrate:ci`.
-Every run of it in the job has no network, a read-only root, no
-capability and `no-new-privileges`. It checks: user `1000:1000`; `id
+Every check and CLI run of it has no network, a read-only root, no
+capability and `no-new-privileges`; the step that prints what it
+holds has no network and a read-only root, as in `web-image` and
+`worker-image`. It checks: user `1000:1000`; `id
 -u` 1000; the entrypoint and command literals; no `proxy` in its
 environment; `/app` holding only `node_modules/` and `prisma/`;
 `node_modules/` holding only `.pnpm/` and the `prisma` link, and
