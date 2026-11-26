@@ -17,3 +17,9 @@ from the repository root (ADR-0175):
   in `apps/worker/image/`: the worker's runtime layer, Debian 13's FFmpeg
   and the six disclosure images with no worker code (ADR-0176), built
   and checked by CI's `worker-image` job and pushed nowhere.
+- `packages/database/Dockerfile`, with its own ignore file
+  `packages/database/Dockerfile.dockerignore`: the migration image, the
+  Prisma CLI, its engines, `schema.prisma` and the migrations, running
+  `migrate deploy` by default (ADR-0192), built, checked offline and
+  scanned by CI's `migrate-image` job, and pushed nowhere. Nothing
+  deploys it yet; the production job that runs it is PT-10's.

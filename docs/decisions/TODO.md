@@ -2470,7 +2470,7 @@ into on 2026-11-17.
       goes from 8 (3 high, 5 moderate) to 7 (2 high, 5 moderate). Open:
       `postcss` 8.4.31, which `next` pins, and `next`'s three
       moderates.*
-- [ ] **Decide how migrations run in production.** The web image holds
+- [x] **Decide how migrations run in production.** The web image holds
       no Prisma CLI; RD-11 applies them from the runner. Part 2.
       *Amended in RD-11a (ADR-0178): CI applies them from the runner.*
       *Amended in PT-8a (ADR-0191): CI checks that migrations are
@@ -2487,9 +2487,20 @@ into on 2026-11-17.
       table, the property, media, storyboard, generation, FX, Unit
       reservation and allocation tables included, and the coverage test
       requires it.*
+      *Decided in PT-8c (ADR-0192): the migration image, run as one job
+      before each deploy; the job resource is PT-10's, its first run
+      G1's.*
 - [ ] **Record the migration production holds, so CI upgrades from it**
       (G1/G3; ADR-0191 Decision 1). Until then CI takes the checked-out
       commit's first parent as the previous release. Part 2, with G1.
+- [ ] **The Cloud Run Job for migrations: its task timeout and retry
+      count (T8(k)) and its order before the web revision (PT-10).**
+      The image runs `migrate deploy` once per release (ADR-0192
+      Decision 2); the owner sets the values, and no ADR fixes them.
+- [ ] **Branch protection names `migrate-image` if checks are listed by
+      name, and whether branches must be up to date (T14).** A pull
+      request shows 9 checks since PT-8c (ADR-0192 Decision 4); the
+      job's Actions minutes are the owner's.
 - [ ] **Set the server's keep-alive against the load balancer's.**
       `server.js` reads `KEEP_ALIVE_TIMEOUT`; the image sets none.
       Part 2, with the deployment.

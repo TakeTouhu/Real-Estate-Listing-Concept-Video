@@ -605,6 +605,31 @@ system that loses modes), the base's entrypoint hands the check to
 `node`, which fails with "Cannot find module" instead of a refusal; the
 guard test fails there too.
 
+## 8. Build and check the migration image (optional)
+
+The migration image (ADR-0192) carries the Prisma CLI, its engines,
+`schema.prisma` and the migrations, and runs `migrate deploy` by
+default. It needs what section 6 needs. CI's `migrate-image` job runs
+its checks with no network; two of them, locally:
+
+```bash
+docker buildx build --load --platform linux/amd64 \
+  -f packages/database/Dockerfile -t vtavision-migrate:local .
+docker run --rm --network none --read-only vtavision-migrate:local --version
+echo 'DATABASE_URL=postgresql://local@127.0.0.1:1/local' > /tmp/migrate.env
+docker run --rm --network none --read-only --env-file /tmp/migrate.env \
+  vtavision-migrate:local   # exit code 1, P1001: nothing listens there
+```
+
+To apply the migrations to a **disposable** database, give the
+container a way to reach it and its `DATABASE_URL` in a file, never on
+the command line. Arguments replace the default command, as in
+`migrate status --schema /app/prisma/schema.prisma`. Never set
+`PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK`. The image copies
+`packages/database/prisma` from your tree, so it holds what you have
+checked out, uncommitted changes included; CI compares it with the
+commit.
+
 ## Notes
 
 - `.env.local` and all `.env*` files (except `.env.example`) are git-ignored.

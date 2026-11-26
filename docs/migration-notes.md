@@ -19,6 +19,12 @@ pnpm --filter @app/database run db:migrate:dev
 `DATABASE_URL` must point at the target PostgreSQL database. The repository's
 required checks (`pnpm check`) do **not** need a database.
 
+*Amended in PT-8c (ADR-0192): production will not run `db:migrate`
+from a checkout. It will apply the migrations with the migration image
+(`packages/database/Dockerfile`), run as one job before each web
+revision takes traffic; that job is PT-10's and its first run G1's.
+`db:migrate` stays the command for development and CI's runner.*
+
 ## Migration history
 
 | # | Name | Phase | Nature |
@@ -3888,3 +3894,21 @@ is a revert, allowed because this PR adds no migration: the seed, the
 check and the test return to PT-8b1's text; `api-changes-pt-8b2.md`
 and the PT-8b2 lines of this file, the Roadmap, the part 2 gap analysis
 and `TODO.md` go.
+
+## PT-8c — The migration image
+
+**No migration** (ADR-0192); nothing deployed or pushed; no setting,
+route or dependency changes; **now 9 checks**. A new image,
+`packages/database/Dockerfile` with its ignore file, holds the Prisma
+CLI, its engines, `schema.prisma` and the migrations, and runs `migrate
+deploy` by default (`docs/api-changes-pt-8c.md`). The new
+`migrate-image` job builds it, checks it offline, compares its files
+with the commit's by path and SHA-256, and scans it. Nothing runs it
+against a database outside that job until PT-8d. A pull request whose
+image would ship other migrations than its commit's, a client, an app
+or a fetched engine now fails. **Rolling back** is a revert, allowed
+because this PR adds no migration: the Dockerfile and its ignore file
+go, the job goes from `ci.yml`, and `container-images.test.ts` returns
+to PT-8b2's text; ADR-0192, `api-changes-pt-8c.md` and the PT-8c lines
+of this file, the Roadmap, `infra/README.md`, `architecture.md`,
+`local-setup.md`, the part 2 gap analysis and `TODO.md` go.

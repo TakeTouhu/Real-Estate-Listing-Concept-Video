@@ -166,6 +166,16 @@ SHA-256, with `layer-v1-*.png` matching exactly the listed files; and
 every step of the `worker-image` job: its name, time limit and whole
 `run:` text.
 
+*Amended in PT-8c (ADR-0192): it lists the migration image's
+Dockerfile too, holds the `migrate-image` job in `IMAGE_JOBS` (one
+build, the scan last), bans `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` in
+every Dockerfile, and holds the migration image: its final
+`ENTRYPOINT`, `CMD` and four `ENV` names, `ca-certificates` alone and
+no PostgreSQL package, the two `COPY` lines, the install from the
+lockfile alone, the six-folder copy and engine check, its ignore file
+of exactly the required lines, and the job's files check, path and
+hash comparison and offline run.*
+
 ## Unit tests
 
 Unit tests live next to their source as `*.test.ts` and run via the root

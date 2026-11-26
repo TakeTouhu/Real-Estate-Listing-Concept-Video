@@ -1791,6 +1791,20 @@ tightened job-state CHECK, an `UPDATE` on reservations, a unique index
 on deliverable inputs and a composition counter CHECK each fail it; a
 plain index passes. Still 8 checks.
 
+**PT-8c — The migration image** (ADR-0192, no migration):
+`packages/database/Dockerfile` builds an image of the Prisma CLI, its
+six packages and both OpenSSL 3 engines, `schema.prisma` and the
+migrations, copied by two lines, running `migrate deploy` by default
+(`docs/api-changes-pt-8c.md`). A new `migrate-image` job builds it,
+checks its user, files and command, compares every file under
+`/app/prisma` with the commit's by path and SHA-256, runs the CLI with
+no network and a read-only root to `P1001`, and scans it. Measured
+locally on a rehearsal copy: a flattened `COPY`, a missing, changed or
+extra migration file each fail the comparison, and the image applied
+all 36 migrations to a throwaway PostgreSQL. It is never pushed; PT-8d
+runs it in `production-mode`, and the production job is PT-10's. Now
+9 checks.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

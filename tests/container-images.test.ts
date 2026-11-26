@@ -27,7 +27,7 @@ import { serverEnvSchema } from "@app/shared";
  * later image adds its Dockerfile here.
  */
 const REPO_ROOT = join(__dirname, "..");
-const DOCKERFILES = ["apps/web/Dockerfile", "apps/worker/Dockerfile"];
+const DOCKERFILES = ["apps/web/Dockerfile", "apps/worker/Dockerfile", "packages/database/Dockerfile"];
 const WORKFLOW = ".github/workflows/ci.yml";
 const DIGEST = "sha256:f0960f8dc047f358e3fb428f36ccba21732194fa5f0cac849f401e63e62fb9e6";
 
@@ -41,6 +41,8 @@ const BANNED_ENV = new RegExp(
     "^NODE_DEBUG$|^NODE_TLS_REJECT_UNAUTHORIZED$|^NODE_OPTIONS$|^NODE_EXTRA_CA_CERTS$|^OPENSSL_CONF$",
     "^NODE_USE_SYSTEM_CA$",
     "^GOOGLE_APPLICATION_CREDENTIALS$|^GCE_METADATA_HOST$|^STORAGE_EMULATOR_HOST$",
+    // It would let two migration runs proceed at once (ADR-0192 Decision 3).
+    "^PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK$",
   ].join("|"),
   "i",
 );
@@ -337,6 +339,12 @@ const IMAGE_JOBS = [
       ["apps/worker/Dockerfile", "media-test"],
       ["apps/worker/Dockerfile", ""],
     ],
+    guarded: [],
+  },
+  {
+    name: "migrate-image",
+    tag: "vtavision-migrate:ci",
+    builds: [["packages/database/Dockerfile", ""]],
     guarded: [],
   },
 ];
@@ -1439,5 +1447,99 @@ describe("the worker image", () => {
       ],
       ...scanSteps("vtavision-worker:ci"),
     ]);
+  });
+});
+
+/**
+ * The migration image (PT-8c, ADR-0192): the Prisma CLI, its six packages and engines, the schema and the
+ * migrations; `migrate deploy` by default; checked in its own job by every file's path and hash, and offline.
+ */
+describe("the migration image", () => {
+  const file = "packages/database/Dockerfile";
+
+  it("runs migrate deploy by default, with four names in ENV, ca-certificates alone and no PostgreSQL", () => {
+    const last = finalStage(file);
+    expect(ofKind(last, "ENTRYPOINT")).toEqual(['ENTRYPOINT ["node", "/app/node_modules/prisma/build/index.js"]']);
+    expect(ofKind(last, "CMD")).toEqual(['CMD ["migrate", "deploy", "--schema", "/app/prisma/schema.prisma"]']);
+    const names = ["CHECKPOINT_DISABLE", "PRISMA_HIDE_UPDATE_MESSAGE", "SSL_CERT_FILE", "SSL_CERT_DIR"];
+    expect(ofKind(last, "ENV").flatMap(envNames)).toEqual(names);
+    const installed = ofKind(instructions(file), "RUN").flatMap((l) => {
+      return /apt-get\b.* install --yes --no-install-recommends (.+?) &&/.exec(l)?.[1] ?? [];
+    });
+    expect(installed).toEqual(["ca-certificates"]);
+    expect(instructions(file).filter((l) => /postgres|psql/i.test(l))).toEqual([]);
+  });
+
+  it("installs from the lockfile alone, offline after fetching it", () => {
+    const installs = ofKind(instructions(file), "RUN").filter((l) =>
+      /\b(?:pnpm|npm|yarn)\b (?:i|install|add|fetch)\b/.test(l),
+    );
+    expect(installs).toEqual(["RUN pnpm fetch --frozen-lockfile", "RUN pnpm install --frozen-lockfile --offline"]);
+  });
+
+  it("copies the schema and the migrations by two lines, so the migrations keep their folder", () => {
+    expect(ofKind(finalStage(file), "COPY")).toEqual([
+      "COPY --from=build /out/node_modules ./node_modules",
+      "COPY packages/database/prisma/schema.prisma ./prisma/schema.prisma",
+      "COPY packages/database/prisma/migrations ./prisma/migrations",
+    ]);
+  });
+
+  it("copies the CLI's six packages, each one folder, and needs both OpenSSL 3 engines alone", () => {
+    const text = instructions(file).join("\n");
+    expect(text).toContain("for f in .env packages/database/.env packages/database/prisma/.env;");
+    expect(text).toContain(
+      "for p in 'prisma@*' '@prisma+engines@*' '@prisma+engines-version@*' '@prisma+debug@*' " +
+        "'@prisma+fetch-engine@*' '@prisma+get-platform@*'; do set -- node_modules/.pnpm/$p; " +
+        'if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then',
+    );
+    expect(text).toContain("ls $e/schema-engine-debian-openssl-3.0.x $e/libquery_engine-debian-openssl-3.0.x.so.node");
+    expect(text).toContain("&& ! find /out -name '*openssl-1.1.x*' | grep -q . ; } || {");
+  });
+
+  it("leaves exactly the required lines out of its context", () => {
+    const ignores = raw(`${file}.dockerignore`)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== "" && !line.startsWith("#"));
+    expect(ignores).toEqual(REQUIRED_IGNORES);
+  });
+
+  it("is checked in the migrate-image job by every file's path and hash, and run offline to P1001", () => {
+    const job = readJob(raw(WORKFLOW), "migrate-image");
+    const step = (name: string): string[] =>
+      commands(job.steps.find((s) => s.fields.get("name") === name)?.fields.get("run") ?? "");
+    const confined = "docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges";
+    expect(step("Check the image's user, files, entrypoint and environment")).toEqual(
+      expect.arrayContaining([
+        `test "$(${confined} --entrypoint id vtavision-migrate:ci -u)" = "1000"`,
+        `${confined} --entrypoint find vtavision-migrate:ci /app "$@"`,
+        `test "$(printf '%s\\n' "$nm" | LC_ALL=C sort)" = "$(printf 'd node_modules/.pnpm\\nl node_modules/prisma')"`,
+        `test "$(printf '%s\\n' "$pkgs" | sed -E 's/@[0-9][^@]*$//' | LC_ALL=C sort)" = "$(printf 'd %s\\n' ` +
+          "@prisma+debug @prisma+engines @prisma+engines-version @prisma+fetch-engine @prisma+get-platform prisma)\"",
+        'if [ -n "$loose$extra$dead" ]; then',
+      ]),
+    );
+    expect(step("Check that the image holds this commit's schema and migrations")).toEqual([
+      `list='find . -mindepth 1 -printf "%y %P\\n" | LC_ALL=C sort`,
+      `find . -type f -printf "%P\\0" | LC_ALL=C sort -z | xargs -0 sha256sum'`,
+      `${confined} --entrypoint sh -w /app/prisma vtavision-migrate:ci -c "$list" > "$RUNNER_TEMP/image.list"`,
+      'mkdir "$RUNNER_TEMP/commit"',
+      'cp -R packages/database/prisma/schema.prisma packages/database/prisma/migrations "$RUNNER_TEMP/commit/"',
+      '(cd "$RUNNER_TEMP/commit" && sh -c "$list") > "$RUNNER_TEMP/commit.list"',
+      'diff "$RUNNER_TEMP/commit.list" "$RUNNER_TEMP/image.list"',
+      `echo "$(grep -c '^d migrations/' "$RUNNER_TEMP/image.list") migrations, as this commit's"`,
+    ]);
+    expect(step("Run the CLI offline")).toEqual(
+      expect.arrayContaining([
+        `${confined} vtavision-migrate:ci --version > "$RUNNER_TEMP/version.log" 2>&1`,
+        'test "$code" -eq 0',
+        "grep -qE '^prisma +: 5\\.22\\.0$' \"$RUNNER_TEMP/version.log\"",
+        `${confined} --env-file "$RUNNER_TEMP/migrate.env" vtavision-migrate:ci > "$RUNNER_TEMP/deploy.log" 2>&1`,
+        'test "$code" -eq 1',
+        "grep -qF 'P1001' \"$RUNNER_TEMP/deploy.log\"",
+        "if grep -qE 'binaries\\.prisma\\.sh|ECONNREFUSED' \"$RUNNER_TEMP/deploy.log\"; then",
+      ]),
+    );
   });
 });
