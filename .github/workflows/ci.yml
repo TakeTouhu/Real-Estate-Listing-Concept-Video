@@ -1,9 +1,16 @@
 name: CI
 
+# One run per commit (ADR-0179): a pull request's commits run on `pull_request` and `main`'s on `push`. A newer
+# commit of a pull request cancels the older one's run; each commit of `main` has a group of its own, so no run of
+# a merged commit is cancelled or replaced.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -179,7 +186,7 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.16-trixie@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8
         env:
           POSTGRES_USER: revt
           POSTGRES_PASSWORD: revt-ci-local
@@ -258,7 +265,7 @@ jobs:
     timeout-minutes: 90
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.16-trixie@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8
         env:
           POSTGRES_USER: revt
           POSTGRES_PASSWORD: revt-ci-local

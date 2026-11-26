@@ -3565,3 +3565,13 @@ and the `TODO.md` flip, amendments and items of RD-11b go.
 and `TODO.md` amendments). Nothing deployed or pushed; still 16 checks.
 **Rolling back:** remove the report, its pointers in the Roadmap and the
 gap analysis, and RD-11c's `TODO.md` amendments, flip and new item.
+
+## PT-6a — CI once per commit
+
+**No migration** (ADR-0179); nothing deployed or pushed. A pull request
+now shows 8 checks, one run per commit, and a newer commit cancels its
+pull request's run. **Rolling back:** the workflow's `push` trigger
+returns to every branch, its comment and `concurrency` go, `database`
+and `e2e` return to `postgres:16`, and `tests/ci-workflow.test.ts`,
+ADR-0179, the part 2 gap analysis, the README and Roadmap lines and the
+`TODO.md` flip of PT-6a go; 16 checks again.

@@ -103,8 +103,8 @@ pnpm build       # next production build
 pnpm check       # all of the above, in CI order
 ```
 
-CI runs the same steps on every push and pull request
-(`.github/workflows/ci.yml`).
+CI runs the same steps once per commit of a pull request, and on each
+merge into `main` (`.github/workflows/ci.yml`, ADR-0179).
 
 ## Health endpoints
 
