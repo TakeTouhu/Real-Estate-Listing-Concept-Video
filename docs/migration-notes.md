@@ -3586,3 +3586,12 @@ of `media-pipeline.integration.test.ts`, the lockfile,
 `tests/dependency-overrides.test.ts`, `api-changes-pt-6c.md`, and the
 Roadmap, gap analysis and `TODO.md` lines of PT-6c go; the 8
 advisories come back.
+
+## PT-6b — each image scanned in its job
+
+**No migration** (ADR-0180); nothing deployed or pushed; still 8
+checks. Each image job pulls two more images, Syft and Grype, and
+fetches Grype's database. **Rolling back:** the two pins and the three
+scan steps of each image job and their comments, the guard's scan
+checks in `tests/container-images.test.ts`, `.github/scan/`, ADR-0180,
+and the Roadmap, gap analysis and `TODO.md` lines of PT-6b go.
