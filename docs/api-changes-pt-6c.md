@@ -50,7 +50,9 @@ keeps.
 ## What changes in `sharp`
 
 - libvips 8.15.3 to 8.18.7; the glibc it needs, 2.26 to 2.28 (Debian
-  13's is 2.41). Node.js `>=20.9.0`; the repository requires 22.
+  13's is 2.41). Node.js `>=20.9.0`; the repository requires 22. Since
+  0.34 the linux-x64 binaries need a CPU with x86-64-v2; Cloud Run's
+  and GitHub's runners have it.
 - The package ships both ES modules and CommonJS, and no install
   script. The `sharp.` type namespace is gone, so the one test that
   named `sharp.Exif` imports the type `Exif` instead.
@@ -66,7 +68,10 @@ On Ubuntu, outside Docker, with 0.33.5 and 0.35.5 side by side:
   at most 3 bits apart on the rest, under the duplicate threshold of 6
   (`DUPLICATE_HAMMING_THRESHOLD`, `packages/domain/src/property/media.ts`).
   The normalized JPEGs are equal, so the difference is in the 8-by-8
-  reduction. No hash is stored anywhere yet: nothing is deployed.
+  reduction. `Asset.perceptualHash` is stored, but nothing is deployed,
+  so no production hash from 0.33.5 exists to compare with. A local or
+  seeded database keeps its 0.33.5 hashes, which can sit up to 3 bits
+  from the same photograph uploaded again.
 - The six disclosure layers re-render byte-identical to the committed
   files with the bundled `FONTCONFIG_FILE` (ADR-0071's pins hold).
 - EXIF, GPS, ICC and XMP are still stripped. A JPEG followed by a ZIP
