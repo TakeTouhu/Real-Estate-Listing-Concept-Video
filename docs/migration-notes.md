@@ -3756,3 +3756,20 @@ and `middleware.test.ts` and the `web-image` probe's `/_next`,
 PT-7c1 amendment removed and the first one's last sentence back to
 "`/favicon.ico` and an unknown `/_next/<path>` still get no
 policy".
+
+## PT-7c2 — Browsers report page policy violations to an endpoint that logs only categories
+
+**No migration** (ADR-0189); nothing deployed or pushed; no setting or
+image step changes. A new unauthenticated route, `POST /api/csp-report`,
+exists and is reachable, though no page points at it until PT-7c3. The
+web app now depends on `zod` 4.6.7, the version `packages/shared`
+already pins, so `pnpm-lock.yaml` gains one importer entry (three
+lines) for `apps/web`; the `zod@4.6.7` package entry already existed.
+**Rolling back** is a revert: the route, `lib/csp-report.ts` and their
+two test files go; `zod` leaves `apps/web/package.json` and the
+lockfile; the same-origin guard's exception and its count (46 to 45),
+the failure-log guard's `lib/csp-report.ts` entries and counts, its
+erroring-stream test and the route count in the relative-redirect
+guard (51 to 50) go; ADR-0189, `api-changes-pt-7c2.md`, and the PT-7c2
+lines of `API.md`, `SecurityCompliance.md`, `architecture.md`, the
+Roadmap, the part 2 gap analysis and `TODO.md` go.

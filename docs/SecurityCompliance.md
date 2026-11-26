@@ -168,7 +168,10 @@ release and **is not activated** (ADR-0054 Decision 2).
 - CSRF protection where cookie-based mutations are used
   *In place since RD-9c (ADR-0174): every cookie-based change checks its
   `Origin` against `APP_BASE_URL` first, beside the `SameSite=Lax`
-  session cookie; the token-authorized upload `PUT` is the one exception.*
+  session cookie. Two routes no session cookie can authorize are outside
+  it: the token-authorized upload `PUT`, and since PT-7c2 (ADR-0189)
+  `POST /api/csp-report`, which browsers send unauthenticated, reads no
+  cookie and keeps only reports from `APP_BASE_URL`'s own pages.*
 - CSP, secure headers, and dependency scanning
   *Secure headers since RD-9d and a Content Security Policy with a
   per-request nonce on every page since RD-9e (ADR-0174); the browser

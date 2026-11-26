@@ -9,12 +9,16 @@ import { describe, expect, it } from "vitest";
  * from its own `export` to the next one, so a `GET` above it is never read
  * for it, and must call the check before its first `await`: `isSameOriginPost`,
  * or `mfaRoute`, which checks before anything it awaits. RD-9b and RD-9c
- * took every route off the list below but one, which never takes the check;
- * the test fails for a listed handler that is checked, so the list stays exact.
+ * took every checkable route off the list below; what is listed never takes
+ * the check, because no session cookie can authorize it. The test fails for a
+ * listed handler that is checked, so the list stays exact.
  */
 const UNCHECKED: Readonly<Record<string, string>> = {
   // Permanent: its signed upload token alone authorizes it; it reads no session cookie (ADR-0174 Decision 1).
   "PUT /api/storage/upload": "token only",
+  // Permanent: browsers send it unauthenticated by nature; it reads no cookie, and keeps only reports whose page
+  // is on APP_BASE_URL's origin (ADR-0189, within ADR-0174 Decision 1's scope).
+  "POST /api/csp-report": "unauthenticated by nature; no cookie; origin-filtered",
 };
 
 const WEB = join(__dirname, "..", "..", "apps", "web", "src");
@@ -66,9 +70,9 @@ function checksFirst({ body }: Handler): boolean {
 describe("the origin check's coverage", () => {
   const handlers = mutatingHandlers();
 
-  it("reads every mutating handler: 45 today, one per route file", () => {
-    expect(handlers).toHaveLength(45);
-    expect(new Set(handlers.map(({ key }) => key)).size).toBe(45);
+  it("reads every mutating handler: 46 today, one per route file", () => {
+    expect(handlers).toHaveLength(46);
+    expect(new Set(handlers.map(({ key }) => key)).size).toBe(46);
   });
 
   it("finds the check first in every handler but the listed ones, and in none of those", () => {
