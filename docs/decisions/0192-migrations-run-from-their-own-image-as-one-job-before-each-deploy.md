@@ -199,6 +199,26 @@ the sandbox. So the image measured lacked `ca-certificates` and
   package, a client package or a dead link; the offline run printed
   the CLI's own error for a missing engine.
 
+The job's first CI run (run 45906361332, head `5e834a1`) passed every
+step:
+
+- The committed file built as written. The image holds 81 Debian
+  packages, `ca-certificates` 20250419+deb13u1 and `openssl`
+  3.5.9-1~deb13u1 among them, and Node.js v22.23.5; it is 298743098
+  bytes.
+- The comparison printed "36 migrations, as this commit's".
+  `--version` printed `prisma : 5.22.0`, `@prisma/client : Not found`
+  and both engines under `@prisma+engines@5.22.0`, hash `6051973…`.
+  `migrate deploy` printed "P1001: Can't reach database server at
+  `127.0.0.1:1`".
+- Syft found 287 packages. Grype (database schema v6.1.10, built
+  2026-11-26) listed 234 matches, 26 with a fix and none critical, so
+  the scan exited 0. The fixable ones are ten npm packages (among them
+  `brace-expansion`, `ip-address`, `pacote` and `sigstore`) and three
+  Debian ones (`libzstd1`, `login.defs`, `passwd`). The web image's
+  scan in the same run lists every one of them too; it adds only
+  `next` and `postcss`.
+
 ## Consequences
 
 - A pull request shows 9 checks; the merge rule is still "every check
