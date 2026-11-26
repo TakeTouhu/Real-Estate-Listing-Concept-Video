@@ -494,8 +494,10 @@ repeats them. By hand they need Docker with Buildx, `openssl`, `curl`,
 `jq`, `sudo` for a hosts line for `app.rd11.test`, and pnpm and Node.js
 as in section 1; set `RUNNER_TEMP` to an empty private folder,
 `GITHUB_WORKSPACE` to the checkout, and the job's `env:` values
-(`REVISION` and the five `*_IMAGE` pins). Never give them a real
-credential.
+(`REVISION` and the five `*_IMAGE` pins). Its browser step needs
+Playwright's Chromium (`pnpm exec playwright install chromium`) and
+`runner.env` loaded; `pnpm test:production` means nothing elsewhere.
+Never give them a real credential.
 
 ## 7. Build and check the worker's image (optional)
 

@@ -55,6 +55,8 @@ export default defineConfig({
       "tests/email/**",
       // Browser tests; run by Playwright (playwright.config.ts).
       "tests/e2e/**/*.spec.ts",
+      // The browser through the production-mode job's front; run by Playwright (playwright.production.config.ts).
+      "tests/production/**/*.spec.ts",
     ],
     coverage: {
       provider: "v8",

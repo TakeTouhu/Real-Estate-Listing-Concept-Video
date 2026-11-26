@@ -20,6 +20,7 @@
     "test:clamav": "vitest run --config vitest.clamav.config.ts",
     "test:smtp": "vitest run --config vitest.smtp.config.ts",
     "test:e2e": "playwright test",
+    "test:production": "playwright test -c playwright.production.config.ts",
     "build": "pnpm --filter @app/web build",
     "dev": "pnpm --filter @app/web dev",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build"

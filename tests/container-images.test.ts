@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DISCLOSURE_LAYER_ASSETS } from "@app/domain";
 import { serverEnvSchema } from "@app/shared";
@@ -180,7 +180,7 @@ interface Job {
 }
 
 const indentOf = (line: string): number => line.length - line.trimStart().length;
-const STEP_KEYS = ["name", "uses", "with", "run", "if", "timeout-minutes"];
+const STEP_KEYS = ["name", "id", "uses", "with", "run", "if", "timeout-minutes"];
 const BLOCK = /^[|>]-?$/;
 
 /**
@@ -272,7 +272,7 @@ const commands = (run: string): string[] =>
 /** The only Docker commands the job may run; the build is held word for word below. */
 const DOCKER_COMMANDS = ["run", "exec", "logs", "rm", "image inspect", "buildx build"];
 /** A stand-in job's commands besides: its networks, read as two words like `image` and `buildx` (ADR-0178). */
-const STAND_IN_COMMANDS = [...DOCKER_COMMANDS, "network create", "network connect", "network rm"];
+const STAND_IN_COMMANDS = [...DOCKER_COMMANDS, "network create", "network connect", "network rm", "stop", "start"];
 const BUILD = new RegExp(
   [
     "^docker buildx build --provenance=false --load --platform linux/amd64 -f (\\S+)(?: --target ([\\w-]+))?",
@@ -304,6 +304,9 @@ const IMAGE_JOBS = [
   },
 ];
 
+/** The one condition the production-mode job keeps the browser's report on (RD-11b). */
+const BROWSER_FAILED = "failure() && steps.browser.outcome == 'failure'";
+
 /**
  * Each job that runs an image against stand-ins (ADR-0178, amending ADR-0175
  * Decision 1): what it builds, the actions it uses in order, its steps run
@@ -313,8 +316,19 @@ const STAND_IN_JOBS = [
   {
     name: "production-mode",
     builds: [["apps/web/Dockerfile", ""]],
-    actions: ["actions/checkout@v4", "pnpm/action-setup@v4", "actions/setup-node@v4"],
-    guarded: [["Stop the stand-ins", "always()"]],
+    actions: ["actions/checkout@v4", "pnpm/action-setup@v4", "actions/setup-node@v4", "actions/upload-artifact@v4"],
+    guarded: [
+      ["Keep the browser's report of a failed run", BROWSER_FAILED],
+      ["Stop the stand-ins", "always()"],
+    ],
+    // The browser's report alone, kept a week, and only when the browser's own step failed (RD-11b).
+    kept: [
+      ["name", "production-mode-report"],
+      ["path", "playwright-report/"],
+      ["retention-days", "7"],
+    ],
+    // The database's outage: the one container ever stopped or started again (RD-11b).
+    outage: ["docker stop db", "docker start db"],
     runs: [
       ["--name db --network rd11-edge -p 127.0.0.1:5432:5432", '--env-file "$dir/pg.env" "$PG_IMAGE"'],
       [
@@ -506,6 +520,10 @@ describe("the images together", () => {
     expect(runs).toEqual(stand.runs);
     const networks = docker.filter(({ sub }) => sub.startsWith("network ")).map(({ command }) => command);
     expect(networks).toEqual(stand.networks);
+    const outage = docker.filter(({ sub }) => sub === "stop" || sub === "start").map(({ command }) => command);
+    expect(outage).toEqual(stand.outage);
+    const artifact = job.steps.filter((s) => s.fields.get("uses") === "actions/upload-artifact@v4");
+    expect(artifact.map((s) => [s.fields.get("if"), [...s.with]])).toEqual([[BROWSER_FAILED, stand.kept]]);
     // Each Node.js stand-in runs a file of tests/production: Node.js's built-ins alone, and no timer.
     for (const command of runs.filter((c) => c.includes('"$NODE_IMAGE"'))) {
       const file = / node \/srv\/rd11\/([\w-]+\.mjs)$/.exec(command)?.[1] ?? "none";
@@ -534,6 +552,138 @@ describe("the images together", () => {
     const outside = ci.split(/\r?\n/).filter((_, i) => jobs.every((job) => i < job.first || i >= job.last));
     expect(outside.filter((line) => /docker/i.test(line))).toEqual([]);
     expect(ci.split(/\r?\n/).filter((line) => BANNED_WORKFLOW.test(line))).toEqual([]);
+  });
+});
+
+/** A file and each file it imports by a relative path, transitively. */
+function reached(file: string, seen = new Set<string>()): Set<string> {
+  if (seen.has(file)) return seen;
+  seen.add(file);
+  for (const [, path = ""] of raw(file).matchAll(/^import\s[^;]*?from\s"(\.{1,2}\/[^"]+)";$/gm)) {
+    const base = posix.join(posix.dirname(file), path);
+    const found = ["", ".ts", ".mts", ".mjs"].map((end) => `${base}${end}`).find((name) => {
+      return existsSync(join(REPO_ROOT, name)) && statSync(join(REPO_ROOT, name)).isFile();
+    });
+    expect(`${file} imports ${path}: ${found !== undefined}`).toBe(`${file} imports ${path}: true`);
+    if (found !== undefined) reached(found, seen);
+  }
+  return seen;
+}
+
+/**
+ * The browser the production-mode job runs through its front (RD-11b, ADR-0178 Decision 5): certificate errors are
+ * ignored in its configuration and on the second person's page alone; no trace, video or screenshot but the one on
+ * failure, and no test skipped, retried or run alone; no wait in the spec or any file it imports by a relative path,
+ * and no trust of its own; run by the job with its one script, its report and log gate held word for word.
+ */
+describe("the production-mode browser", () => {
+  const CONFIG = "playwright.production.config.ts";
+  const SPEC = "tests/production/sign-up-to-storage.spec.ts";
+  const code = ["tests", "."].flatMap((dir) =>
+    readdirSync(join(REPO_ROOT, dir), { recursive: dir === "tests" })
+      .map((name) => (dir === "." ? String(name) : `tests/${String(name)}`))
+      .filter((name) => /\.[cm]?[jt]sx?$/.test(name) && !name.includes("node_modules")),
+  );
+  const own = code.filter((name) => name.startsWith("tests/production/"));
+  const job = readJob(raw(WORKFLOW), "production-mode");
+  const step = (name: string): Step | undefined => job.steps.find((s) => s.fields.get("name") === name);
+  const run = (name: string): string[] => commands(step(name)?.fields.get("run") ?? "");
+
+  it("ignores certificate errors in its configuration and the invitee's page alone", () => {
+    // This file names it only to hold it.
+    const places = code
+      .filter((file) => file !== "tests/container-images.test.ts")
+      .flatMap((file) => raw(file).split("\n").filter((line) => line.includes("ignoreHTTPSErrors")).map((line) => {
+        return `${file}: ${line.trim()}`;
+      }));
+    expect(places.sort()).toEqual([
+      `${CONFIG}: ignoreHTTPSErrors: true,`,
+      `${SPEC}: const invitee = await browser.newPage({ baseURL: APP_BASE_URL, ignoreHTTPSErrors: true });`,
+    ]);
+  });
+
+  it("keeps no trace, runs every test once, and has no wait or trust of its own", () => {
+    const config = raw(CONFIG);
+    for (const line of ['trace: "off",', 'screenshot: "only-on-failure",']) expect(config).toContain(`\n    ${line}\n`);
+    for (const line of ["workers: 1,", "retries: 0,", "forbidOnly: true,"]) expect(config).toContain(`\n  ${line}\n`);
+    expect(config).not.toMatch(/webServer|video|trace: "(?!off)|grep|testIgnore|repeatEach/);
+    for (const file of own) {
+      const turned = /trace|tracing|screenshot|video|\.(?:skip|fixme|only|fail)\b/.test(raw(file));
+      expect(`${file}: ${turned}`).toBe(`${file}: false`);
+    }
+    for (const file of [...own, CONFIG]) {
+      expect(`${file}: ${/rejectUnauthorized|NODE_TLS|NODE_OPTIONS/.test(raw(file))}`).toBe(`${file}: false`);
+    }
+    for (const file of new Set([...own, CONFIG, ...reached(SPEC)])) {
+      expect(`${file}: ${/set(?:Timeout|Interval)|waitForTimeout/.test(raw(file))}`).toBe(`${file}: false`);
+    }
+    // The browser's files print the spec's two recorded counts and nothing else.
+    const printed = [...own, CONFIG].filter((file) => /\.[cm]?tsx?$/.test(file)).flatMap((file) => {
+      return raw(file).split("\n").filter((line) => /console\.|process\.std(?:out|err)/.test(line));
+    });
+    expect(printed.map((line) => line.trim())).toEqual([
+      "console.log(`original.bin kept for ${kept} of 4 uploads`);",
+      "console.log(`The 404 page: ${nonced} of ${missingScripts.length} scripts carry its nonce`);",
+    ]);
+  });
+
+  it("is run by its one script, and its log is reported, and printed only when no listed value is in it", () => {
+    const scripts = (JSON.parse(raw("package.json")) as { scripts: Record<string, string> }).scripts;
+    expect(scripts["test:production"]).toBe(`playwright test -c ${CONFIG}`);
+    const runs = job.steps.flatMap((s) => commands(s.fields.get("run") ?? ""));
+    expect(runs.filter((command) => /playwright/.test(command))).toEqual([
+      "pnpm exec playwright install --with-deps chromium",
+    ]);
+    // Nothing exported, printed or turned up before the browser or after it.
+    const loud = /\bDEBUG\b|^(?:env|printenv|export)\b|\bset -[a-z]*x|\b(?:cat|head|tail|grep|sed|awk)\s[^|;>]*\.env\b/;
+    expect(runs.filter((command) => loud.test(command))).toEqual([]);
+    expect(runs).toContain(
+      "{ cat \"$dir\"/*.secret; echo 203.0.113.7; seq -f 'rd11-typed-%g' 1 7; seq -f '198.51.100.%g' 1 6; } " +
+        '> "$dir/all-values"',
+    );
+    expect(job.steps.filter((s) => s.fields.has("id")).map((s) => [s.fields.get("name"), s.fields.get("id")])).toEqual(
+      [["Run the browser through the front", "browser"]],
+    );
+    expect(run("Run the browser through the front")).toEqual([
+      'set -a; . "$RUNNER_TEMP/rd11/runner.env"; set +a',
+      "pnpm run test:production",
+    ]);
+    expect(run("Report the server's log")).toEqual([
+      "umask 077",
+      'dir="$RUNNER_TEMP/rd11"',
+      'docker logs web > "$dir/web.log" 2>&1',
+      "code=0",
+      'node tests/production/log-report.mjs "$dir/web.log" "$dir/all-values" "$dir/browser-values" || code=$?',
+      'if [ "$code" -eq 2 ]; then : > "$dir/leaked"; fi',
+      'exit "$code"',
+    ]);
+    expect(run("Stop the stand-ins").slice(0, 9)).toEqual([
+      'dir="$RUNNER_TEMP/rd11"',
+      'if [ -s "$dir/all-values" ] && [ ! -e "$dir/leaked" ] && docker logs web > "$dir/web.log" 2>&1; then',
+      'listed() { [ -s "$dir/$1" ] && grep -qFf "$dir/$1" "$dir/web.log"; }',
+      "if listed all-values || listed browser-values; then",
+      'echo "The web log is withheld: it holds a listed value" >&2',
+      "else",
+      'cat "$dir/web.log"',
+      "fi",
+      "fi",
+    ]);
+    // The log is printed nowhere else: each other read of it goes to a file or to `grep -c`.
+    expect(runs.filter((command) => /docker logs web(?! >)(?! 2>&1 \| grep -c )/.test(command))).toEqual([]);
+    expect(run("Hold the sign-in limit by the front's entry")).toEqual(
+      expect.arrayContaining([
+        "test \"$(grep -c '^303 /login?error=Invalid+email+or+password$' \"$dir/limit\")\" -eq 5",
+        "tail -n 1 \"$dir/limit\" | grep -v Invalid | grep -q '^303 /login?error='",
+      ]),
+    );
+    expect(run("Stop the database, then start it again")).toEqual(
+      expect.arrayContaining([
+        'test "$(ready)" = 503',
+        "jq -e '.checks[] | select(.name == \"database\") | .ok == false' \"$dir/answer\"",
+        "test \"$got\" = '303 /login?error=Sign+in+failed'",
+        'if [ "$try" -eq 30 ]; then echo "readiness did not recover in 30 tries" >&2; exit 1; fi',
+      ]),
+    );
   });
 });
 

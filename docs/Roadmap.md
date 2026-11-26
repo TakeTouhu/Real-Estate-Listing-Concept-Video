@@ -1542,6 +1542,22 @@ way out, and requires readiness `ready` and a clean log; a pull request
 shows 16 checks. Not measured before CI: every Docker step. Planned, not
 done: RD-11b, RD-11c.
 
+**RD-11b — the browser through the front** (ADR-0178, no migration):
+the job then runs Chromium against the image: sign-up verified from
+Mailpit, MFA, a plan, three photos stored in the emulator, a disguised
+EICAR file quarantined, a photo read whole and in ranges, a colleague
+joining by invitation, a second sign-in, and the production page
+policy; then six sign-ins hold the client address's limit, the
+database is stopped and started again, and the server's log is
+reported by its fields; it is printed only when it holds none of the
+run's listed values. Measured locally on a production build behind the
+front against PostgreSQL, fake-gcs, Mailpit and ClamAV, with Chromium
+build 1243 standing in for revision 1194: the spec, the limit and the
+outage passed, and the log report passed once nodemailer's raw line,
+seen only in the lab's network, was removed (`TODO.md`, RD-11b). Not
+before CI: every Docker step, the Chromium Playwright pins, and the
+artifact upload. Planned, not done: RD-11c.
+
 **The production scheduler is not activated by this phase.** Cloud Scheduler
 requires explicit CTO activation approval, and the timing values it needs —
 stale-`SUBMITTING` threshold, signed-URL TTL, cadence, batch size, worker

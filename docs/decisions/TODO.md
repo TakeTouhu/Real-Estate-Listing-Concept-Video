@@ -2099,6 +2099,30 @@ into on 2026-11-17.
       ADR-0174 Decision 10 left it out for an `http://localhost` run that
       cannot exist (ADR-0178 Decision 6). Not decided; nothing changed.
 
+## Open in RD-11b — what the browser through the front leaves open
+
+- [ ] **Nodemailer can print a raw line.** Where `resolve4` and
+      `resolve6` find nothing and the host has no outside IPv4
+      interface, it writes `Failed to resolve IPv4 addresses with
+      current network` by `console.warn`, outside `redact` (seen in the
+      lab's network namespace; inferred absent on CI's networks). It
+      names no value; the log report fails on it.
+- [ ] **Each upload's `original.bin` stays in the bucket**, a
+      quarantined file's too (4 of 4 in the lab). Whether a quarantined
+      original is kept, and for how long, is the product owner's.
+- [ ] **Nothing reads the TLS front's log.** In the lab it logged a
+      `CERTIFICATE_UNKNOWN` alert from Chromium, which is not given this
+      run's authority and so refuses the leaf before ignoring the error.
+      The front logs only error codes; whether the job should count them
+      is open.
+- [ ] **The browser's report kept on its failure holds throwaway
+      values.** Playwright titles a `fill` step with the value typed, so
+      the report's steps carry both people's addresses and passwords
+      and the code used to sign in again, and a failure on the MFA page
+      can leave the key in its page snapshot. The artifact is kept only
+      when the browser's own step fails, for 7 days; whether to fill
+      these in a way no step names is open.
+
 ## Open in the unknown-failure PR — what logging unknown failures leaves open
 
 - [ ] **Errors the app does not catch are printed raw by Next.js.** The
@@ -2124,9 +2148,17 @@ into on 2026-11-17.
       (`apps/worker/src/main.ts`).
 - [ ] **No stack is logged.** Revisit only if RD-11 shows that a name and
       a code are not enough.
+      *Amended in RD-11b: in the lab the run's one error line, the
+      sign-in during the outage, named `RateLimiterUnavailable`, Prisma's
+      `P1017` and its error's name, which was enough to tell why; CI's
+      log report is the evidence, so this stays open until it runs.*
 - [ ] **A limiter outage reads `code: UNEXPECTED`.** Prisma names `P1001`
       only when asked to connect, and the limiter's store only queries.
       Whether the store should connect first is open.
+      *Amended in RD-11b: with the database stopped under a client that
+      had connected, the lab's line read `P1017`
+      (`PrismaClientKnownRequestError`); CI's log report is the
+      evidence.*
 - [ ] **Sign-up's limiter is not wrapped by `withoutLimiterText`.** Its
       line names the store's own error, not `RateLimiterUnavailable`
       (`apps/web/src/app/api/auth/register/route.ts`). Whether it should
@@ -2218,11 +2250,17 @@ into on 2026-11-17.
       *Done in RD-10a (ADR-0175 Decision 4): the image runs `next build`
       under `env -u NODE_ENV`, the guard test requires it, and CI requires
       HSTS on the image's liveness answer.*
-- [ ] **The production CSP is not proved in a browser before RD-11**:
+- [x] **The production CSP is not proved in a browser before RD-11**:
       the browser test runs `next dev`, whose policy adds `'unsafe-eval'`
       and `ws: wss:`; RD-11 runs the same violation guard
       (`tests/e2e/support/csp-guard.ts`) against the production build
       (RD-9e, ADR-0174 Decision 10).
+      *Done in RD-11b (ADR-0178): the `production-mode` job's Chromium
+      runs the whole sign-up-to-storage spec on the image under the
+      guard; the sign-in page sends the production literal with its
+      nonce on every script. A 404 is asked outside the browser (below).
+      Measured on a production build behind the front in the lab; on
+      the image, CI's first run is the first.*
 - [ ] **No CSP violation report endpoint**: it would be a new
       unauthenticated `POST`; reconsider with part 2's observability.
       A refusal in a customer's browser is seen by no one until then.
@@ -2236,6 +2274,11 @@ into on 2026-11-17.
       have, and an unknown `/_next/<path>` outside `/_next/static` get
       the same page with no page policy at all, since the middleware
       does not run there (measured from `next start` in RD-9e).
+      *Amended in RD-11b: measured again on a production build behind
+      the front: `/no-such-page` sends the production policy and 11
+      scripts, none with its nonce, so Chromium refuses them, as RD-9e
+      measured. The spec asks it outside the browser and records the
+      count.*
 - [ ] **A third-party script, frame or connection** (Stripe.js when
       billing goes live, analytics, chat, web fonts) needs a reviewed
       change to the page policy in `apps/web/src/lib/security-headers.ts`.
@@ -2274,6 +2317,10 @@ into on 2026-11-17.
       database suite runs the assembled pipeline there (ADR-0162 Decision
       5). Its helpers would need a second server or run. RD-11's
       production-mode test or part 2 is to decide.
+      *Amended in RD-11b (ADR-0178 Decision 13): answered. The
+      production browser test runs on the emulator in `production-mode`;
+      the development browser test keeps its folder, so this stays open
+      for it.*
 
 ## Open in RD-7e — what limiting the emails leaves open
 
@@ -2390,6 +2437,12 @@ into on 2026-11-17.
       `SSL_CERT_FILE` and `SSL_CERT_DIR` to Debian's own store, and RD-11
       is to trust its mail stand-in through `NODE_EXTRA_CA_CERTS`;
       whatever part 2 refuses must leave both possible.*
+      *Amended in RD-11b (ADR-0178 Decision 5): the `production-mode`
+      job's web container trusts this run's authority, which signed
+      Mailpit's leaf, through `NODE_EXTRA_CA_CERTS` alone, and its
+      sign-up and invitation mails
+      arrive over required STARTTLS (measured locally; CI runs it
+      first). What part 2 refuses stays open.*
 
 ## Open in RD-6a — what the SMTP email sender leaves open
 
