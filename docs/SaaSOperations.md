@@ -183,6 +183,11 @@ Key metrics:
 
 Sensitive values and signed URLs are redacted.
 
+A request's failure is one JSON line of the component `request`: `"A
+request failed"` from the app's catches (ADR-0177), `"Next.js answered a
+request that failed"` for an error none took (ADR-0185, still also
+printed raw). Neither holds the path, query, headers, message or stack.
+
 ## Worker operations
 
 There is no queue to operate: work is discovered by scanning for
